@@ -1,0 +1,40 @@
+#!/bin/sh -e
+# qemu-runlinux <kernel>
+# run kernel in QEMU with root fs taken from host
+#
+# Useful to test/debug just compiled kernel via running programs
+# edited/compiled on host.
+
+kernel=$1
+arch=`uname -m`
+test -z "$kernel" && kernel=arch/$arch/boot/bzImage
+
+
+# may be also useful:
+#   -serial  stdio
+#   -serial  file:ttyS0
+#   -monitor stdio
+#   -serial  stdio
+#   -S -gdb tcp::1234
+
+# NOTES
+#   - for kernel to mount root, 9P support must be compiled in:
+#       CONFIG_NET_9P=y
+#       CONFIG_NET_9P_VIRTIO=y
+#       CONFIG_9P_FS=y
+#
+#   - mount_tag *must* be /dev/root - as of 3.17-rc1 the kernel hardcodes it
+#
+# References
+#   http://unix.stackexchange.com/questions/90423/can-virtfs-9p-be-used-as-root-file-system
+#   http://stackoverflow.com/questions/11408041/kernel-debugging-with-gdb-and-qemu
+qemu-system-$arch   \
+    -enable-kvm \
+ \
+    -nographic  \
+ \
+    -fsdev  local,id=R,path=/,security_model=none,readonly  \
+    -device virtio-9p-pci,fsdev=R,mount_tag=/dev/root   \
+ \
+    -kernel $kernel \
+    -append "ro rootfstype=9p rootflags=trans=virtio  console=ttyS0 init=/bin/sh"
