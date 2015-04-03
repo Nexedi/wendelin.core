@@ -191,6 +191,8 @@ setup(
                    'ZODB3',
 
                    'six',       # compat py2/py3
+
+                   'psutil',    # demo_zbigarray
                   ],
 
     extras_require = {
@@ -202,5 +204,11 @@ setup(
                    'build_py':      build_py,
                    'test':          viamake('test',     'run tests'),
                    'bench':         viamake('bench',    'run benchmarks'),
+                  },
+
+    entry_points= {'console_scripts': [
+                        # demo to test
+                        'demo-zbigarray = wendelin.demo.demo_zbigarray:main',
+                      ]
                   },
 )
