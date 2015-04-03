@@ -1,0 +1,13 @@
+*.py[co]
+__pycache__
+build/
+.tox/
+
+*.o
+*.so
+
+/dist/
+*.egg-info
+
+perf.data*
+core
