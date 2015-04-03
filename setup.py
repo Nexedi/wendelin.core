@@ -168,6 +168,7 @@ if os.path.exists('.git'):  # FIXME won't work if we are checked out as e.g. sub
 
 setup(
     name        = 'wendelin.core',
+    version     = '0.1',
     description = 'Out-of-core NumPy arrays',
     url         = 'http://www.wendelin.io/',
     license     = 'GPLv3+ with wide exception for Open-Source',
@@ -211,4 +212,18 @@ setup(
                         'demo-zbigarray = wendelin.demo.demo_zbigarray:main',
                       ]
                   },
+
+    classifiers = [_.strip() for _ in """\
+        Development Status :: 3 - Alpha
+        Intended Audience :: Developers
+        Intended Audience :: Science/Research
+        Operating System :: POSIX :: Linux
+        Programming Language :: Python :: 2
+        Programming Language :: Python :: 2.7
+        Programming Language :: Python :: 3
+        Programming Language :: Python :: 3.4
+        Programming Language :: Python :: Implementation :: CPython
+        Topic :: Software Development :: Libraries :: Python Modules
+        Framework :: ZODB\
+    """.splitlines()]
 )
