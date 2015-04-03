@@ -60,7 +60,7 @@ CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions
 # XXX hack ugly
 LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c
 TESTS	:= $(patsubst %.c,%,$(wildcard bigfile/tests/test_*.c))
-test	: test.t test.asan test.tsan test.vgmem test.vghel test.vgdrd
+test	: test.t test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
 
 
 # extract what goes after RUNWITH: marker from command source, or empty if no marker
@@ -144,3 +144,13 @@ test.vghel: $(TESTS:%=%.vghelrun)
 test.vgdrd: $(TESTS:%=%.vgdrdrun)
 %.vgdrdrun: %.t
 	$(call vgxrun,--tool=drd, $<)
+
+
+# test pagefault for double/real faults - it should crash
+tfault	:= bigfile/tests/tfault
+# XXX FAULTS extraction fragile
+FAULTS	:= $(shell grep '{"fault.*"' $(tfault).c | sed 's/"/ /g' |awk '{print $$2}')
+test.fault : $(FAULTS:%=%.tfault)
+
+%.tfault : $(tfault).t
+	t/tfault-run $< $* $(shell grep '{"$*"' $(tfault).c | awk '{print $$NF}')

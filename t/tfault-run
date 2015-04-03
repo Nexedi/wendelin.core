@@ -1,0 +1,42 @@
+#!/bin/sh -e
+# tfault-run <tfault> <arg> <mustdie>
+# run `<tfault> <arg>` and verify that it produces correct coredump, dieing for
+#   SIGSEGV in function <mustdie>.
+
+# die <msg> ...
+die() {
+    echo "E: $*" 1>&2
+    exit 1
+}
+
+tfault=$(realpath $1)
+arg=$2
+mustdie=$3
+
+# XXX ok to hardcode t/ ?
+workdir=t/tfault-run.$arg
+
+cwd=`pwd`
+mkdir "$workdir"
+cd "$workdir"
+
+ulimit -c unlimited
+$tfault $arg 2>&1 |tee run.out
+
+grep -q "^# going to fault" run.out     || die "test didn't run to faulting point"
+test -e core                            || die "no core after run"
+gdb -q -batch $tfault core >core.info   || die "can't gdb(core)"
+grep -q "Program terminated with signal SIGSEGV, Segmentation fault." core.info || die "not SIGSEGV"
+
+# #0  0x00000000004031ae in doublefault_loadblk (file=0x7fff0f25d9c0, blk=0, buf=0x7ff85a553000) at t/tfault.c:93
+diefunc=$(grep '^#0' core.info | awk '{print $4}')
+test -n "$diefunc" || die "can't extract diefunc"
+
+test "$diefunc" == "$mustdie"   || die "must die in $mustdie, died in $diefunc"
+
+
+# run ok - cleanup
+cd "$cwd"
+rm -rf "$workdir"
+
+echo "ok   - crashed OK  (in $diefunc)"
