@@ -183,6 +183,8 @@ setup(
                         find_packages(exclude='3rdparty')],
     install_requires = [
                    'numpy',     # lib/mem
+
+                   'six',       # compat py2/py3
                   ],
 
     extras_require = {
