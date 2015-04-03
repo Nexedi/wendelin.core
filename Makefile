@@ -62,6 +62,19 @@ LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c
 TESTS	:= $(patsubst %.c,%,$(wildcard bigfile/tests/test_*.c))
 test	: test.t test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
 
+# TODO move XFAIL markers into *.c
+
+# TSAN fails on test_virtmem (http://code.google.com/p/thread-sanitizer/issues/detail?id=75)
+# NOTE the bug was fixed in compiler-rt 20140917 (6afe775d)
+#      -> we can remove this xfail when the fix propagates to gcc/clang release
+XFAIL_bigfile/tests/test_virtmem.tsanrun	:= y
+
+# Before calling our SIGSEGV handler, Memcheck first reports "invalid read|write" error.
+# A solution could be to tell memcheck via VALGRIND_MAKE_MEM_DEFINED that VMA
+# address space is ok to access _before_ handling pagefault.
+# http://valgrind.org/docs/manual/mc-manual.html#mc-manual.clientreqs
+XFAIL_bigfile/tests/test_virtmem.vgmemrun	:= y
+
 
 # extract what goes after RUNWITH: marker from command source, or empty if no marker
 runwith = $(shell grep -oP '(?<=^// RUNWITH: ).*' $(basename $1).c)

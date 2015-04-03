@@ -24,6 +24,10 @@
  * read/write, and tail to vma_on_pagefault().
  */
 
+#include <wendelin/bigfile/virtmem.h>
+#include <wendelin/bigfile/file.h>
+#include <wendelin/bigfile/ram.h>
+#include <wendelin/bigfile/pagemap.h>
 #include <wendelin/bug.h>
 
 #include <signal.h>
@@ -44,6 +48,7 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
 {
     struct ucontext *uc = _uc;
     unsigned write;
+    VMA *vma;
 
     BUG_ON(sig != SIGSEGV);
     BUG_ON(si->si_signo != SIGSEGV);
@@ -63,8 +68,9 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
     // XXX locking
 
     /* (1) addr -> vma  ;lookup VMA covering faulting memory address */
-    // TODO
-    goto dont_handle;
+    vma = virt_lookup_vma(si->si_addr);
+    if (!vma)
+        goto dont_handle;  /* fault outside registered file slices */
 
     /* now, since we found faulting address in registered memory areas, we know
      * we should serve this pagefault. */
@@ -76,7 +82,7 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
     /* save/restore errno       XXX & the like ? */
     int save_errno = errno;
 
-    // TODO handle pagefault at si->si_addr / write
+    vma_on_pagefault(vma, (uintptr_t)si->si_addr, write);
 
     errno = save_errno;
 

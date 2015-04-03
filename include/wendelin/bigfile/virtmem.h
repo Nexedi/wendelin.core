@@ -18,15 +18,62 @@
  * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  *
  * See COPYING file for full licensing terms.
+ *
+ * ~~~~~~~~
+ *
+ * Virtual memory connects BigFile content and RAM pages into file memory
+ * mappings.
+ *
+ * Read access to mapped pages cause their on-demand loading, and write access
+ * marks modified pages as dirty. Dirty pages then can be on request either
+ * written out back to file or discarded.
  */
 
 #include <stdint.h>
 #include <wendelin/list.h>
+#include <wendelin/bigfile/types.h>
+#include <wendelin/bigfile/pagemap.h>
+#include <ccan/bitmap/bitmap.h> // XXX can't forward-decl for bitmap
 
+typedef struct RAM RAM;
 typedef struct RAMH RAMH;
+typedef struct Page Page;
+typedef struct BigFile BigFile;
 
 
-/* Page - describes fixed-size item of physical RAM associated with content from file */
+/* BigFile Handle
+ *
+ * BigFile handle is a representation of file snapshot that could be locally
+ * modified in-memory. The changes could be later either discarded or stored
+ * back to file. One file can have many opened handles each with its own
+ * modifications and optionally ram.
+ */
+struct BigFileH {
+    BigFile *file;
+
+    /* ram handle, backing this fileh mappings */
+    RAMH    *ramh;
+
+    /* fileh mappings (list of VMA)
+     * NOTE current design assumes there will be not many mappings
+     *      so instead of backpointers from pages to vma mapping entries, we'll
+     *      scan all page->fileh->mmaps to overlap with page.
+     */
+    struct list_head mmaps; /* _ -> vma->same_fileh */
+
+    /* {} f_pgoffset -> page */
+    PageMap     pagemap;
+
+
+    // XXX not sure we need this
+    //     -> currently is used to know whether to join ZODB DataManager serving ZBigFile
+    // XXX maybe change into dirty_list in the future?
+    unsigned    dirty   : 1;
+};
+typedef struct BigFileH BigFileH;
+
+
+/* Page - describes fixed-size item of physical RAM associated with content from fileh */
 enum PageState {
     PAGE_EMPTY      = 0, /* file content has not been loaded yet */
     PAGE_LOADED     = 1, /* file content has     been loaded and was not modified */
@@ -36,6 +83,10 @@ typedef enum PageState PageState;
 
 struct Page {
     PageState   state;
+
+    /* wrt fileh - associated with */
+    BigFileH    *fileh;
+    pgoff_t     f_pgoffset;
 
     /* wrt ram - associated with */
     RAMH*       ramh;
@@ -47,6 +98,146 @@ struct Page {
     int     refcnt; /* each mapping in a vma counts here */
 };
 typedef struct Page Page;
+
+
+
+/* VMA - virtual memory area representing one fileh mapping
+ *
+ * NOTE areas may not overlap in virtual address space
+ *      (in file space they can overlap).
+ */
+typedef struct VMA VMA;
+struct VMA {
+    uintptr_t   addr_start, addr_stop;    /* [addr_start, addr_stop) */
+
+    BigFileH    *fileh;         /* for which fileh */
+    pgoff_t     f_pgoffset;     /* where starts, in pages */
+
+    /* FIXME For approximation 0, VMA(s) are kept in sorted doubly-linked
+     * list, which is not good for lookup/add/remove performance O(n), but easy to
+     * program. This should be ok for first draft, as there are not many fileh
+     * views taken simultaneously.
+     *
+     * TODO for better performance, some binary-search-tree should be used.
+     */
+    struct list_head virt_list; /* (virtmem.c::vma_list -> _) */
+
+    /* VMA's for the same fileh (fileh->mmaps -> _) */
+    struct list_head same_fileh;
+
+    /* whether corresponding to pgoffset-f_offset page is mapped in this VMA */
+    bitmap      *page_ismappedv;    /* len ~ Δaddr / pagesize */
+};
+
+
+/*****************************
+ *      API for clients      *
+ *****************************/
+
+/* open handle for a BigFile
+ *
+ * @fileh[out]  BigFileH handle to initialize for this open
+ * @file
+ * @ram         RAM that will back created fileh mappings
+ *
+ * @return  0 - ok, !0 - fail
+ */
+int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram);
+
+
+/* close fileh
+ *
+ * it's an error to call fileh_close with existing mappings
+ */
+void fileh_close(BigFileH *fileh);
+
+
+/* map fileh part into memory
+ *
+ * This "maps" fileh part [pgoffset, pglen) in pages into process address space.
+ *
+ * @vma[out]    vma to initialize for this mmap
+ * @return      0 - ok, !0 - fail
+ */
+int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen);
+
+
+/* unmap mapping created by fileh_mmap()
+ *
+ * This removes mapping created by fileh_mmap() from process address space.
+ * Changes made to fileh pages are preserved (to e.g. either other mappings and
+ * later commit/discard).
+ */
+void vma_unmap(VMA *vma);
+
+
+/* what to do at writeout */
+enum WriteoutFlags {
+    /* store dirty pages back to file
+     *
+     * - call file.storeblk() for all dirty pages;
+     * - pages state remains PAGE_DIRTY.
+     *
+     * to "finish" the storage use WRITEOUT_MARKSTORED in the same or separate
+     * call.
+     */
+    WRITEOUT_STORE          = 1 << 0,
+
+    /* mark dirty pages as stored to file ok
+     *
+     * pages state becomes PAGE_LOADED and all mmaps are updated to map pages as
+     * R/O to track further writes.
+     */
+    WRITEOUT_MARKSTORED     = 1 << 1,
+};
+
+/* write changes made to fileh memory back to file
+ *
+ * Perform write-related actions according to flags (see WriteoutFlags).
+ *
+ * @return  0 - ok      !0 - fail
+ *          NOTE single WRITEOUT_MARKSTORED can not fail.
+ *
+ * No guarantee is made about atomicity - e.g. if this call fails, some
+ * pages could be written and some left in memory in dirty state.
+ */
+int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
+
+
+/* discard changes made to fileh memory
+ *
+ * For each fileh dirty page:
+ *
+ *   - it is unmapped from all mmaps;
+ *   - its content is discarded;
+ *   - its backing memory is released to OS.
+ */
+void fileh_dirty_discard(BigFileH *fileh);
+
+
+/* pagefault handler
+ *
+ * serves read/write access to protected memory: loads data from file on demand
+ * and tracks which pages were made dirty.
+ *
+ * (clients call this indirectly via triggering SIGSEGV on read/write to memory)
+ */
+void vma_on_pagefault(VMA *vma, uintptr_t addr, int write);
+int pagefault_init(void);   /* in pagefault.c */
+
+
+/* release some non-dirty ram back to OS; protect PROT_NONE related mappings
+ *
+ * This should be called when system is low on memory - it will scan through
+ * RAM pages and release some LRU non-dirty pages ram memory back to OS.
+ *
+ * (this is usually done automatically under memory pressure)
+ *
+ * @return  how many RAM pages were reclaimed
+ * XXX int -> size_t ?
+ */
+int ram_reclaim(RAM *ram);
+
 
 
 /************
@@ -69,8 +260,18 @@ void page_incref(Page *page);
 void page_decref(Page *page);
 
 
+/* lookup VMA by addr */
+VMA *virt_lookup_vma(void *addr);
+void virt_register_vma(VMA *vma);
+void virt_unregister_vma(VMA *vma);
+
 /* allocate virtual memory address space */
 void *mem_valloc(void *addr, size_t len);
 void *mem_xvalloc(void *addr, size_t len);
+
+// XXX is this needed? think more
+/* what happens on out-of-memory */
+void OOM(void);
+
 
 #endif

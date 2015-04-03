@@ -21,7 +21,9 @@
  */
 
 #include <wendelin/bigfile/ram.h>
+#include <wendelin/bigfile/file.h>
 #include <wendelin/bigfile/virtmem.h>
+#include <wendelin/bigfile/pagemap.h>
 #include <wendelin/utils.h>
 #include <wendelin/bug.h>
 

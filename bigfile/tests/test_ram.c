@@ -21,6 +21,7 @@
 
 // XXX better link with it
 #include "../ram.c"
+#include    "../pagemap.c"
 #include    "../virtmem.c"
 #include "../ram_shmfs.c"
 
