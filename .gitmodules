@@ -1,0 +1,3 @@
+[submodule "ccan"]
+	path = 3rdparty/ccan
+	url = git://git.ozlabs.org/~ccan/ccan
