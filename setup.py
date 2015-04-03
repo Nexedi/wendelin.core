@@ -28,6 +28,7 @@ _bigfile = Extension('wendelin.bigfile._bigfile',
             sources = [
                 'bigfile/_bigfile.c',
                 'lib/bug.c',
+                'lib/utils.c',
             ],
             include_dirs = [
                 './include',
