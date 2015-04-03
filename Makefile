@@ -19,6 +19,7 @@ all	:
 
 PYTHON	?= python
 PYTEST	?= $(PYTHON) -m pytest
+PYBENCH ?= $(PYTHON) t/py.bench
 VALGRIND?= valgrind
 
 # use the same C compiler as python
@@ -174,3 +175,8 @@ test.fault : $(FAULTS:%=%.tfault)
 
 %.tfault : $(tfault).t
 	t/tfault-run $< $* $(shell grep '{"$*"' $(tfault).c | awk '{print $$NF}')
+
+
+# -*- benchmarking -*-
+bench	: bigfile/_bigfile.so
+	$(PYBENCH) $(PYTEST_IGNORE)
