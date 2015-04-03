@@ -27,6 +27,7 @@ import os
 _bigfile = Extension('wendelin.bigfile._bigfile',
             sources = [
                 'bigfile/_bigfile.c',
+                'lib/bug.c',
             ],
             include_dirs = [
                 './include',
