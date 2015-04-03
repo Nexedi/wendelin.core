@@ -27,6 +27,7 @@ import os
 _bigfile = Extension('wendelin.bigfile._bigfile',
             sources = [
                 'bigfile/_bigfile.c',
+                'bigfile/pagemap.c',
                 'lib/bug.c',
                 'lib/utils.c',
             ],
