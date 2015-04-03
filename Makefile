@@ -18,6 +18,7 @@
 all	:
 
 PYTHON	?= python
+VALGRIND?= valgrind
 
 # use the same C compiler as python
 # (for example it could be `gcc -m64` on a 32bit userspace)
@@ -48,3 +49,98 @@ FORCE	:
 	@echo 'E: 3rdparty/ccan submodule not initialized'
 	@echo 'E: please do `git submodule update --init`'
 	@false
+
+
+# -*- testing -*-
+
+# XXX dup with setup.py
+CPPFLAGS:= -Iinclude -I3rdparty/ccan -I3rdparty/include
+CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions
+
+# XXX hack ugly
+LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c
+TESTS	:= $(patsubst %.c,%,$(wildcard bigfile/tests/test_*.c))
+test	: test.t test.asan test.tsan test.vgmem test.vghel test.vgdrd
+
+
+# extract what goes after RUNWITH: marker from command source, or empty if no marker
+runwith = $(shell grep -oP '(?<=^// RUNWITH: ).*' $(basename $1).c)
+
+# run a test, not failing if failure is expected
+xrun	= $1 $(if $(XFAIL_$@),|| echo "($@ - expected failure)")
+XRUN<	= $(call xrun,$(call runwith,$<) $<)
+
+
+LINKC	= $(LINK.c) $^ $(LOADLIBES) $(LDLIBS) -o $@
+
+# tests without instrumentation
+test.t	: $(TESTS:%=%.trun)
+%.trun	: %.t
+	$(XRUN<)
+
+%.t	: %.c
+	$(LINKC)
+
+# test with AddressSanitizer
+test.asan: $(TESTS:%=%.asanrun)
+%.asanrun: %.asan
+	$(XRUN<)
+
+%.asan	: CFLAGS += -fsanitize=address
+%.asan	: %.c
+	$(LINKC)
+
+
+# test with ThreadSanitizer
+
+# TSAN works only on x86_64
+# (can't rely on `uname -m` - could have 32bit userspace on 64bit kernel)
+ifneq ($(shell $(CPP) -dM - </dev/null | grep __x86_64__),)
+test.tsan: $(TESTS:%=%.tsanrun)
+%.tsanrun: %.tsan
+	$(XRUN<)
+else
+test.tsan:
+	@echo "Skip $@	# ThreadSanitizer does not support \"`$(CC) -v 2>&1 | grep '^Target:'`\""
+endif
+
+
+
+%.tsan	: CFLAGS += -fsanitize=thread -pie -fPIC
+%.tsan	: %.c
+	$(LINKC)
+
+
+# run valgrind so errors affect exit code
+# TODO stop on first error
+# (http://stackoverflow.com/questions/16345555/is-there-a-way-to-stop-valgrind-on-the-first-error-it-finds
+#  but it still asks interactively, whether to "run debugger")
+VALGRINDRUN  = $(VALGRIND) --error-exitcode=1
+
+# to track memory access on each instruction (e.g. without this reads from NULL are ignored)
+# XXX why =allregs-at-mem-access is not sufficient?
+#     see "Handling of Signals" in http://valgrind.org/docs/manual/manual-core.html
+#     without this option our SIGSEGV handler is not always called
+#     see also: https://bugs.kde.org/show_bug.cgi?id=124035
+VALGRINDRUN += --vex-iropt-register-updates=allregs-at-each-insn
+
+
+# like XRUN< for valgrind
+vgxrun	= $(call xrun,$(call runwith,$2) $(VALGRINDRUN) $1 $2)
+
+# test with valgrind/memcheck
+test.vgmem: $(TESTS:%=%.vgmemrun)
+%.vgmemrun: %.t
+	$(call vgxrun,--tool=memcheck, $<)
+
+
+# test with valgrind/helgrind
+test.vghel: $(TESTS:%=%.vghelrun)
+%.vghelrun: %.t
+	$(call vgxrun,--tool=helgrind, $<)
+
+
+# test with valgrind/drd
+test.vgdrd: $(TESTS:%=%.vgdrdrun)
+%.vgdrdrun: %.t
+	$(call vgxrun,--tool=drd, $<)

@@ -182,5 +182,6 @@ setup(
     cmdclass    = {'build_ext':     build_ext,
                    'll_build_ext':  _build_ext, # original build_ext for Makefile
                    'build_py':      build_py,
+                   'test':          viamake('test',     'run tests'),
                   },
 )
