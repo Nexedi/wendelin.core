@@ -18,6 +18,7 @@
 all	:
 
 PYTHON	?= python
+PYTEST	?= $(PYTHON) -m pytest
 VALGRIND?= valgrind
 
 # use the same C compiler as python
@@ -60,7 +61,7 @@ CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions
 # XXX hack ugly
 LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c
 TESTS	:= $(patsubst %.c,%,$(wildcard bigfile/tests/test_*.c))
-test	: test.t test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
+test	: test.t test.py test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
 
 # TODO move XFAIL markers into *.c
 
@@ -157,6 +158,12 @@ test.vghel: $(TESTS:%=%.vghelrun)
 test.vgdrd: $(TESTS:%=%.vgdrdrun)
 %.vgdrdrun: %.t
 	$(call vgxrun,--tool=drd, $<)
+
+
+# run python tests
+PYTEST_IGNORE	:=  --ignore=3rdparty --ignore=build --ignore=t
+test.py	: bigfile/_bigfile.so
+	$(PYTEST) $(PYTEST_IGNORE)
 
 
 # test pagefault for double/real faults - it should crash
