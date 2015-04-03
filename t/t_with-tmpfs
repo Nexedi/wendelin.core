@@ -1,0 +1,27 @@
+#!/bin/sh -e
+# t_with-tmpfs mountpoint size cmd args...
+# run `cmd args...` with fresh tmpfs mounted at mountpoint (in a user_ns)
+
+die() {
+    echo "$@" >&2
+    exit 1
+}
+
+test "$#" -gt 2 || die "Usage: t_with-tmpfs mountpoint size cmd args..."
+
+# re-exec ourselves in a user_ns where we are root and can mount filesystems
+#
+# NOTE on Debian the kernel is built with unofficial patch to disable user
+#      namespaces by default. To enable:
+#            sysctl kernel.unprivileged_userns_clone=1
+test -z "$UNSHARED" && UNSHARED=y exec unshare -Umr "$0" "$@"
+
+mntpt="$1"
+size="$2"
+
+shift 2
+
+mount -t tmpfs tmpfs.t "$mntpt" -osize="$size"
+
+unset UNSHARED  # in case cmd wants to spawn subsub namespace
+exec "$@"
