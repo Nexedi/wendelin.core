@@ -182,9 +182,9 @@ setup(
     packages    = ['wendelin'] + ['wendelin.%s' % _ for _ in
                         find_packages(exclude='3rdparty')],
     install_requires = [
-                   'numpy',     # lib/mem
+                   'numpy',     # BigArray + its children
 
-                   # for ZBigFile
+                   # for ZBigFile / ZBigArray
                    # ( NOTE: ZODB3 3.11 just pulls in latest ZODB _4_, so this way
                    #   specifying ZODB _3_ we allow external requirements to
                    #   specify either to use e.g. ZODB3.10 or ZODB4 )
