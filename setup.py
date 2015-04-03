@@ -175,6 +175,10 @@ setup(
     package_dir = {'wendelin': ''},
     packages    = ['wendelin'] + ['wendelin.%s' % _ for _ in
                         find_packages(exclude='3rdparty')],
+    install_requires = [
+                   'numpy',     # lib/mem
+                  ],
+
     cmdclass    = {'build_ext':     build_ext,
                    'll_build_ext':  _build_ext, # original build_ext for Makefile
                    'build_py':      build_py,
