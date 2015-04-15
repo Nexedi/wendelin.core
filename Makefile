@@ -57,7 +57,9 @@ FORCE	:
 
 # XXX dup with setup.py
 CPPFLAGS:= -Iinclude -I3rdparty/ccan -I3rdparty/include
-CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions
+CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions	\
+	   -Wno-declaration-after-statement	\
+	   -Wno-error=declaration-after-statement	\
 
 # XXX hack ugly
 LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c

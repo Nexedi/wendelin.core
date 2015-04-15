@@ -46,6 +46,16 @@ _bigfile = Extension('wendelin.bigfile._bigfile',
                 '-std=gnu99',           # declarations inside for-loop
                 '-fplan9-extensions',   # anonymous-structs + simple inheritance
                 '-fvisibility=hidden',  # by default symbols not visible outside DSO
+
+                # in C99 declaration after statement is ok, and we explicitly compile with -std=gnu99.
+                # Python >= 3.4 however adds -Werror=declaration-after-statement even for extension
+                # modules irregardless of their compilation flags:
+                #
+                #   https://bugs.python.org/issue21121
+                #
+                # ensure there is no warnings / errors for decl-after-statements.
+                '-Wno-declaration-after-statement',
+                '-Wno-error=declaration-after-statement',
             ],
 
             # can't - at runtime links with either python (without libpython) or libpython
