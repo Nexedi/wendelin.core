@@ -41,6 +41,8 @@
  *      SIGBUS at later page access.
  *
  *      https://lkml.org/lkml/2011/11/16/499
+ *
+ *      patch: http://lwn.net/Articles/640751/  (hugetlbfs: add fallocate support)
  */
 #define _GNU_SOURCE
 #include <sys/types.h>
