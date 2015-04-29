@@ -26,6 +26,17 @@
 #include <wendelin/bug.h>
 
 #include <fcntl.h>
+/* FIXME glibc in Debian before Jessie does not define FALLOC_FL_KEEP_SIZE and
+ * FALLOC_FL_PUNCH_HOLE, even when kernel supports it
+ * http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/falloc.h
+ */
+#ifndef FALLOC_FL_KEEP_SIZE
+# define FALLOC_FL_KEEP_SIZE    0x01
+#endif
+#ifndef FALLOC_FL_PUNCH_HOLE
+# define FALLOC_FL_PUNCH_HOLE   0x02
+#endif
+
 #include <unistd.h>
 #include <sys/vfs.h>
 #include <sys/mman.h>
