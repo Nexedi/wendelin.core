@@ -22,6 +22,7 @@ from distutils.errors import DistutilsExecError
 from subprocess import check_output as runcmd
 
 import os
+import sys
 
 
 _bigfile = Extension('wendelin.bigfile._bigfile',
@@ -111,7 +112,7 @@ class build_py(_build_py):
 
 # run `make <target>`
 def runmake(target):
-    err = os.system('make %s' % target)
+    err = os.system('make %s PYTHON="%s"' % (target, sys.executable))
     if err:
         raise DistutilsExecError('Failed to execute `make %s`' % target)
 
