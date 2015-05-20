@@ -20,7 +20,7 @@ from wendelin.bigfile.tests.common_zodb import dbopen, dbclose
 from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo
 from persistent import UPTODATE
 import transaction
-from numpy import dtype, uint8, all
+from numpy import dtype, uint8, all, array_equal
 
 def test_zbigarray(tmpdir):
     root = dbopen('%s/1.fs' % tmpdir)
@@ -124,3 +124,38 @@ def test_zbigarray(tmpdir):
     assert all(a[33+1:-2] == 0)
     assert a[-2] == 98
     assert a[-1] == 99
+
+
+    # resize array & append data
+    A.resize((24*1024*1024,))
+    assert A.shape  == (24*1024*1024,)
+    assert A.dtype  == dtype(uint8)
+
+    b = A[:]
+    assert array_equal(a, b[:16*1024*1024])
+
+    b[16*1024*1024] = 100
+    b[-1]           = 255
+
+    # commit; reload & verify changes
+    transaction.commit()
+    dbclose(root)
+    del root, a, b, A
+
+
+    root = dbopen('%s/1.fs' % tmpdir)
+    A = root['zarray']
+
+    assert isinstance(A, ZBigArray)
+    assert A.shape  == (24*1024*1024,)
+    assert A.dtype  == dtype(uint8)
+
+    a = A[:]
+    assert all(a[:33] == 0)
+    assert a[33] == 33
+    assert all(a[33+1:16*1024*1024-2] == 0)
+    assert a[16*1024*1024-2] == 98
+    assert a[16*1024*1024-1] == 99
+
+    assert a[16*1024*1024]   == 100
+    assert a[24*1024*1024-1] == 255

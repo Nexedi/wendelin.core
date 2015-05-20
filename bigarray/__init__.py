@@ -142,6 +142,43 @@ class BigArray(object):
     #   .base
 
 
+    # ~~~ ndarray-like with different semantics
+
+    # resize BigArray in-place
+    #
+    # NOTE
+    #
+    # - ndarray.resize()  works in O(n) time
+    #
+    #   ( on-growth numpy allocates new memory for whole array and copies data
+    #     there. This is done because numpy.ndarray has to be contiguously stored
+    #     in memory. )
+    #
+    # - BigArray.resize() works in O(1) time
+    #
+    #   ( BigArrays are only mapped to contiguous virtual address-space, and
+    #     storage is organized using separate data blocks. )
+    #
+    # NOTE even after BigArray is resized, already-established ndarray views of
+    #      BigArray stay of original size.
+    def resize(self, new_shape, refcheck=True):
+        # NOTE refcheck is in args only for numpy API compatibility - as we
+        # don't move memory we don't need to check anything before resizing.
+
+        # for BigArray resizing is just changing .shape - BigFile currently
+        # works as if it is infinite storage with non-set blocks automatically
+        # reading as whole-zeros. So
+        #
+        # - if array grows, on further mapping we'll map new blocks from
+        #   ._fileh
+        #
+        # - if array shrinks, we'll not let clients to map blocks past array
+        #   end.
+        #
+        #   TODO discard data from backing file on shrinks.
+        self._init0(new_shape, self.dtype, order='C')   # FIXME order hardcoded
+
+
 
     # ~~~ get/set item/slice connect bigfile blocks to ndarray in RAM.
     #     only basic indexing is supported - see numpy/.../arrays.indexing.rst

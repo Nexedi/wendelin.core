@@ -19,7 +19,7 @@
 from wendelin.bigarray import BigArray
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
-from numpy import ndarray, dtype, int32, uint32, uint8, all, arange, multiply, array_equal
+from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, multiply, array_equal
 
 from pytest import raises
 
@@ -301,3 +301,63 @@ def test_bigarray_indexing_Nd():
         # newaxis   - added after at some position(s)
         for newaxis in range(3):    # 0 - no newaxis
     """
+
+
+def test_bigarray_resize():
+    data = zeros(8*PS, dtype=uint32)
+    f   = BigFile_Data(data, PS)
+    fh  = f.fileh_open()
+
+    # set first part & ensure it is set correctly
+    A   = BigArray((10,3), uint32, fh)
+    A[:,:] = arange(10*3, dtype=uint32).reshape((10,3))
+
+    a = A[:]
+    assert array_equal(a.ravel(), arange(10*3, dtype=uint32))
+
+    # grow array
+    A.resize((11,3))
+
+    # a as already mapped, should stay the same
+    assert array_equal(a.ravel(), arange(10*3, dtype=uint32))
+
+    # mapping it once again maps it whole with new size
+    b = A[:]
+    assert isinstance(b, ndarray)
+    assert b.shape  == (11,3)
+    assert b.dtype  == dtype(uint32)
+
+    # head data is the same as a
+    assert array_equal(a, b[:10,:])
+
+    # tail is zeros
+    assert array_equal(b[10,:], zeros(3, dtype=uint32))
+
+    # old mapping stays valid and changes propageate to/from it
+    assert a[0,0] == 0
+    assert b[0,0] == 0
+    a[0,0] = 1
+    assert b[0,0] == 1
+    b[0,0] = 2
+    assert a[0,0] == 2
+    a[0,0] = 0
+    assert b[0,0] == 0
+
+    assert a[  -1,-1] == 10*3-1
+    assert b[10-1,-1] == 10*3-1
+    a[  -1,-1] = 1
+    assert b[10-1,-1] == 1
+    b[10-1,-1] = 2
+    assert a[  -1,-1] == 2
+    a[  -1,-1] = 10*3-1
+    assert b[10-1,-1] == 10*3-1
+
+    # we cannot access old mapping beyond it's end
+    assert raises(IndexError, 'a[10,:]')
+
+    # we can change tail
+    b[10,:] = arange(10*3, (10+1)*3)
+
+    # map it whole again and ensure we have correct data
+    c = A[:]
+    assert array_equal(c.ravel(), arange(11*3, dtype=uint32))
