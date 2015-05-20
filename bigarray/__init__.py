@@ -285,7 +285,7 @@ class BigArray(object):
         #print('len(vma0):\t', len(vma0))
         view0 = ndarray(view0_shape, self._dtype, vma0, view0_offset, view0_stridev)
 
-        # now take into accont indices after major one
+        # now take into account indices after major one
         view  = view0[(slice(None),) + tuple(idx[1:])]
 
         #print('view0:\t', view0.shape)
@@ -293,17 +293,17 @@ class BigArray(object):
 
         #print('View:\t',  view)
         #print('view/d:\t', view[dim_adjust])
-        # and finally take dimenstions adjust into account and we are done
+        # and finally take dimensions adjust into account and we are done
         return view[dim_adjust]
 
 
     def __setitem__(self, idx, v):
         # TODO idx = int, i.e. scalar assign
 
-        # reprsent changed area by ndarray via getitem, then leverage ndarray assignment
+        # represent changed area by ndarray via getitem, then leverage ndarray assignment
         a = self.__getitem__(idx)
         a[:] = v
 
 
     # XXX __array__(self) = self[:]     ?
-    # (for numpy functions to accept bigaray as-is (if size permits))
+    # (for numpy functions to accept bigarray as-is (if size permits))
