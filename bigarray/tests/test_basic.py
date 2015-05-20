@@ -36,6 +36,22 @@ class BigFile_Zero(BigFile):
         return
 
 
+# Synthetic bigfile that loads/stores data from/to numpy array
+class BigFile_Data(BigFile):
+
+    def __new__(cls, data, blksize):
+        obj = BigFile.__new__(cls, blksize)
+        obj.datab = data.view(uint8)
+        return obj
+
+    def loadblk(self, blk, buf):
+        x = self.datab[self.blksize * blk : self.blksize * (blk+1)]
+        memcpy(buf, x)
+
+    def storeblk(self, blk, buf):
+        memcpy(self.datab[self.blksize * blk : self.blksize * (blk+1)], buf)
+
+
 PS = 2*1024*1024    # FIXME hardcoded, TODO -> ram.pagesize
 
 
@@ -254,17 +270,12 @@ def test_bigarray_indexing_Nd():
     #      (else data slice will be smaller than buf)
     data  = arange(multiply.reduce(shape) + PS, dtype=uint32)
 
-    # synthetic bigfile that loads data from `data`
-    class BigFile_Data(BigFile):
-        def loadblk(self, blk, buf):
-            datab = data.view(uint8)
-            x = datab[self.blksize * blk : self.blksize * (blk+1)]
-            memcpy(buf, x)
-
+    # synthetic bigfile that only loads data from numpy array
+    class BigFile_Data_RO(BigFile_Data):
         def storeblk(self, blk, buf):
             raise RuntimeError('tests should not try to change test data')
 
-    f  = BigFile_Data(PS)
+    f  = BigFile_Data_RO(data, PS)
     fh = f.fileh_open()
 
     A  = BigArray(shape, uint32, fh)                    # bigarray with test data and shape
