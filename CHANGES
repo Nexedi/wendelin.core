@@ -1,0 +1,16 @@
+Wendelin.core change history
+============================
+
+0.2 (2015-05-25)
+----------------
+
+- Add support for O(1) in-place BigArray.resize()
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/ca064f75
+
+- Various build bugfixes (older systems, non-std python, etc)
+
+
+0.1 (2015-04-03)
+----------------
+
+- Initial release
