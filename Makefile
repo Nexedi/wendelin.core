@@ -34,7 +34,9 @@ endif
 all	: bigfile/_bigfile.so
 
 
-bigfile/_bigfile.so : 3rdparty/ccan/config.h FORCE
+ccan_config := 3rdparty/ccan/config.h
+
+bigfile/_bigfile.so : $(ccan_config) FORCE
 	$(PYTHON) setup.py ll_build_ext --inplace
 
 
@@ -42,7 +44,7 @@ FORCE	:
 
 
 # TODO add FORCE?
-3rdparty/ccan/config.h: 3rdparty/ccan/Makefile
+$(ccan_config): 3rdparty/ccan/Makefile
 	$(MAKE) -C $(@D) $(@F)
 
 # if there is no ccan/Makefile - ccan submodule has not been initialized
@@ -88,14 +90,14 @@ xrun	= $1 $(if $(XFAIL_$@),|| echo "($@ - expected failure)")
 XRUN<	= $(call xrun,$(call runwith,$<) $<)
 
 
-LINKC	= $(LINK.c) $^ $(LOADLIBES) $(LDLIBS) -o $@
+LINKC	= $(LINK.c) $< $(LOADLIBES) $(LDLIBS) -o $@
 
 # tests without instrumentation
 test.t	: $(TESTS:%=%.trun)
 %.trun	: %.t
 	$(XRUN<)
 
-%.t	: %.c
+%.t	: %.c $(ccan_config)
 	$(LINKC)
 
 # test with AddressSanitizer
@@ -104,7 +106,7 @@ test.asan: $(TESTS:%=%.asanrun)
 	$(XRUN<)
 
 %.asan	: CFLAGS += -fsanitize=address
-%.asan	: %.c
+%.asan	: %.c $(ccan_config)
 	$(LINKC)
 
 
@@ -124,7 +126,7 @@ endif
 
 
 %.tsan	: CFLAGS += -fsanitize=thread -pie -fPIC
-%.tsan	: %.c
+%.tsan	: %.c $(ccan_config)
 	$(LINKC)
 
 
