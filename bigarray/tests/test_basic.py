@@ -105,6 +105,13 @@ def test_bigarray_indexing_1d():
     AA = DoubleGet(A, A_)
 
 
+    # BigArray does not support advanced indexes
+    # (in numpy they create _copy_ picking up elements)
+    A_[0:5] = range(0,10,2)
+    assert array_equal(A_[[0,1,2,3,4]], [0,2,4,6,8])
+    raises (TypeError, 'A[[0,1,2,3,4]]')
+
+
     # "empty" slices
     assert A[10:5:1]        .size == 0
     assert A[5:10:-1]       .size == 0

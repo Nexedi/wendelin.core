@@ -197,6 +197,14 @@ class BigArray(object):
         # NOTE basic indexing means idx = tuple(slice | int) + sugar(newaxis, ellipsis)
         #print('\n__getitem__', idx)
 
+        # BigArray does not support advanced indexes:
+        # In numpy they create _copy_, picking up elements, e.g.
+        #   a = arange(10)
+        #   a[ 0,3,2 ]  -> IndexError
+        #   a[[0,3,2]]  -> [0,3,2]
+        if isinstance(idx, list):
+            raise TypeError('BigArray does not support advanced indexing ; idx = %r' % (idx,))
+
         # handle 1d slices uniformly with Nd
         if not isinstance(idx, tuple):
             idx = (idx,)
