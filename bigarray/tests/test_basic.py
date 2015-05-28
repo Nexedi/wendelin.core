@@ -19,7 +19,8 @@
 from wendelin.bigarray import BigArray
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
-from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, multiply, array_equal
+from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, \
+        multiply, array_equal, asarray
 
 from pytest import raises
 
@@ -422,3 +423,14 @@ def test_bigarray_list():
     l  = list(A)
     assert isinstance(l, list)
     assert l == [0]*10
+
+
+def test_bigarray_to_ndarray():
+    Z  = BigFile_Zero(PS)
+    Zh = Z.fileh_open()
+    A = BigArray((10,), uint8, Zh)
+
+    # without IndexError on out-of-bound scalar access, the following
+    # - would work with numpy-1.8
+    # - would loop forever eating memory with numpy-1.9
+    a = asarray(A)
