@@ -145,6 +145,20 @@ class build_ext(_build_ext):
 def register_as_entrypoint(func, entryname, groupname, distname):
     from pkg_resources import working_set, EntryPoint
     dist = working_set.by_key[distname]
+
+    # workaround for setuptools 9.0 dropping `setuptools.file_finders` entrypoint
+    # group registration:
+    #   https://bitbucket.org/pypa/setuptools/commits/f191c8a1225bd58a5fb5aa9abb31b06dc710f0b9#Lsetup.pyF175
+    #   https://bitbucket.org/pypa/setuptools/issue/313
+    # issue reported back:
+    #   https://bitbucket.org/pypa/setuptools/issue/313#comment-18430008
+    #
+    # register group if it is not yet registered
+    # else dist.get_entry_map(groupname) returns just {} not connected to entry map
+    entry_map = dist.get_entry_map()
+    if groupname not in entry_map:
+        entry_map[groupname] = {}
+
     entrypoint = EntryPoint(entryname, func.__module__, attrs=(func.__name__,),
                                     extras=(), dist=dist)
     group = dist.get_entry_map(groupname)
