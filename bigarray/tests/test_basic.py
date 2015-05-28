@@ -111,6 +111,18 @@ def test_bigarray_indexing_1d():
     assert array_equal(A_[[0,1,2,3,4]], [0,2,4,6,8])
     raises (TypeError, 'A[[0,1,2,3,4]]')
 
+    # index out of range
+    # - element access  -> raises IndexError
+    # - slice access    -> empty
+    assert AA[10*PS-1] == (0,0)
+    raises(IndexError, 'A_[10*PS]')
+    raises(IndexError, 'A [10*PS]')
+    a, _ = AA[10*PS:10*PS+1]
+    assert isinstance(a, ndarray)
+    assert array_equal(a, _)
+    assert a.dtype == dtype(uint8)
+    assert a.shape == (0,)
+
 
     # "empty" slices
     assert A[10:5:1]        .size == 0
@@ -288,14 +300,44 @@ def test_bigarray_indexing_Nd():
     A  = BigArray(shape, uint32, fh)                    # bigarray with test data and shape
     A_ = data[:multiply.reduce(shape)].reshape(shape)   # ndarray  ----//----
 
+    # AA[key] -> A[key], A_[key]
+    AA = DoubleGet(A, A_)
+
 
     # now just go over combinations of various slice at each dimension, and see
     # whether slicing result is the same ndarray would do.
     for idx in idx_to_test(shape):
-        a  = A [idx]
-        a_ = A_[idx]
-
+        a, a_ = AA[idx]
         assert array_equal(a, a_)
+
+
+    # any part of index out of range
+    # - element access  -> raises IndexError
+    # - slice access    -> empty
+    for idxpos in range(len(shape)):
+        idx  = [0]*len(shape)
+        # idx -> tuple(idx)
+        # ( list would mean advanced indexing - not what we want )
+        idxt = lambda : tuple(idx)
+
+        # valid access element access
+        idx[idxpos] = shape[idxpos] - 1     # 0, 0, 0,  Ni-1, 0 ,0, 0
+        a, a_ = AA[idxt()]
+        assert array_equal(a, a_)
+
+        # out-of-range element access
+        idx[idxpos] = shape[idxpos]         # 0, 0, 0,  Ni  , 0 ,0, 0
+        raises(IndexError, 'A [idxt()]')
+        raises(IndexError, 'A_[idxt()]')
+
+        # out-of-range slice access
+        idx[idxpos] = slice(shape[idxpos],  # 0, 0, 0,  Ni:Ni+1  , 0 ,0, 0
+                            shape[idxpos]+1)
+        a, a_ = AA[idxt()]
+        assert array_equal(a, a_)
+        assert a .size == 0
+        assert a_.size == 0
+
 
     # TODO ... -> expanded (0,1,2,negative), rejected if many
     # TODO newaxis
@@ -368,3 +410,15 @@ def test_bigarray_resize():
     # map it whole again and ensure we have correct data
     c = A[:]
     assert array_equal(c.ravel(), arange(11*3, dtype=uint32))
+
+
+def test_bigarray_list():
+    Z  = BigFile_Zero(PS)
+    Zh = Z.fileh_open()
+    A = BigArray((10,), uint8, Zh)
+
+    # the IndexError for out-of-bound scalar access should allow, though
+    # inefficient, for list(A) to work (instead of looping inside forever)
+    l  = list(A)
+    assert isinstance(l, list)
+    assert l == [0]*10

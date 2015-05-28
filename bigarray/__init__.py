@@ -302,39 +302,42 @@ class BigArray(object):
         nitems0 = (idx0_stop - idx0_start - sign(idx0_stride)) // idx0_stride + 1
         #print('nitem0:\t', nitems0)
 
-        # if major row is "empty" slice, we can return right away without creating vma.
+        # if major row is "empty" slice, we can build view right away without creating vma.
         # e.g. 10:5:1, 5:10:-1, 5:5,  size+100:size+200  ->  []
         if nitems0 <= 0:
-            return ndarray((0,) + self._shape[1:], self._dtype)
+            view = ndarray((0,) + self._shape[1:], self._dtype)
 
-        # major slice -> in bytes
-        byte0_start  = idx0_start  * stride0
-        byte0_stop   = idx0_stop   * stride0
-        byte0_stride = idx0_stride * stride0
+        # create appropriate vma and ndarray view to it
+        else:
 
-        # major slice -> in file pages, always increasing, inclusive
-        page0_min  = min(byte0_start, byte0_stop+byte0_stride) // pagesize # TODO -> fileh.pagesize
-        page0_max  = max(byte0_stop-byte0_stride, byte0_start) // pagesize # TODO -> fileh.pagesize
+            # major slice -> in bytes
+            byte0_start  = idx0_start  * stride0
+            byte0_stop   = idx0_stop   * stride0
+            byte0_stride = idx0_stride * stride0
+
+            # major slice -> in file pages, always increasing, inclusive
+            page0_min  = min(byte0_start, byte0_stop+byte0_stride) // pagesize # TODO -> fileh.pagesize
+            page0_max  = max(byte0_stop-byte0_stride, byte0_start) // pagesize # TODO -> fileh.pagesize
 
 
-        # ~~~ mmap file part corresponding to full major slice into memory
-        vma0 = self._fileh.mmap(page0_min, page0_max-page0_min+1)
+            # ~~~ mmap file part corresponding to full major slice into memory
+            vma0 = self._fileh.mmap(page0_min, page0_max-page0_min+1)
 
 
-        # first get ndarray view with only major slice specified and rest indices being ":"
-        view0_shape   = (nitems0,) + self._shape[1:]
-        view0_offset  = byte0_start - page0_min * pagesize # TODO -> fileh.pagesize
-        view0_stridev = (byte0_stride,) + self._stridev[1:]
-        #print('view0_shape:\t', view0_shape, self.shape)
-        #print('view0_offset:\t', view0_offset)
-        #print('len(vma0):\t', len(vma0))
-        view0 = ndarray(view0_shape, self._dtype, vma0, view0_offset, view0_stridev)
+            # first get ndarray view with only major slice specified and rest indices being ":"
+            view0_shape   = (nitems0,) + self._shape[1:]
+            view0_offset  = byte0_start - page0_min * pagesize # TODO -> fileh.pagesize
+            view0_stridev = (byte0_stride,) + self._stridev[1:]
+            #print('view0_shape:\t', view0_shape, self.shape)
+            #print('view0_offset:\t', view0_offset)
+            #print('len(vma0):\t', len(vma0))
+            view0 = ndarray(view0_shape, self._dtype, vma0, view0_offset, view0_stridev)
 
-        # now take into account indices after major one
-        view  = view0[(slice(None),) + tuple(idx[1:])]
+            # now take into account indices after major one
+            view  = view0[(slice(None),) + tuple(idx[1:])]
 
-        #print('view0:\t', view0.shape)
-        #print('view:\t',  view.shape)
+            #print('view0:\t', view0.shape)
+            #print('view:\t',  view.shape)
 
         #print('View:\t',  view)
         #print('view/d:\t', view[dim_adjust])
