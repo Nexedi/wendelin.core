@@ -291,7 +291,13 @@ class BigArray(object):
         shape0  = self._shape[0]
 
         # major idx start/stop/stride
-        idx0_start, idx0_stop, idx0_stride = idx0.indices(shape0)
+        try:
+            idx0_start, idx0_stop, idx0_stride = idx0.indices(shape0)
+        except OverflowError as e:
+            # overflow error here means slice indices do not fit into std long,
+            # which also practically means we cannot allocate such amount of
+            # address space.
+            raise MemoryError(e)
 
         #print('idx0:\t', idx0, '-> [%s:%s:%s]' % (idx0_start, idx0_stop, idx0_stride))
         #print('strid0:\t', stride0)  #, self._stridev
