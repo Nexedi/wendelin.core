@@ -106,6 +106,10 @@ typedef struct PyBigFile PyBigFile;
 #define PyType_New(type, typeobj, args) \
     ( (type *)PyObject_CallObject((PyObject *)(typeobj), args) )
 
+/* like PyErr_SetFromErrno(exc), but chooses exception type automatically */
+static void XPyErr_SetFromErrno(void);
+
+
 /************
  *  PyVMA   *
  ************/
@@ -257,7 +261,7 @@ PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
     if (err) {
         Py_DECREF(pyfileh);
         Py_DECREF(pyvma);   // XXX ok wrt delete pyvma->vma ?
-        PyErr_SetFromErrno(PyExc_RuntimeError);
+        XPyErr_SetFromErrno();
         return NULL;
     }
 
@@ -656,7 +660,7 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
     Py_INCREF(pyfile);
     err = fileh_open(pyfileh, pyfile, ram);
     if (err) {
-        PyErr_SetFromErrno(PyExc_RuntimeError);
+        XPyErr_SetFromErrno();
         Py_DECREF(pyfile);
         Py_DECREF(pyfileh);
         return NULL;
@@ -797,4 +801,18 @@ PyInit__bigfile(void)
     return
 #endif
         _init_bigfile();
+}
+
+
+static void
+XPyErr_SetFromErrno(void)
+{
+    PyObject *exc;
+
+    switch(errno) {
+        case ENOMEM:    exc = PyExc_MemoryError; break;
+        default:        exc = PyExc_RuntimeError;
+    }
+
+    PyErr_SetFromErrno(exc);
 }
