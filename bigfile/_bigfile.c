@@ -172,9 +172,10 @@ pyvma_dealloc(PyObject *pyvma0)
     if (pyvma->in_weakreflist)
         PyObject_ClearWeakRefs(pyvma);
 
-    vma_unmap(pyvma);
-
+    /* pyvma->fileh indicates whether vma was yet created (via fileh_mmap()) or not */
     if (fileh) {
+        vma_unmap(pyvma);
+
         PyBigFileH *pyfileh = upcast(PyBigFileH *, fileh);
         Py_DECREF(pyfileh);
     }
@@ -260,7 +261,7 @@ PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
     err = fileh_mmap(pyvma, pyfileh, pgoffset, pglen);
     if (err) {
         Py_DECREF(pyfileh);
-        Py_DECREF(pyvma);   // XXX ok wrt delete pyvma->vma ?
+        Py_DECREF(pyvma);
         XPyErr_SetFromErrno();
         return NULL;
     }
@@ -327,9 +328,10 @@ pyfileh_dealloc(PyObject *pyfileh0)
     if (pyfileh->in_weakreflist)
         PyObject_ClearWeakRefs(pyfileh);
 
-    fileh_close(pyfileh);
-
+    /* pyfileh->file indicates whether fileh was yet opened (via fileh_open()) or not */
     if (file) {
+        fileh_close(pyfileh);
+
         pyfile = upcast(PyBigFile  *, file);
         Py_DECREF(pyfile);
     }
