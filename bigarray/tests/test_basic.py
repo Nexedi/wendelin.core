@@ -435,3 +435,20 @@ def test_bigarray_to_ndarray():
     # - would work with numpy-1.8
     # - would loop forever eating memory with numpy-1.9
     a = asarray(A)
+    assert array_equal(a, A[:])
+
+
+    # "medium"-sized array of 1TB. converting it to ndarray should work here
+    # without hanging, becuse initially all data are unmapped, and we don't
+    # touch mapped memory.
+    B = BigArray((1<<40,), uint8, Zh)
+    b = asarray(B)
+    assert isinstance(b, ndarray)
+    assert b.nbytes == 1<<40
+
+
+    # array of size larger than virtual address space (~ 2^47 on linux/amd64)
+    # converting it to ndarray is should be not possible
+    for i in range(48,65):
+        C = BigArray(((1<<i)-1,), uint8, Zh)
+        raises(MemoryError, 'asarray(C)')

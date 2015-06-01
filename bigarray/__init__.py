@@ -37,6 +37,7 @@ of physical RAM.
 from __future__ import print_function
 from wendelin.lib.calc import mul
 from numpy import ndarray, dtype, multiply, sign, newaxis
+import logging
 
 
 pagesize = 2*1024*1024 # FIXME hardcoded, TODO -> fileh.ram.pagesize
@@ -359,5 +360,36 @@ class BigArray(object):
         a[:] = v
 
 
-    # XXX __array__(self) = self[:]     ?
-    # (for numpy functions to accept bigarray as-is (if size permits))
+
+    # BigArray -> ndarray  (if enough address space available)
+    #
+    # BigArrays can be big - up to 2^64 bytes, and thus in general it is not
+    # possible to represent whole BigArray as ndarray view, because address
+    # space is usually smaller on 64bit architectures.
+    #
+    # However users often try to pass BigArrays to numpy functions as-is, and
+    # numpy finds a way to convert, or start converting, BigArray to ndarray -
+    # via detecting it as a sequence, and extracting elements one-by-one.
+    # Which is slooooow.
+    #
+    # Because of the above, we provide users a well-defined service:
+    # - if virtual address space is available - we succeed at creating ndarray
+    #   view for whole BigArray, without delay and copying.
+    # - if not - we report properly the error and give hint how BigArrays have
+    #   to be processed in chunks.
+    def __array__(self):
+        # NOTE numpy also sometimes uses optional arguments |dtype,context
+        #      but specifying dtype means the result should be a copy.
+        #
+        #      Copying BigArray data is not a good idea in all cases,
+        #      so we don't support accepting dtype.
+        try:
+            return self[:]
+        except MemoryError:
+            logging.warn('You tried to map BigArray (~ %.1f GB) and it failed ...' %
+                    (float(self.nbytes) // (1<<30)))
+            logging.warn('... because there is no so much memory or so much virtual address')
+            logging.warn('... space available. BigArrays larger than available virtual')
+            logging.warn('... address space can not be mapped at once and have to be')
+            logging.warn('... processed in chunks.')
+            raise
