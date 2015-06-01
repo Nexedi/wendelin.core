@@ -44,6 +44,7 @@
  *
  *      patch: http://lwn.net/Articles/640751/  (hugetlbfs: add fallocate support)
  *             http://lwn.net/Articles/641681/   v2
+ *             http://lwn.net/Articles/645458/   v3
  */
 #define _GNU_SOURCE
 #include <sys/types.h>
