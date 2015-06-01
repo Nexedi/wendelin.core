@@ -19,7 +19,7 @@ from setuptools import setup, Extension, Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from setuptools.command.build_ext import build_ext as _build_ext
 from distutils.errors import DistutilsExecError
-from subprocess import check_output as runcmd
+from subprocess import Popen, PIPE
 
 import os
 import sys
@@ -164,6 +164,24 @@ def register_as_entrypoint(func, entryname, groupname, distname):
     group = dist.get_entry_map(groupname)
     assert entryname not in group
     group[entryname] = entrypoint
+
+
+# like subprocess.check_output(), but properly report errors, if e.g. commands is not found
+# check_output(['missing-command']) -> error: [Errno 2] No such file or directory
+# runcmd      (['missing-command']) -> error: ['missing-command']: [Errno 2] No such file or directory
+def runcmd(argv):
+    try:
+        process = Popen(argv, stdout=PIPE)
+    except Exception, e:
+        raise RuntimeError("%s: %s" % (argv, e))
+
+    output, _err = process.communicate()
+    retcode = process.poll()
+    if retcode:
+        raise RuntimeError("%s -> failed (status %s)" % (argv, retcode))
+
+    return output
+
 
 def git_lsfiles(dirname):
     # FIXME dirname is currently ignored
