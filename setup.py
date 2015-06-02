@@ -172,7 +172,7 @@ def register_as_entrypoint(func, entryname, groupname, distname):
 def runcmd(argv):
     try:
         process = Popen(argv, stdout=PIPE)
-    except Exception, e:
+    except Exception as e:
         raise RuntimeError("%s: %s" % (argv, e))
 
     output, _err = process.communicate()
