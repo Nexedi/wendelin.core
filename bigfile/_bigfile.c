@@ -41,10 +41,15 @@ typedef struct _frame PyFrameObject;
  * on python2 < 2.7.10 memoreview object is not accepted in a lot of
  * places, see e.g. http://bugs.python.org/issue22113 for struct.pack_into()
  *
+ * also on python 2.7.10, even latest numpy does not accept memoryview as
+ * buffer for ndarray: https://github.com/numpy/numpy/issues/5935
+ *
  * if we know memoryview won't be accepted - we pass old buffer
  *
  * TODO get rid of this and eventually use only memoryview  */
-#define BIGFILE_USE_OLD_BUFFER  (PY_VERSION_HEX < 0x02070AF0)
+//#define BIGFILE_USE_OLD_BUFFER  (PY_VERSION_HEX < 0x02070AF0)
+// waiting for numpy to start accept it on python2
+#define BIGFILE_USE_OLD_BUFFER  (PY_VERSION_HEX < 0x03000000)
 
 
 /*
