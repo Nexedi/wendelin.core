@@ -35,6 +35,7 @@ of physical RAM.
 """
 
 from __future__ import print_function
+from wendelin.lib.calc import mul
 from numpy import ndarray, dtype, multiply, sign, newaxis
 
 
@@ -82,8 +83,7 @@ class BigArray(object):
 
         # shape, dtype -> ._stridev
         # TODO take dtype.alignment into account ?
-        # NOTE (1,) so that multiply.reduce return 1 (not 1.0) for []
-        self._stridev = tuple( multiply.reduce((1,) + shape[i+1:]) * self._dtype.itemsize  \
+        self._stridev = tuple( mul(shape[i+1:]) * self._dtype.itemsize  \
                                     for i in range(len(shape)) )
 
 
@@ -110,7 +110,7 @@ class BigArray(object):
 
     @property
     def size(self):
-        return multiply.reduce(self._shape)
+        return mul(self._shape)
 
     def __len__(self):
         # lengths of the first axis

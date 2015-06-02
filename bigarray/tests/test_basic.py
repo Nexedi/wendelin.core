@@ -19,6 +19,7 @@
 from wendelin.bigarray import BigArray
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
+from wendelin.lib.calc import mul
 from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, \
         multiply, array_equal, asarray
 
@@ -288,7 +289,7 @@ def test_bigarray_indexing_Nd():
     # test data - all items are unique - so we can check array by content
     # NOTE +PS so that BigFile_Data has no problem loading last blk
     #      (else data slice will be smaller than buf)
-    data  = arange(multiply.reduce(shape) + PS, dtype=uint32)
+    data  = arange(mul(shape) + PS, dtype=uint32)
 
     # synthetic bigfile that only loads data from numpy array
     class BigFile_Data_RO(BigFile_Data):
@@ -299,7 +300,7 @@ def test_bigarray_indexing_Nd():
     fh = f.fileh_open()
 
     A  = BigArray(shape, uint32, fh)                    # bigarray with test data and shape
-    A_ = data[:multiply.reduce(shape)].reshape(shape)   # ndarray  ----//----
+    A_ = data[:mul(shape)].reshape(shape)               # ndarray  ----//----
 
     # AA[key] -> A[key], A_[key]
     AA = DoubleGet(A, A_)
