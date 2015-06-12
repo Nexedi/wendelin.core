@@ -1,6 +1,23 @@
 Wendelin.core change history
 ============================
 
+0.3 (2015-06-12)
+----------------
+
+- Add support for automatic BigArray -> ndarray conversion, so that e.g. the
+  following::
+
+    A = BigArray(...)
+    numpy.mean(A)       # passing BigArray to plain NumPy function
+
+  either succeeds, or raises MemoryError if not enough address space is
+  available to cover whole A. (current limitation is ~ 127TB on linux/amd64)
+
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/00db08d6
+
+- Various bugfixes (build-fixes, crashes, overflows, etc)
+
+
 0.2 (2015-05-25)
 ----------------
 
