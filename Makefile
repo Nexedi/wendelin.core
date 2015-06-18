@@ -178,7 +178,7 @@ FAULTS	:= $(shell grep '{"fault.*"' $(tfault).c | sed 's/"/ /g' |awk '{print $$2
 test.fault : $(FAULTS:%=%.tfault)
 
 %.tfault : $(tfault).t
-	t/tfault-run $< $* $(shell grep '{"$*"' $(tfault).c | awk '{print $$NF}')
+	t/tfault-run $< $* $(shell grep '{"$*"' $(tfault).c | awk '{print $$4 " " $$5 " " $$6}')
 
 
 # -*- benchmarking -*-

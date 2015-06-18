@@ -1,7 +1,10 @@
 #!/bin/sh -e
-# tfault-run <tfault> <arg> <mustdie>
+# tfault-run <tfault> <arg> <mustdie> <signal> [exitcode]
 # run `<tfault> <arg>` and verify that it produces correct coredump, dieing for
-#   SIGSEGV in function <mustdie>.
+#   <signal> with traceback <mustdie>.
+#
+# NOTE mustdie is generally func1,func2,func3,... - traceback tail is checked to be func1<-func2<-func3
+# NOTE if exitcode not present - it is checked to be non-zero
 
 # die <msg> ...
 die() {
@@ -12,6 +15,8 @@ die() {
 tfault=$(realpath $1)
 arg=$2
 mustdie=$3
+signal=$4
+exitcode=$5
 
 # XXX ok to hardcode t/ ?
 workdir=t/tfault-run.$arg
@@ -22,21 +27,38 @@ cd "$workdir"
 
 ulimit -c unlimited
 $tfault $arg 2>&1 |tee run.out
+st="${PIPESTATUS[0]}"
+if test -z "$exitcode"; then
+    test $st != 0                       || die "test exit code is 0"
+else
+    test $st == $exitcode               || die "test exit code unexpected ($st != $exitcode)"
+fi
 
 grep -q "^# going to fault" run.out     || die "test didn't run to faulting point"
 test -e core                            || die "no core after run"
-gdb -q -batch $tfault core >core.info   || die "can't gdb(core)"
-grep -q "Program terminated with signal SIGSEGV, Segmentation fault." core.info || die "not SIGSEGV"
+gdb -q -batch $tfault core >core.info   || die "can't gdb-info(core)"
+grep -q "Program terminated with signal $signal" core.info || die "not $signal"
+gdb -batch-silent   \
+    -ex "set logging file /dev/stdout"  \
+    -ex "set logging on"    \
+    -ex bt $tfault core >core.bt        || die "can't gdb-bt(core)"
 
-# #0  0x00000000004031ae in doublefault_loadblk (file=0x7fff0f25d9c0, blk=0, buf=0x7ff85a553000) at t/tfault.c:93
-diefunc=$(grep '^#0' core.info | awk '{print $4}')
-test -n "$diefunc" || die "can't extract diefunc"
+# verify mustdie
+mustdie_depth=`echo $mustdie | sed 's/,/ /g' | wc -w`
+diebt=
+for nframe in `seq 0 $(($mustdie_depth - 1))`; do
+    # #0  0x00000000004031ae in doublefault_loadblk (file=0x7fff0f25d9c0, blk=0, buf=0x7ff85a553000) at t/tfault.c:93
+    # #5  <signal handler called>
+    framefunc=$(grep "^#$nframe" core.bt | awk '{print $4}')
+    test "$framefunc" = "called>" && framefunc=sighandler   # <signal handler called> -> sighandler
+    diebt=$diebt${diebt:+,}$framefunc
+done
 
-test "$diefunc" == "$mustdie"   || die "must die in $mustdie, died in $diefunc"
+test "$diebt" == "$mustdie"   || die "must die via $mustdie, died via $diebt"
 
 
 # run ok - cleanup
 cd "$cwd"
 rm -rf "$workdir"
 
-echo "ok   - crashed OK  (in $diefunc)"
+echo "ok   - crashed OK  (via $diebt)"

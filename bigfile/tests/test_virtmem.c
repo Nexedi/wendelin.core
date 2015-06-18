@@ -950,7 +950,7 @@ void test_pagefault_savestate()
 
 
 
-// TODO test for loadblk that returns -1
+/* NOTE tests for loadblk that returns -1 are in bigfile/tests/tfault.c */
 
 int main()
 {

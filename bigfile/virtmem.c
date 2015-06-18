@@ -505,9 +505,12 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
          *      that it can abort current transaction, but not die.
          *
          * NOTE for analogue situation when read for mmaped file fails, the
-         *      kernel sends SIGBUS
+         *      kernel sends SIGBUS, which if not handled, terminates whole process.
+         *
+         * For now we just terminate current thread.
          */
-        TODO (err);
+        if (err)
+            ABORT_THREAD();
 
         xmunmap(pageram, page_size(page));
 

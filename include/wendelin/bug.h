@@ -51,6 +51,10 @@
 #define BUG_ON(expr)    ASSERT(!(expr))
 
 
+/* like abort() but aborts only current thread (or whole process if current thread is main) */
+#define ABORT_THREAD()  \
+    __abort_thread(__FILE__, __LINE__, __func__)
+
 
 void __todo(const char *, const char *, unsigned, const char *)
     __attribute__((noreturn));
@@ -60,6 +64,8 @@ void __bug(const char *, unsigned, const char *)
 void __bug_errno(const char *, unsigned, const char *)
     __attribute__((noreturn));
 void __bug_fail(const char *, const char *, unsigned, const char *)
+    __attribute__((noreturn));
+void __abort_thread(const char *file, unsigned line, const char *func)
     __attribute__((noreturn));
 
 

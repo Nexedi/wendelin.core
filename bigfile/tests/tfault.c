@@ -18,7 +18,7 @@
  *
  * ~~~~
  *
- * All tests here end up crashing via segmentation violation. The calling
+ * Most tests here end up crashing via segmentation violation. The calling
  * driver verifies test output prior to crash and that the crash happenned in
  * the right place.
  *
@@ -36,6 +36,7 @@
 #include <ccan/array_size/array_size.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "../../t/t_utils.h"
 
@@ -178,17 +179,114 @@ void fault_in_storeblk()
 
 
 
+/* BigFile, which .loadblk() always return error */
+int err_loadblk(BigFile *file, blk_t blk, void *buf)
+{
+    return -1;
+}
+
+const struct bigfile_ops err_ops = {
+    .loadblk = err_loadblk,
+};
+
+
+/* loadblk error in main thread -> full abort */
+void abort_loadblkerr_t0()
+{
+    RAM *ram;
+    BigFileH fh;
+    VMA vma_struct, *vma = &vma_struct;
+    int err;
+
+    diag("testing loadblk error in main thread");
+
+    // XXX save/restore sigaction ?
+    ok1(!pagefault_init());
+
+    ram = ram_new(NULL,NULL);
+    ok1(ram);
+
+    BigFile f = {
+        .blksize    = ram->pagesize,
+        .file_ops   = &err_ops,
+    };
+
+    err = fileh_open(&fh, &f, ram);
+    ok1(!err);
+
+    err = fileh_mmap(vma, &fh, 0, 2);
+    ok1(!err);
+
+    /* touch page[0] - should abort whole processe because loadblk() returns -1 */
+    prefault();
+    b(vma, 0);
+}
+
+
+/* loadblk error in second thread -> abort only that thread, main continues to run */
+void abort_loadblkerr_t1()
+{
+    RAM *ram;
+    BigFileH fh;
+    VMA vma_struct, *vma = &vma_struct;
+    int err;
+    pthread_t t1;
+
+    diag("testing loadblk error in second thread");
+
+    // XXX save/restore sigaction ?
+    ok1(!pagefault_init());
+
+    ram = ram_new(NULL,NULL);
+    ok1(ram);
+
+    BigFile f = {
+        .blksize    = ram->pagesize,
+        .file_ops   = &err_ops,
+    };
+
+    err = fileh_open(&fh, &f, ram);
+    ok1(!err);
+
+    err = fileh_mmap(vma, &fh, 0, 2);
+    ok1(!err);
+
+    void *__t1(void *arg)
+    {
+        /* touch page[0] - should abort t1 processe because loadblk() returns -1 */
+        prefault();
+        b(vma, 0);
+
+        /* should not get here - abort whole process */
+        abort();
+    }
+
+    err = pthread_create(&t1, NULL, __t1, NULL);
+    ok1(!err);
+
+    /* but main thread stays alive */
+    err = pthread_join(t1, NULL);
+    ok1(!err);
+
+    diag("I: main thread is still alive");
+    exit(0);
+}
+
+
 
 static const struct {
     const char *name;
     void (*test)(void);
 } tests[] = {
     // XXX fragile - test names must start exactly with `{"fault` - Makefile extracts them this way
-    // name                                func-where-it-dies
-    {"faultr",          fault_read},            // on_pagefault
-    {"faultw",          fault_write},           // on_pagefault
-    {"fault_loadblk",   fault_in_loadblk},      // faulty_loadblk
-    {"fault_storeblk",  fault_in_storeblk},     // faulty_storeblk
+    // name                                        mustdie traceback    signal
+    {"faultr",          fault_read},                // on_pagefault     SIGSEGV
+    {"faultw",          fault_write},               // on_pagefault     SIGSEGV
+    {"fault_loadblk",   fault_in_loadblk},          // faulty_loadblk   SIGSEGV
+    {"fault_storeblk",  fault_in_storeblk},         // faulty_storeblk
+
+    {"fault_loadblkerr_t0", abort_loadblkerr_t0},   // __GI_raise,__GI_abort,__abort_thread,vma_on_pagefault,on_pagefault,sighandler,abort_loadblkerr_t0 SIGABRT
+    {"fault_loadblkerr_t1", abort_loadblkerr_t1},   // __GI_raise,__GI_abort,__abort_thread,vma_on_pagefault,on_pagefault,sighandler,__t1 SIGABRT 0
 };
 
 int main(int argc, char *argv[])
