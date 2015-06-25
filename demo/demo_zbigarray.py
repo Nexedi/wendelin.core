@@ -11,8 +11,7 @@ TODO text
 from __future__ import print_function
 
 from wendelin.bigarray.array_zodb import ZBigArray
-from ZODB.FileStorage import FileStorage
-from ZODB import DB
+from wendelin.lib.zodb import dbopen, dbclose
 import transaction
 
 from numpy import float64, dtype, cumsum, sin
@@ -63,14 +62,14 @@ def gen(signalv):
 
 
 def usage():
-    print("Usage: %s (gen|read) <db>" % sys.argv[0], file=sys.stderr)
+    print("Usage: %s (gen|read) <dburi>" % sys.argv[0], file=sys.stderr)
     sys.exit(1)
 
 
 def main():
     try:
         act = sys.argv[1]
-        dbpath = sys.argv[2]
+        dburi = sys.argv[2]
     except IndexError:
         usage()
 
@@ -80,10 +79,7 @@ def main():
     ram_nbytes = psutil.virtual_memory().total
     print('I: RAM: %.2fGB' % (float(ram_nbytes) / GB))
 
-    stor = FileStorage(dbpath)
-    db   = DB(stor)
-    conn = db.open()
-    root = conn.root()
+    root = dbopen(dburi)
 
     if act == 'gen':
         sig_dtype = dtype(float64)
@@ -106,9 +102,7 @@ def main():
     m = p.memory_info()
     print('VIRT: %i MB\tRSS: %iMB' % (m.vms//MB, m.rss//MB))
 
-    conn.close()
-    db.close()
-    stor.close()
+    dbclose(root)
 
 
 if __name__ == '__main__':
