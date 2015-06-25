@@ -16,8 +16,8 @@
 #
 # See COPYING file for full licensing terms.
 from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile
-from wendelin.bigfile.tests.common_zodb import dbopen as z_dbopen, dbclose
 from wendelin.bigfile import ram_reclaim
+from wendelin.lib.zodb import dbopen as z_dbopen, dbclose
 from persistent import UPTODATE, GHOST
 import transaction
 from tempfile import mkdtemp

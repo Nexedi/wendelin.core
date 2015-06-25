@@ -4,7 +4,7 @@
 from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.lib.mem import memset
 from wendelin.lib.testing import Adler32, nulladler32_bysize, ffadler32_bysize
-from wendelin.bigfile.tests.common_zodb import dbopen, dbclose
+from wendelin.lib.zodb import dbopen, dbclose
 import transaction
 from tempfile import mkdtemp
 from shutil import rmtree

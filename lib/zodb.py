@@ -1,4 +1,4 @@
-# Wendelin.bigfile | common bits for ZODB-related tests
+# Wendelin.bigfile | common ZODB-related helpers
 # Copyright (C) 2014-2015  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #

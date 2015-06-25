@@ -16,8 +16,8 @@
 #
 # See COPYING file for full licensing terms.
 from wendelin.bigarray.array_zodb import ZBigArray
-from wendelin.bigfile.tests.common_zodb import dbopen, dbclose
 from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo
+from wendelin.lib.zodb import dbopen, dbclose
 from persistent import UPTODATE
 import transaction
 from numpy import dtype, uint8, all, array_equal
