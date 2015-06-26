@@ -116,6 +116,7 @@ def test_bigarray_indexing_1d():
     # index out of range
     # - element access  -> raises IndexError
     # - slice access    -> empty
+    A_[-1] = 0
     assert AA[10*PS-1] == (0,0)
     raises(IndexError, 'A_[10*PS]')
     raises(IndexError, 'A [10*PS]')
