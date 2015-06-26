@@ -3,13 +3,11 @@
 # TODO text
 from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.lib.mem import memset
-from wendelin.lib.testing import Adler32, nulladler32_bysize, ffadler32_bysize
-from wendelin.lib.zodb import dbopen, dbclose
+from wendelin.lib.testing import getTestDB, Adler32, nulladler32_bysize, ffadler32_bysize
+from wendelin.lib.zodb import dbclose
 import transaction
-from tempfile import mkdtemp
-from shutil import rmtree
 
-tmpd = None
+testdb = None
 from wendelin.bigfile.tests.bench_0virtmem import filesize, blksize # to get comparable timings
 blen = filesize // blksize
 nulladler32 = nulladler32_bysize(blen * blksize)
@@ -17,10 +15,11 @@ ffadler32   = ffadler32_bysize(blen * blksize)
 
 
 def setup_module():
-    global tmpd
-    tmpd = mkdtemp('', 'bigzodb.')
+    global testdb
+    testdb = getTestDB()
+    testdb.setup()
 
-    root = dbopen('%s/1.fs' % tmpd)
+    root = testdb.dbopen()
     root['zfile'] = ZBigFile(blksize)
     transaction.commit()
 
@@ -28,14 +27,14 @@ def setup_module():
 
 
 def teardown_module():
-    rmtree(tmpd)
+    testdb.teardown()
 
 
 # NOTE runs before _writeff
 def bench_bigz_readhole():  _bench_bigz_hash(Adler32,   nulladler32)
 
 def bench_bigz_writeff():
-    root = dbopen('%s/1.fs' % tmpd)
+    root = testdb.dbopen()
     f   = root['zfile']
     fh  = f.fileh_open()    # TODO + ram
     vma = fh.mmap(0, blen)  # XXX assumes blksize == pagesize
@@ -50,7 +49,7 @@ def bench_bigz_writeff():
 
 
 def _bench_bigz_hash(hasher, expect):
-    root = dbopen('%s/1.fs' % tmpd)
+    root = testdb.dbopen()
     f   = root['zfile']
     fh  = f.fileh_open()    # TODO + ram
     vma = fh.mmap(0, blen)  # XXX assumes blksize == pagesize

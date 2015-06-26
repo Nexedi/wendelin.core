@@ -17,13 +17,24 @@
 # See COPYING file for full licensing terms.
 from wendelin.bigarray.array_zodb import ZBigArray
 from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo
-from wendelin.lib.zodb import dbopen, dbclose
+from wendelin.lib.zodb import dbclose
+from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
 from numpy import dtype, uint8, all, array_equal
 
-def test_zbigarray(tmpdir):
-    root = dbopen('%s/1.fs' % tmpdir)
+testdb = None
+def setup_module():
+    global testdb
+    testdb = getTestDB()
+    testdb.setup()
+
+def teardown_module():
+    testdb.teardown()
+
+
+def test_zbigarray():
+    root = testdb.dbopen()
     root['zarray'] = ZBigArray((16*1024*1024,), uint8)
     transaction.commit()
 
@@ -31,7 +42,7 @@ def test_zbigarray(tmpdir):
     del root
 
 
-    root = dbopen('%s/1.fs' % tmpdir)
+    root = testdb.dbopen()
     A = root['zarray']
 
     assert isinstance(A, ZBigArray)
@@ -75,7 +86,7 @@ def test_zbigarray(tmpdir):
     del root, a,b, A
 
 
-    root = dbopen('%s/1.fs' % tmpdir)
+    root = testdb.dbopen()
     A = root['zarray']
 
     assert isinstance(A, ZBigArray)
@@ -111,7 +122,7 @@ def test_zbigarray(tmpdir):
     del root, a, A, db
 
 
-    root = dbopen('%s/1.fs' % tmpdir)
+    root = testdb.dbopen()
     A = root['zarray']
 
     assert isinstance(A, ZBigArray)
@@ -143,7 +154,7 @@ def test_zbigarray(tmpdir):
     del root, a, b, A
 
 
-    root = dbopen('%s/1.fs' % tmpdir)
+    root = testdb.dbopen()
     A = root['zarray']
 
     assert isinstance(A, ZBigArray)

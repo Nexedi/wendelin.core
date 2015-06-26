@@ -17,31 +17,31 @@
 # See COPYING file for full licensing terms.
 from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile
 from wendelin.bigfile import ram_reclaim
-from wendelin.lib.zodb import dbopen as z_dbopen, dbclose
+from wendelin.lib.zodb import dbclose
+from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST
 import transaction
-from tempfile import mkdtemp
-from shutil import rmtree
 from numpy import ndarray, array_equal, uint8, zeros
 
 from pytest import raises
 from six.moves import range as xrange
 
 
-tmpd = None
+testdb = None
 blksize  = 2*1024*1024   # XXX hardcoded
 blen     = 32            # 32*2 = 64MB      # TODO set it higher by default ?
 
 
 def dbopen():
-    return z_dbopen('%s/1.fs' % tmpd)
+    return testdb.dbopen()
 
 def setup_module():
-    global tmpd
-    tmpd = mkdtemp('', 'bigzodb.')
+    global testdb
+    testdb = getTestDB()
+    testdb.setup()
 
 def teardown_module():
-    rmtree(tmpd)
+    testdb.teardown()
 
 
 

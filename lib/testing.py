@@ -16,10 +16,15 @@
 #
 # See COPYING file for full licensing terms.
 
+from wendelin.lib.zodb import dbstoropen
 from zlib import adler32
 from struct import pack
+from tempfile import mkdtemp
+from shutil import rmtree
+from ZODB import DB
 import codecs
 import math
+import os
 
 # hashlib-like interface to adler32
 class Adler32:
@@ -153,3 +158,131 @@ def nulladler32_bysize(size):   return _nulladler32_byorder [ilog2_exact(size)]
 def nullmd5_bysize(size):       return _nullmd5_byorder     [ilog2_exact(size)]
 
 def ffadler32_bysize(size):     return _ffadler32_byorder   [ilog2_exact(size)]
+
+
+
+# ----------------------------------------
+
+
+# interface to setup/get to a database to use with tests
+class TestDB_Base(object):
+    def setup(self):
+        raise NotImplementedError()
+    def teardown(self):
+        raise NotImplementedError()
+    def getZODBStorage(self):
+        raise NotImplementedError()
+
+
+    # like wendelin.lib.zodb.dbopen()
+    def dbopen(self):
+        stor = self.getZODBStorage()
+        db   = DB(stor)
+        conn = db.open()
+        root = conn.root()
+        return root
+
+    # by default how db was specified is stored for reuse
+    def __init__(self, dburi):
+        self.dburi = dburi
+
+
+
+# FileStorage for tests
+class TestDB_FileStorage(TestDB_Base):
+
+    def setup(self):
+        self.tmpd = mkdtemp('', 'testdb_fs.')
+
+    def teardown(self):
+        rmtree(self.tmpd)
+
+    def getZODBStorage(self):
+        return dbstoropen('%s/1.fs' % self.tmpd)
+
+
+# ZEO for tests
+class TestDB_ZEO(TestDB_Base):
+
+    def __init__(self, dburi):
+        super(TestDB_ZEO, self).__init__(dburi)
+        from ZEO.tests import forker
+        self.zeo_forker = forker
+
+    def setup(self):
+        port  = self.zeo_forker.get_port()
+        zconf = self.zeo_forker.ZEOConfig(('', port))
+        self.addr, self.adminaddr, self.pid, self.path = \
+                self.zeo_forker.start_zeo_server(zeo_conf=zconf, port=port)
+
+    def teardown(self):
+        self.zeo_forker.shutdown_zeo_server(self.adminaddr)
+        os.waitpid(self.pid, 0)
+
+    def getZODBStorage(self):
+        from ZEO.ClientStorage import ClientStorage
+        return ClientStorage(self.addr)
+
+
+# NEO for tests
+class TestDB_NEO(TestDB_Base):
+
+    def __init__(self, dburi):
+        super(TestDB_NEO, self).__init__(dburi)
+        from neo.tests.functional import NEOCluster
+        self.cluster = NEOCluster(['1'], adapter='SQLite')
+
+    def setup(self):
+        self.cluster.start()
+        self.cluster.expectClusterRunning()
+
+    def teardown(self):
+        self.cluster.stop()
+
+    def getZODBStorage(self):
+        return self.cluster.getZODBStorage()
+
+
+
+# test adapter to some external database
+class TestDB_External(TestDB_Base):
+
+    # we do not create/destroy it - the database managed not by us
+    def setup(self):    pass
+    def teardown(self): pass
+
+    def getZODBStorage(self):
+        return dbstoropen(self.dburi)
+
+
+
+# get a database for tests.
+#
+# either it is a temporary database with selected storage, or some other
+# external database defined by its uri.
+#
+# db selection is done via
+#
+#   WENDELIN_CORE_TEST_DB
+#
+# environment variable:
+#
+#   <fs>        temporary db
+#   <zeo>       with corresponding
+#   <neo>       storage
+#
+#   everything else - considered as external db uri.
+#
+#   default: <fs>
+DB_4TESTS_REGISTRY = {
+    '<fs>':     TestDB_FileStorage,
+    '<zeo>':    TestDB_ZEO,
+    '<neo>':    TestDB_NEO,
+}
+
+def getTestDB():
+    testdb_uri = os.environ.get('WENDELIN_CORE_TEST_DB', '<fs>')
+    testdb_factory = DB_4TESTS_REGISTRY.get(testdb_uri, TestDB_External)
+
+    testdb = testdb_factory(testdb_uri)
+    return testdb
