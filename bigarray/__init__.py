@@ -36,7 +36,7 @@ of physical RAM.
 
 from __future__ import print_function
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, multiply, sign, newaxis
+from numpy import ndarray, dtype, sign, newaxis
 import logging
 
 

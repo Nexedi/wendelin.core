@@ -21,7 +21,7 @@ from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
 from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, \
-        multiply, array_equal, asarray
+        array_equal, asarray
 
 from pytest import raises
 
