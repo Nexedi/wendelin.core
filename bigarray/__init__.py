@@ -36,7 +36,7 @@ of physical RAM.
 
 from __future__ import print_function
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, sign, newaxis
+from numpy import ndarray, dtype, sign, newaxis, asarray
 import logging
 
 
@@ -178,6 +178,46 @@ class BigArray(object):
         #
         #   TODO discard data from backing file on shrinks.
         self._init0(new_shape, self.dtype, order='C')   # FIXME order hardcoded
+
+
+    # append BigArray in-place
+    #
+    # NOTE
+    #
+    # - numpy.append(array, δ)  creates new array and copies array and δ there
+    #                           (works in O(array + δ) time)
+    #
+    # - BigArray.append(δ)      resizes array and copies δ to tail
+    #                           (works in O(δ) time)
+    #
+    # values    - must be ndarray-like with compatible dtype of the same shape
+    #             as extended array, except major axis, e.g.
+    #
+    #   BigArray    (N,10,5)
+    #   values      (3,10,5)
+    #
+    # XXX we assume major axis is 0 (C ordering)
+    def append(self, values):
+        values = asarray(values)
+
+        # make sure appended values, after major axis, are of the same shape
+        if self.shape[1:] != values.shape[1:]:
+            # NOTE the same exception as in numpy.append()
+            raise ValueError('all the input array dimensions except for the'
+                    'concatenation axis must match exactly')
+
+        # resize us, and prepare to rollback, in case of e.g. dtype
+        # incompatibility catched on follow-up assignment
+        n, delta = self.shape[0], values.shape[0]
+        self.resize( (n+delta,) + self.shape[1:] )
+
+        # copy values to prepared tail place, and we are done
+        try:
+            self[-delta:] = values
+        except:
+            # in case of error - rollback the resize and re-raise
+            self.resize( (n,) + self.shape[1:] )
+            raise
 
 
 

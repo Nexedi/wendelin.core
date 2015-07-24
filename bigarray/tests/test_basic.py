@@ -20,8 +20,9 @@ from wendelin.bigarray import BigArray
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, int32, uint32, uint8, all, zeros, arange, \
+from numpy import ndarray, dtype, int64, int32, uint32, uint8, all, zeros, arange, \
         array_equal, asarray
+import numpy
 
 from pytest import raises
 
@@ -413,6 +414,47 @@ def test_bigarray_resize():
     # map it whole again and ensure we have correct data
     c = A[:]
     assert array_equal(c.ravel(), arange(11*3, dtype=uint32))
+
+
+# ~ arange(n*3*2).reshape(n,3,2)
+def arange32(start, stop, dtype=None):
+    return arange(start*3*2, stop*3*2, dtype=dtype).reshape((stop-start),3,2)
+
+def test_bigarray_append():
+    data = zeros(8*PS, dtype=uint32)
+    f   = BigFile_Data(data, PS)
+    fh  = f.fileh_open()
+
+    # first make sure arange32 works correctly
+    x = numpy.append( arange32(0,4), arange32(4,7), axis=0 )
+    assert array_equal(x, arange32(0,7))
+    assert array_equal(x.ravel(), arange(7*3*2))
+
+    # init empty BigArray of shape (x,3,2)
+    A   = BigArray((0,3,2), int64, fh)
+    assert array_equal(A[:], arange32(0,0))
+
+    # append initial data
+    A.append(arange32(0,2))
+    assert array_equal(A[:], arange32(0,2))
+    A.append(arange32(2,3))
+    assert array_equal(A[:], arange32(0,3))
+
+    # append plain list (test for arg conversion)
+    A.append([[[18,19], [20,21], [22,23]]])
+    assert array_equal(A[:], arange32(0,4))
+
+    # append with incorrect shape - rejected, original stays the same
+    assert raises(ValueError, 'A.append(arange(3))')
+    assert array_equal(A[:], arange32(0,4))
+    assert raises(ValueError, 'A.append(arange(3*2).reshape(3,2))')
+    assert array_equal(A[:], arange32(0,4))
+
+    # append with correct shape, but incompatible dtype - rejected, original stays the same
+    assert raises(ValueError, 'A.append(asarray([[[0,1], [2,3], [4,"abc"]]], dtype=object))')
+    assert array_equal(A[:], arange32(0,4))
+
+
 
 
 def test_bigarray_list():

@@ -21,7 +21,7 @@ from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
-from numpy import dtype, uint8, all, array_equal
+from numpy import dtype, uint8, all, array_equal, arange
 
 testdb = None
 def setup_module():
@@ -148,6 +148,9 @@ def test_zbigarray():
     b[16*1024*1024] = 100
     b[-1]           = 255
 
+    A.append(arange(10, 14, dtype=uint8))
+
+
     # commit; reload & verify changes
     transaction.commit()
     dbclose(root)
@@ -158,7 +161,7 @@ def test_zbigarray():
     A = root['zarray']
 
     assert isinstance(A, ZBigArray)
-    assert A.shape  == (24*1024*1024,)
+    assert A.shape  == (24*1024*1024 + 4,)
     assert A.dtype  == dtype(uint8)
 
     a = A[:]
@@ -170,3 +173,8 @@ def test_zbigarray():
 
     assert a[16*1024*1024]   == 100
     assert a[24*1024*1024-1] == 255
+
+    assert a[24*1024*1024+0] ==  10
+    assert a[24*1024*1024+1] ==  11
+    assert a[24*1024*1024+2] ==  12
+    assert a[24*1024*1024+3] ==  13
