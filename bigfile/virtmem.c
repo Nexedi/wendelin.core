@@ -48,36 +48,60 @@ static void     vma_page_ensure_notmappedrw(VMA *vma, Page *page);
 # define TRACE(msg, ...) do {} while(0)
 #endif
 
-// TODO client code - block/unblock SIGSEGV so that we do not try to
-// incorrectly handle pagefault and just die with coredump
+/* block/restore SIGSEGV for current thread - non on-pagefault code should not
+ * access any not-mmapped memory -> so on any pagefault we should just die with
+ * coredump, not try to incorrectly handle the pagefault.
+ *
+ * NOTE sigmask is per-thread. When blocking there is no race wrt other threads
+ * correctly accessing data via pagefaulting.   */
+static void sigsegv_block(sigset_t *save_sigset)
+{
+    sigset_t mask_segv;
+    xsigemptyset(&mask_segv);
+    xsigaddset(&mask_segv, SIGSEGV);
+    xpthread_sigmask(SIG_BLOCK, &mask_segv, save_sigset);
+}
+
+static void sigsegv_restore(const sigset_t *save_sigset)
+{
+    xpthread_sigmask(SIG_SETMASK, save_sigset, NULL);
+}
+
 
 /****************
  * OPEN / CLOSE *
  ****************/
 
-// TODO block SIGSEGV
 int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
 {
+    int err = 0;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
+
     bzero(fileh, sizeof(*fileh));
     fileh->ramh = ramh_open(ram);
-    if (!fileh->ramh)
+    if (!fileh->ramh) {
+        err = -1;
         goto out;
+    }
 
     fileh->file = file;
     INIT_LIST_HEAD(&fileh->mmaps);
     pagemap_init(&fileh->pagemap, ilog2_exact(ram->pagesize));
 
-    return 0;
-
 out:
-    return -1;
+    sigsegv_restore(&save_sigset);
+    return err;
 }
 
 
-// TODO block SIGSEGV
 void fileh_close(BigFileH *fileh)
 {
     Page *page;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
 
     /* it's an error to close fileh with existing mappings */
     // XXX implement the same semantics usual files have wrt mmaps - if we release
@@ -99,6 +123,7 @@ void fileh_close(BigFileH *fileh)
         ramh_close(fileh->ramh);
 
     bzero(fileh, sizeof(*fileh));
+    sigsegv_restore(&save_sigset);
 }
 
 
@@ -107,23 +132,26 @@ void fileh_close(BigFileH *fileh)
  * MMAP / UNMAP *
  ****************/
 
-// TODO block SIGSEGV
 int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
 {
     void *addr;
     size_t len = pglen * fileh->ramh->ram->pagesize;
+    int err = 0;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
 
     /* alloc vma->page_ismappedv[] */
     bzero(vma, sizeof(*vma));
 
     vma->page_ismappedv = bitmap_alloc0(pglen);
     if (!vma->page_ismappedv)
-        goto err;
+        goto fail;
 
     /* allocate address space somewhere */
     addr = mem_valloc(NULL, len);
     if (!addr)
-        goto err;
+        goto fail;
 
     /* everything allocated - link it up */
     vma->addr_start  = (uintptr_t)addr;
@@ -141,16 +169,18 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     /* register vma for pagefault handling */
     virt_register_vma(vma);
 
-    return 0;
+out:
+    sigsegv_restore(&save_sigset);
+    return err;
 
-err:
+fail:
     free(vma->page_ismappedv);
     vma->page_ismappedv = NULL;
-    return -1;
+    err = -1;
+    goto out;
 }
 
 
-// TODO block SIGSEGV
 void vma_unmap(VMA *vma)
 {
     BigFileH *fileh = vma->fileh;
@@ -159,8 +189,11 @@ void vma_unmap(VMA *vma)
     int i;
     pgoff_t  pgoffset;
     Page *page;
+    sigset_t save_sigset;
 
     // XXX locking vs concurrent access
+
+    sigsegv_block(&save_sigset);
 
     /* unregister from vmamap - so that pagefault handler does not recognize
      * this area as valid */
@@ -188,6 +221,7 @@ void vma_unmap(VMA *vma)
     free(vma->page_ismappedv);
 
     bzero(vma, sizeof(*vma));
+    sigsegv_restore(&save_sigset);
 }
 
 
@@ -201,7 +235,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     Page *page;
     BigFile *file = fileh->file;
     struct list_head *hmmap;
-    sigset_t mask_segv, save_sigset;
+    sigset_t save_sigset;
     int err = 0;
 
     /* check flags */
@@ -209,15 +243,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
           flags & ~(WRITEOUT_STORE | WRITEOUT_MARKSTORED))
         return -EINVAL;
 
-    // TODO refactor it out of here
-    /* block SIGSEGV - we are not client and should not access any not-mmapped
-     * memory -> so on any pagefault we should die, not try to handle it
-     *
-     * NOTE sigmask is per-thread. There is no race here wrt other threads
-     * correctly accessing data.    */
-    xsigemptyset(&mask_segv);
-    xsigaddset(&mask_segv, SIGSEGV);
-    xpthread_sigmask(SIG_BLOCK, &mask_segv, &save_sigset);
+    sigsegv_block(&save_sigset);
 
     /* write out dirty pages */
     pagemap_for_each(page, &fileh->pagemap) {
@@ -282,16 +308,18 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
         fileh->dirty = 0;
 
 out:
-    xpthread_sigmask(SIG_SETMASK, &save_sigset, NULL);
+    sigsegv_restore(&save_sigset);
     return err;
 }
 
 
-// TODO block SIGSEGV
 // XXX vs concurrent access in other threads
 void fileh_dirty_discard(BigFileH *fileh)
 {
     Page *page;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
 
     /* XXX we scan whole file pages which could be slow
      * TODO -> maintain something like separate dirty_list ? */
@@ -300,6 +328,7 @@ void fileh_dirty_discard(BigFileH *fileh)
             page_drop_memory(page);
 
     fileh->dirty = 0;
+    sigsegv_restore(&save_sigset);
 }
 
 
