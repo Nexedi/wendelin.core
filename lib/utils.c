@@ -141,3 +141,21 @@ void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
     if (err)
         BUGerr(err);
 }
+
+
+/* mutex lock/unlock should not fail if mutex was correctly initialized/used */
+void xpthread_mutex_lock(pthread_mutex_t *lock)
+{
+    int err;
+    err = pthread_mutex_lock(lock);
+    if (err)
+        BUGerr(err);
+}
+
+void xpthread_mutex_unlock(pthread_mutex_t *lock)
+{
+    int err;
+    err = pthread_mutex_unlock(lock);
+    if (err)
+        BUGerr(err);
+}

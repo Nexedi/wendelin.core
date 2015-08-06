@@ -22,6 +22,7 @@
 
 #include <ccan/build_assert/build_assert.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 
 /* compile-time exact ilog2(x); x must be 2^k */
@@ -78,5 +79,8 @@ void xsigemptyset(sigset_t *set);
 void xsigaddset(sigset_t *set, int sig);
 int  xsigismember(const sigset_t *set, int sig);
 void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+
+void xpthread_mutex_lock(pthread_mutex_t *);
+void xpthread_mutex_unlock(pthread_mutex_t *);
 
 #endif
