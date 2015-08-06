@@ -129,5 +129,5 @@ void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
     int err;
     err = pthread_sigmask(how, set, oldset);
     if (err)
-        BUGe();
+        BUGerr(err);
 }
