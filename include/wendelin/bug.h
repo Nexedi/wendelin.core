@@ -36,6 +36,10 @@
     __bug(__FILE__, __LINE__, __func__);            \
 } while (0)
 
+#define BUGerr(err) do {                            \
+    __bug_err(__FILE__, __LINE__, __func__, err);   \
+} while (0)
+
 #define BUGe() do {                                 \
     __bug_errno(__FILE__, __LINE__, __func__);      \
 } while (0)
@@ -56,6 +60,8 @@ void __todo(const char *, const char *, unsigned, const char *)
     __attribute__((noreturn));
 void __warn(const char *, unsigned, const char *, const char *);
 void __bug(const char *, unsigned, const char *)
+    __attribute__((noreturn));
+void __bug_err(const char *, unsigned, const char *, int)
     __attribute__((noreturn));
 void __bug_errno(const char *, unsigned, const char *)
     __attribute__((noreturn));

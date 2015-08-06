@@ -43,14 +43,20 @@ void __bug(const char *file, unsigned line, const char *func)
 }
 
 
+void __bug_err(const char *file, unsigned line, const char *func, int err)
+{
+    char err_buf[128];
+    char *err_str;
+
+    err_str = strerror_r(err, err_buf, sizeof(err_buf));
+    fprintf(stderr, "%s:%u %s\tBUG! (%s)\n", file, line, func, err_str);
+    abort();
+}
+
+
 void __bug_errno(const char *file, unsigned line, const char *func)
 {
-    char errno_buf[128];
-    char *errno_str;
-
-    errno_str = strerror_r(errno, errno_buf, sizeof(errno_buf));
-    fprintf(stderr, "%s:%u %s\tBUG! (%s)\n", file, line, func, errno_str);
-    abort();
+    __bug_err(file, line, func, errno);
 }
 
 
