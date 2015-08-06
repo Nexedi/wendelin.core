@@ -20,6 +20,7 @@ from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
 import struct
 import weakref
 import sys
+import gc
 
 from pytest import raises
 from six import PY2
@@ -233,3 +234,89 @@ def test_refcounting():
     assert wvma() is not None
     del m
     assert wvma() is None
+
+
+# test that the system works correctly, even if GC triggers while we are in
+# segfault handler, and do virtmem calls
+class DelBigFile(BigFile):
+
+    def __new__(cls, obj_4del, blksize):
+        obj = BigFile.__new__(cls, blksize)
+        obj.obj_4del = obj_4del
+        obj.marker_list = []
+        return obj
+
+    def loadblk(self, blk, buf):
+        # we are in sighandler - delete obj_4del thus triggering it's dealloc
+        assert self.obj_4del is not None
+        w = weakref.ref(self.obj_4del)
+        assert w() is self.obj_4del
+        self.obj_4del = None
+        assert w() is None  # make sure obj_4del was deleted
+
+        # nothing to do - let the block be rest zerofilled, just mark we were here
+        self.marker_list.append(1)
+
+
+class C:
+    pass
+
+class GCBigFile(DelBigFile):
+
+    def loadblk(self, blk, buf):
+        # we are in sighandler - establish cycle which also referenced obj_4del and trigger full GC
+        assert self.obj_4del is not None
+        w = weakref.ref(self.obj_4del)
+        assert w() is self.obj_4del
+
+        # establish cycle with leaf ref to obj_4del
+        a = C()
+        b = C()
+        a.b = b
+        b.a = a
+        a.obj_4del = self.obj_4del
+
+        self.obj_4del = None
+        assert w() is not None
+
+        # del a=b cycle - it should stay alice, while gc is disabled
+        gc_save = gc.isenabled()
+        gc.disable()
+
+        del a, b
+        assert w() is not None
+
+        # gc - a=b and obj_4del collected
+        gc.collect()
+        assert w() is None
+
+        if gc_save:
+            gc.enable()
+
+        self.marker_list.append(2)
+
+
+def test_gc_from_sighandler():
+    f1  = XBigFile(b'abcd', PS)
+    fh1 = f1.fileh_open()
+    vma1= fh1.mmap(0, 1)
+
+    f2  = DelBigFile(vma1, PS)
+    del vma1, fh1, f1
+    fh2 = f2.fileh_open()
+    vma2= fh2.mmap(0, 1)
+
+    m2 = memoryview(vma2)
+    assert f2.marker_list == []
+    m2[0]
+    assert f2.marker_list == [1]
+
+    f3  = GCBigFile(vma2, PS)
+    del m2, vma2, fh2, f2
+    fh3 = f3.fileh_open()
+    vma3= fh3.mmap(0, 1)
+
+    m3 = memoryview(vma3)
+    assert f3.marker_list == []
+    m3[0]
+    assert f3.marker_list == [2]
