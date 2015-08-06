@@ -64,7 +64,12 @@ static void sigsegv_block(sigset_t *save_sigset)
 
 static void sigsegv_restore(const sigset_t *save_sigset)
 {
-    xpthread_sigmask(SIG_SETMASK, save_sigset, NULL);
+    int how = xsigismember(save_sigset, SIGSEGV) ? SIG_BLOCK : SIG_UNBLOCK;
+    sigset_t mask_segv;
+
+    xsigemptyset(&mask_segv);
+    xsigaddset(&mask_segv, SIGSEGV);
+    xpthread_sigmask(how, &mask_segv, NULL);
 }
 
 

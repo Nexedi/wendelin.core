@@ -123,6 +123,16 @@ void xsigaddset(sigset_t *set, int sig)
         BUGe();
 }
 
+int xsigismember(const sigset_t *set, int sig)
+{
+    int ret;
+    ret = sigismember(set, sig);
+    if (ret == -1)
+        BUGe();
+
+    return ret;
+}
+
 /* pthread_sigmask() should not fail on any correct usage */
 void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
 {

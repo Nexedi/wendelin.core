@@ -76,6 +76,7 @@ void xftruncate(int fd, off_t len);
 
 void xsigemptyset(sigset_t *set);
 void xsigaddset(sigset_t *set, int sig);
+int  xsigismember(const sigset_t *set, int sig);
 void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 
 #endif
