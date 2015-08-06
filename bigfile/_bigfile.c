@@ -319,6 +319,7 @@ PyFunc(pyfileh_isdirty, "isdirty() - are there any changes to fileh memory at al
     if (!PyArg_ParseTuple(args, ""))
         return NULL;
 
+    /* NOTE not strictly neccessary to virt_lock() for reading ->dirty */
     return PyBool_FromLong(pyfileh->dirty);
 }
 
@@ -653,6 +654,7 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
 {
     PyBigFile   *pyfile = upcast(PyBigFile *, pyfile0);
     PyBigFileH  *pyfileh;
+    /* NOTE no virtmem lock needed - default RAM does not change */
     RAM *ram = ram_get_default(NULL);   // TODO get ram from args
     int err;
 
@@ -726,6 +728,7 @@ static PyTypeObject PyBigFile_Type = {
 PyFunc(pyram_reclaim, "ram_reclaim() -> reclaimed -- release some non-dirty ram back to OS")
     (PyObject *self, PyObject *args)
 {
+    /* NOTE no virtmem lock needed - default RAM does not change */
     RAM *ram = ram_get_default(NULL);   // TODO get ram from args
     int reclaimed;
 
@@ -740,6 +743,58 @@ PyFunc(pyram_reclaim, "ram_reclaim() -> reclaimed -- release some non-dirty ram 
 static /*const*/ PyMethodDef pybigfile_modulemeths[] = {
     {"ram_reclaim", pyram_reclaim,  METH_VARARGS,   pyram_reclaim_doc},
     {NULL}
+};
+
+
+
+/* GIL hooks for virtmem big lock */
+static PyThreadState *_PyThreadState_Current_GET(void)
+{
+    /* non-debug version of PyThreadState_GET() */
+#if PY_MAJOR_VERSION < 3
+    return _PyThreadState_Current;
+#else
+    return (PyThreadState*)_Py_atomic_load_relaxed(&_PyThreadState_Current);
+#endif
+}
+
+static void *py_gil_ensure_unlocked(void)
+{
+    /* make sure we don't hold python GIL (not to deadlock, as GIL oscillates)
+     *
+     * NOTE it is ok to get _PyThreadState_Current even without holding py gil -
+     *      we only need to check whether ts_current != ts_my, and thus if this
+     *      thread don't hold the gil, _PyThreadState_Current will be != ts_my
+     *      for sure.
+     *
+     * NOTE2 we don't call PyThreadState_Get() as that thinks it is a bug when
+     *       _PyThreadState_Current == NULL */
+    PyThreadState *ts_my        = PyGILState_GetThisThreadState();
+    PyThreadState *ts_current   = _PyThreadState_Current_GET();
+    PyThreadState *ts;
+
+    if (ts_my && (ts_my == ts_current)) {
+        ts = PyEval_SaveThread();
+        BUG_ON(ts != ts_my);
+
+        return ts_my;
+    }
+
+    return NULL;
+}
+
+static void py_gil_retake_if_waslocked(void *arg)
+{
+    PyThreadState *ts_my = (PyThreadState *)arg;
+
+    /* retake GIL if we were holding it originally */
+    PyEval_RestoreThread(ts_my);
+}
+
+
+static const VirtGilHooks py_virt_gil_hooks = {
+    .gil_ensure_unlocked        = py_gil_ensure_unlocked,
+    .gil_retake_if_waslocked    = py_gil_retake_if_waslocked,
 };
 
 
@@ -758,6 +813,9 @@ _init_bigfile(void)
 {
     PyObject *m;
     int err;
+
+    /* setup virtmem gil hooks for python */
+    virt_lock_hookgil(&py_virt_gil_hooks);
 
     /* setup pagefault handler right from the beginning - memory lazy-access
      * fundamentally depends on it */

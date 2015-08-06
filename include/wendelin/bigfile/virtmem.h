@@ -269,6 +269,23 @@ void virt_unregister_vma(VMA *vma);
 void *mem_valloc(void *addr, size_t len);
 void *mem_xvalloc(void *addr, size_t len);
 
+/* big virtmem lock */
+void virt_lock(void);
+void virt_unlock(void);
+
+/* for thirdparty to hook into locking big virtmem lock process
+ * (e.g. for python to hook in its GIL release/reacquire)  */
+struct VirtGilHooks {
+    /* drop gil, if current thread hold it */
+    void *  (*gil_ensure_unlocked)      (void);
+    /* retake gil, if we were holding it at ->ensure_unlocked() stage */
+    void    (*gil_retake_if_waslocked)  (void *);
+};
+typedef struct VirtGilHooks VirtGilHooks;
+
+void virt_lock_hookgil(const VirtGilHooks *gilhooks);
+
+
 // XXX is this needed? think more
 /* what happens on out-of-memory */
 void OOM(void);

@@ -170,6 +170,14 @@ PYTEST_IGNORE	:=  --ignore=3rdparty --ignore=build --ignore=t
 test.py	: bigfile/_bigfile.so
 	$(PYTEST) $(PYTEST_IGNORE)
 
+# test.py via Valgrind (very slow)
+test.py.vghel: bigfile/_bigfile.so
+	$(call vgxrun,--tool=helgrind, $(PYTEST) $(PYTEST_IGNORE))
+
+test.py.drd: bigfile/_bigfile.so
+	$(call vgxrun,--tool=drd, $(PYTEST) $(PYTEST_IGNORE))
+
+
 
 # test pagefault for double/real faults - it should crash
 tfault	:= bigfile/tests/tfault

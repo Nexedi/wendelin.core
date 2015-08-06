@@ -24,6 +24,7 @@
 #include <wendelin/bigfile/file.h>
 #include <wendelin/bigfile/pagemap.h>
 #include <wendelin/bigfile/ram.h>
+#include <wendelin/utils.h>
 #include <wendelin/bug.h>
 
 #include <ccan/minmax/minmax.h>
@@ -40,6 +41,7 @@ static pgoff_t  vma_addr_fpgoffset(VMA *vma, uintptr_t addr);
 static int      vma_page_ismapped(VMA *vma, Page *page);
 static void     vma_page_ensure_unmapped(VMA *vma, Page *page);
 static void     vma_page_ensure_notmappedrw(VMA *vma, Page *page);
+static int      __ram_reclaim(RAM *ram);
 
 #define VIRT_DEBUG   0
 #if VIRT_DEBUG
@@ -47,6 +49,46 @@ static void     vma_page_ensure_notmappedrw(VMA *vma, Page *page);
 #else
 # define TRACE(msg, ...) do {} while(0)
 #endif
+
+
+/* global lock which protects manipulating virtmem data structures
+ *
+ * NOTE not scalable, but this is temporary solution - as we are going to move
+ * memory managment back into the kernel, where it is done properly.
+ *
+ * NOTE type is recursive to support deleting virtmem object via python
+ * finalizers (triggered either from decref or from gc - both from sighandler). */
+static pthread_mutex_t virtmem_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+static const VirtGilHooks *virtmem_gilhooks;
+
+void virt_lock()
+{
+    void *gilstate = NULL;
+
+    /* make sure we don't hold e.g. python GIL (not to deadlock, as GIL oscillates) */
+    if (virtmem_gilhooks)
+        gilstate = virtmem_gilhooks->gil_ensure_unlocked();
+
+    /* acquire virtmem lock */
+    xpthread_mutex_lock(&virtmem_lock);
+
+    /* retake GIL if we were holding it originally */
+    if (gilstate)
+        virtmem_gilhooks->gil_retake_if_waslocked(gilstate);
+}
+
+void virt_unlock()
+{
+    xpthread_mutex_unlock(&virtmem_lock);
+}
+
+
+void virt_lock_hookgil(const VirtGilHooks *gilhooks)
+{
+    BUG_ON(virtmem_gilhooks);       /* prevent registering multiple times */
+    virtmem_gilhooks = gilhooks;
+}
+
 
 /* block/restore SIGSEGV for current thread - non on-pagefault code should not
  * access any not-mmapped memory -> so on any pagefault we should just die with
@@ -83,6 +125,7 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
     sigset_t save_sigset;
 
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     bzero(fileh, sizeof(*fileh));
     fileh->ramh = ramh_open(ram);
@@ -96,6 +139,7 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
     pagemap_init(&fileh->pagemap, ilog2_exact(ram->pagesize));
 
 out:
+    virt_unlock();
     sigsegv_restore(&save_sigset);
     return err;
 }
@@ -107,6 +151,7 @@ void fileh_close(BigFileH *fileh)
     sigset_t save_sigset;
 
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     /* it's an error to close fileh with existing mappings */
     // XXX implement the same semantics usual files have wrt mmaps - if we release
@@ -128,6 +173,7 @@ void fileh_close(BigFileH *fileh)
         ramh_close(fileh->ramh);
 
     bzero(fileh, sizeof(*fileh));
+    virt_unlock();
     sigsegv_restore(&save_sigset);
 }
 
@@ -145,6 +191,7 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     sigset_t save_sigset;
 
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     /* alloc vma->page_ismappedv[] */
     bzero(vma, sizeof(*vma));
@@ -165,8 +212,6 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     vma->fileh       = fileh;
     vma->f_pgoffset  = pgoffset;
 
-    // XXX locking - linking up vs concurrent traversal
-
     // XXX need to init vma->virt_list first?
     /* hook vma to fileh->mmaps */
     list_add_tail(&vma->same_fileh, &fileh->mmaps);
@@ -175,6 +220,7 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     virt_register_vma(vma);
 
 out:
+    virt_unlock();
     sigsegv_restore(&save_sigset);
     return err;
 
@@ -196,9 +242,8 @@ void vma_unmap(VMA *vma)
     Page *page;
     sigset_t save_sigset;
 
-    // XXX locking vs concurrent access
-
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     /* unregister from vmamap - so that pagefault handler does not recognize
      * this area as valid */
@@ -226,6 +271,7 @@ void vma_unmap(VMA *vma)
     free(vma->page_ismappedv);
 
     bzero(vma, sizeof(*vma));
+    virt_unlock();
     sigsegv_restore(&save_sigset);
 }
 
@@ -234,7 +280,6 @@ void vma_unmap(VMA *vma)
  * WRITEOUT / DISCARD *
  **********************/
 
-// XXX vs concurrent access in other threads
 int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
 {
     Page *page;
@@ -249,6 +294,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
         return -EINVAL;
 
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     /* write out dirty pages */
     pagemap_for_each(page, &fileh->pagemap) {
@@ -313,18 +359,19 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
         fileh->dirty = 0;
 
 out:
+    virt_unlock();
     sigsegv_restore(&save_sigset);
     return err;
 }
 
 
-// XXX vs concurrent access in other threads
 void fileh_dirty_discard(BigFileH *fileh)
 {
     Page *page;
     sigset_t save_sigset;
 
     sigsegv_block(&save_sigset);
+    virt_lock();
 
     /* XXX we scan whole file pages which could be slow
      * TODO -> maintain something like separate dirty_list ? */
@@ -333,6 +380,7 @@ void fileh_dirty_discard(BigFileH *fileh)
             page_drop_memory(page);
 
     fileh->dirty = 0;
+    virt_unlock();
     sigsegv_restore(&save_sigset);
 }
 
@@ -349,12 +397,8 @@ static LIST_HEAD(vma_list);
 
 
 
-/* lookup VMA covering `addr`. NULL if not found */
-// XXX protection against concurrent vma_list updates & lookups
-// XXX virt_lookup_vma() operates without taking locks - XXX no -> we'll use spinlock
-//     (we don't know whether
-//     address is ours while calling it) - so it must operate correctly in
-//     lock-free. Updates to vma_list should thus be also done carefully.
+/* lookup VMA covering `addr`. NULL if not found
+ * (should be called with virtmem lock held) */
 VMA *virt_lookup_vma(void *addr)
 {
     uintptr_t uaddr = (uintptr_t)addr;
@@ -376,8 +420,8 @@ VMA *virt_lookup_vma(void *addr)
 }
 
 
-/* register VMA `vma` as covering some file view */
-// XXX protection against concurrent updates & lookups
+/* register VMA `vma` as covering some file view
+ * (should be called with virtmem lock held) */
 void virt_register_vma(VMA *vma)
 {
     uintptr_t uaddr = vma->addr_start;
@@ -395,8 +439,8 @@ void virt_register_vma(VMA *vma)
 }
 
 
-/* remove `area` from VMA registry. `area` must be registered before */
-// XXX protection against concurrent updates & lookups
+/* remove `area` from VMA registry. `area` must be registered before
+ * (should be called with virtmem lock held) */
 void virt_unregister_vma(VMA *vma)
 {
     /* _init - to clear links, just in case */
@@ -448,7 +492,9 @@ void *mem_xvalloc(void *addr, size_t len)
  * PAGEFAULT HANDLER *
  *********************/
 
-/* pagefault entry when we know request came to our memory area */
+/* pagefault entry when we know request came to our memory area
+ *
+ * (virtmem_lock already taken by caller)   */
 void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 {
     pgoff_t pagen;
@@ -471,7 +517,7 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
             /* try to release some memory back to OS */
             // XXX do we need and how to distinguish "no ram page" vs "no memory for `struct page`"?
             //     -> no we don't -- better allocate memory for struct pages for whole RAM at ram setup
-            if (!ram_reclaim(fileh->ramh->ram))
+            if (!__ram_reclaim(fileh->ramh->ram))
                 OOM();
             continue;
         }
@@ -591,7 +637,7 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
  ***********/
 
 #define RECLAIM_BATCH   64      /* how many pages to reclaim at once */
-int ram_reclaim(RAM *ram)
+static int __ram_reclaim(RAM *ram)
 {
     struct list_head *lru_list = &ram->lru_list;
     struct list_head *hlru;
@@ -629,6 +675,21 @@ int ram_reclaim(RAM *ram)
     return RECLAIM_BATCH - batch;
 }
 
+
+int ram_reclaim(RAM *ram)
+{
+    int ret;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
+    virt_lock();
+
+    ret = __ram_reclaim(ram);
+
+    virt_unlock();
+    sigsegv_restore(&save_sigset);
+    return ret;
+}
 
 
 /********************

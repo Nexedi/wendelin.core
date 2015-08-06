@@ -65,25 +65,45 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
     if (si->si_code != SEGV_ACCERR)
         goto dont_handle;
 
-    // XXX locking
+    /* save errno, before doing any library calls   XXX & the like ?
+     * (in case we'll handle the fault, and then will need to restore it) */
+    int save_errno = errno;
+
+    /* lock virtmem, so we can do further lookups / handling safely to
+     * concurrent access / changes.
+     *
+     * NOTE it is ok to call e.g. pthread_mutex_lock() from synchronous signal
+     *      handler.    */
+    virt_lock();
+
+    /* make sure we are not entering SIGSEGV handler recursively.
+     *
+     * we should not - double faulting from inside sighandler should just
+     * coredump (see comments wrt SA_NODEFER in pagefault_init()), but anyway -
+     * better check just in case.
+     *
+     * NOTE since we are under virtmem lock, here we can use just one static
+     * variable, instead of several per-thread ones.    */
+    static int in_on_pagefault;
+    BUG_ON(in_on_pagefault);
+    ++in_on_pagefault;
+
 
     /* (1) addr -> vma  ;lookup VMA covering faulting memory address */
     vma = virt_lookup_vma(si->si_addr);
-    if (!vma)
+    if (!vma) {
+        --in_on_pagefault;
+        virt_unlock();
         goto dont_handle;  /* fault outside registered file slices */
+    }
 
     /* now, since we found faulting address in registered memory areas, we know
      * we should serve this pagefault. */
-
-
-
-    // TODO protect against different threads
-
-    /* save/restore errno       XXX & the like ? */
-    int save_errno = errno;
-
     vma_on_pagefault(vma, (uintptr_t)si->si_addr, write);
 
+    /* pagefault served - restore and return from sighandler */
+    --in_on_pagefault;
+    virt_unlock();
     errno = save_errno;
 
     return;
