@@ -288,9 +288,9 @@ PyFunc(pyfileh_dirty_writeout,
 
     err = fileh_dirty_writeout(pyfileh, flags);
     if (err) {
-        // TODO check if pyerr already occured - just re-raise
-        // XXX non-informative
-        PyErr_SetString(PyExc_RuntimeError, "fileh_dirty_writeout fail");
+        if (!PyErr_Occurred())
+            // XXX not very informative
+            PyErr_SetString(PyExc_RuntimeError, "fileh_dirty_writeout fail");
         return NULL;
     }
 
@@ -588,10 +588,11 @@ err:
 static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
 {
     PyBigFile *pyfile = upcast(PyBigFile *, file);
-    PyObject  *pybuf = NULL;
+    PyObject  *pybuf;
     PyObject  *storeret = NULL;
 
     PyGILState_STATE gstate;
+    int err;
 
     // XXX so far storeblk() is called only from py/user context (vs SIGSEGV
     //     context) - no need to save/restore interpreter state.
@@ -607,37 +608,49 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
     pybuf = PyMemoryView_FromMemory((void *)buf, file->blksize, PyBUF_READ);
 #endif
     if (!pybuf)
-        goto err;
+        goto out;
 
     /* NOTE K = unsigned long long */
     BUILD_ASSERT(sizeof(blk) == sizeof(unsigned long long));
     storeret = PyObject_CallMethod(pyfile, "storeblk", "KO", blk, pybuf);
 
-    if (!storeret)
-        goto err;
-
-out:
     /* we need to know only whether storeret != NULL, decref it now */
     Py_XDECREF(storeret);
 
-    /* verify pybuf is not held - its memory can go away right after return
-     * (if e.g. dirty page was not mapped in any vma) */
-    if (pybuf)
-        BUG_ON(pybuf->ob_refcnt != 1);
+    /* repoint pybuf to empty region - the original memory attached to it can
+     * go away right after we return (if e.g. dirty page was not mapped in any
+     * vma), but we need pybuf to stay not corrupt - for printing full
+     * traceback in case of storeblk() error. */
+#if BIGFILE_USE_OLD_BUFFER
+    PyBufferObject *pybufo = (PyBufferObject *)pybuf;
+    pybufo->b_ptr    = NULL;
+    pybufo->b_size   = 0;
+    pybufo->b_offset = 0;
+    pybufo->b_hash   = -1;
+    Py_CLEAR(pybufo->b_base);
+#else
+    PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
+    pybufm->view.buf = NULL;
+    pybufm->view.len = 0;
+    Py_CLEAR(pybufm->view.obj);
+#endif
 
-    Py_XDECREF(pybuf);
+    /* verify that we actually tweaked pybuf ok */
+    Py_buffer pybuf_view;
+    err = PyObject_GetBuffer(pybuf, &pybuf_view, PyBUF_SIMPLE);
+    BUG_ON(err);
+    BUG_ON(pybuf_view.buf   != NULL);
+    BUG_ON(pybuf_view.len   != 0);
+    PyBuffer_Release(&pybuf_view);
 
+    /* done with pybuf */
+    Py_DECREF(pybuf);
+
+out:
     PyGILState_Release(gstate);
 
     /* storeblk() job done */
     return storeret ? 0 : -1;
-
-err:
-    /* error happened - dump traceback and return */
-    // XXX do we need this in storeblk? (but can't return with pybuf->ob_refcnt
-    //     != 1) and on errors it is not so.
-    PyErr_PrintEx(0);
-    goto out;
 }
 
 
@@ -813,6 +826,11 @@ _init_bigfile(void)
 {
     PyObject *m;
     int err;
+
+    /* verify we copied struct PyBufferObject definition ok */
+#if PY_MAJOR_VERSION < 3
+    BUG_ON(sizeof(PyBufferObject) != PyBuffer_Type.tp_basicsize);
+#endif
 
     /* setup virtmem gil hooks for python */
     virt_lock_hookgil(&py_virt_gil_hooks);

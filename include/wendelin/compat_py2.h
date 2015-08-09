@@ -37,4 +37,18 @@ PyMemoryView_FromMemory(char *mem, Py_ssize_t size, int flags)
 #endif
 
 
+/* structure of PyBufferObject  (Objects/bufferobject.c) */
+#if PY_MAJOR_VERSION < 3
+typedef struct {
+    PyObject_HEAD
+    PyObject *b_base;
+    void *b_ptr;
+    Py_ssize_t b_size;
+    Py_ssize_t b_offset;
+    int b_readonly;
+    long b_hash;
+} PyBufferObject;
+#endif
+
+
 #endif
