@@ -276,7 +276,7 @@ class _ZBigFileH(object):
         #
         # This is needed because we do not track every change to pages (and
         # then immediately join txn, like ZODB Connection do for objects), but
-        # instead join txn here right before commit.
+        # instead join txn here right before commit/abort.
 
         if not self.zfileh.isdirty():
             return
