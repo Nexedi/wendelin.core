@@ -263,8 +263,34 @@ Connection.open = Connection_open
 #      handles ZBigFile acts as a database, and for real ZODB database
 #      it acts as (one of) connections.
 #
-# NOTE ISynchronizer is used only to be able to join into transactions without
-#      tracking intermediate changes to pages.
+# NOTE ISynchronizer is used to be able to join into transactions without
+#      tracking intermediate changes to pages:
+#
+#      _ZBigFileH sticks to ZODB.Connection under which it was originally opened
+#      and then participates in that connection lifecycle forever keeping sync on
+#      that connection close and reopen.
+#
+#      This is required because ZBigFile and ZBigArray are both LivePersistent
+#      (i.e. they never go to ghost state) and thus stays forever live (= active)
+#      in Connection._cache.
+#
+#      If it was only ZBigFile, we could be opening new fileh every time for
+#      each connection open and close/unref that fileh object on connection
+#      close. But:
+#
+#       1. this scheme is inefficient (upon close, fileh forgets all its loaded
+#          memory, and thus for newly opened fileh we'd need to reload file data
+#          from scratch)
+#
+#       2. ZBigArray need to reference opened fileh --- since ZBigArray stays
+#          live in Connection._cache, fileh also automatically stay live.
+#
+#      So in essence _ZBigFileH is a data manager which works in sync with ZODB
+#      Connection propagating changes between fileh memory and ZODB objects.
+#
+# NOTE Bear in mind that after close, connection can be reopened in different
+#      thread - that's why we have to adjust registration to per-thread
+#      transaction_manager.
 @implementer(IDataManager)
 @implementer(ISynchronizer)
 class _ZBigFileH(object):
@@ -281,15 +307,33 @@ class _ZBigFileH(object):
         # IDataManager requires .transaction_manager
         self.transaction_manager = zfile._p_jar.transaction_manager
 
+        # when connection will be reopened -> txn_manager.registerSynch(self)
+        zfile._p_jar.onOpenCallback(self.on_connection_open)
+
+        # when we are just initially created, the connection is already opened,
+        # so manually compensate for it.
+        self.on_connection_open()
+
+
+    def on_connection_open(self):
+        # when connection is closed -> txn_manager.unregisterSynch(self)
+        # NOTE close callbacks are fired once, and thus we have to re-register
+        #      it on every open.
+        self.zfile._p_jar.onCloseCallback(self.on_connection_close)
+
+        # attach us to _current_ _thread_ TM (staying in sync with Connection):
+        #
         # Hook into txn_manager so that we get a chance to run before
         # transaction.commit().   (see .beforeCompletion() with more details)
         self.transaction_manager.registerSynch(self)
 
-        # XXX txn_manager unregister synchs itself (it uses weakset to keep references)
-        # XXX however that unregistration is delayed to gc.collect() time and
-        # XXX maybe we should not perform any action right after Connection is closed
-        #     (as it is now .beforeCompletion() continue to be getting notified)
 
+    def on_connection_close(self):
+        # detach us from _current_ _thread_ TM (staying in sync with Connection)
+        self.transaction_manager.unregisterSynch(self)
+
+        # NOTE open callbacks are setup once and fire on every open - we don't
+        #      need to resetup them here.
 
 
     # ~~~~ BigFileH wrapper ~~~~
@@ -306,9 +350,13 @@ class _ZBigFileH(object):
         # then immediately join txn, like ZODB Connection do for objects), but
         # instead join txn here right before commit/abort.
 
+        # make sure we are called only when connection is opened
+        assert self.zfile._p_jar.opened
+
         if not self.zfileh.isdirty():
             return
 
+        assert self not in txn._resources       # (not to join twice)
         txn.join(self)
         # XXX hack - join Connection manually before transaction.commit() starts.
         #
@@ -326,9 +374,10 @@ class _ZBigFileH(object):
         # DataManagers already done at current TPC phase...
         zconn = self.zfile._p_jar
         assert txn is zconn.transaction_manager.get()
-        if zconn._needs_to_join:            # same as Connection._register(obj)
-            txn.join(zconn)                 # on first obj, without registering
-            zconn._needs_to_join = False    # anything.
+        if zconn._needs_to_join:                # same as Connection._register(obj)
+            assert zconn not in txn._resources  # (not to join twice)
+            txn.join(zconn)                     # on first obj, without registering
+            zconn._needs_to_join = False        # anything.
 
     def afterCompletion(self, txn):
         pass

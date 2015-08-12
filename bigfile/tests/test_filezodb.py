@@ -22,6 +22,8 @@ from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST
 import transaction
 from numpy import ndarray, array_equal, uint8, zeros
+from threading import Thread
+from six.moves import _thread
 
 from pytest import raises
 from six.moves import range as xrange
@@ -252,3 +254,233 @@ def test_bigfile_filezodb():
 
 
     dbclose(root)
+
+
+
+# Notify channel for
+#   - one thread to     .wait('condition'), until
+#   - other thread does .tell('condition')
+class NotifyChannel:
+
+    def __init__(self):
+        self.state = None
+
+    def tell(self, condition):
+        #print >>sys.stderr, '  tell %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        # wait until other thread reads previous tell
+        while self.state is not None:
+            pass
+
+        self.state = condition
+
+    def wait(self, condition):
+        #print >>sys.stderr, '  wait %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        while self.state != condition:
+            pass
+        #print >>sys.stderr, '  have %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        self.state = None
+
+
+# connection can migrate between threads handling requests.
+# verify _ZBigFileH properly adjusts.
+# ( NOTE this test is almost dupped at test_zbigarray_vs_conn_migration() )
+def test_bigfile_filezodb_vs_conn_migration():
+    root01 = dbopen()
+    conn01 = root01._p_jar
+    db     = conn01.db()
+    conn01.close()
+    del root01
+
+    c12_1 = NotifyChannel()   # T11 -> T21
+    c21_1 = NotifyChannel()   # T21 -> T11
+
+    # open, modify, commit, close, open, commit
+    def T11():
+        tell, wait = c12_1.tell, c21_1.wait
+
+        conn11_1 = db.open()
+        assert conn11_1 is conn01
+
+        # setup zfile with ZBigArray-like satellite,
+        root11_1 = conn11_1.root()
+        root11_1['zfile2'] = f11 = ZBigFile(blksize)
+        transaction.commit()
+
+        root11_1['zarray2'] = a11 = LivePersistent()
+        a11._v_fileh = fh11 = f11.fileh_open()
+        transaction.commit()
+
+        # set zfile initial data
+        vma11 = fh11.mmap(0, 1)
+
+        Blk(vma11, 0)[0] = 11
+        transaction.commit()
+
+        # close conn, wait till T21 reopens it
+        del vma11, fh11, a11, f11, root11_1
+        conn11_1.close()
+        tell('T1-conn11_1-closed')
+        wait('T2-conn21-opened')
+
+        # open another connection (e.g. for handling next request) which does
+        # not touch  zfile at all, and arrange timings so that T2 modifies
+        # zfile, but do not yet commit, and then commit here.
+        conn11_2 = db.open()
+        assert conn11_2 is not conn11_1
+        root11_2 = conn11_2.root()
+
+        wait('T2-zfile2-modified')
+
+        # XXX do we want to also modify some other objesct?
+        # (but this have side effect for joining conn11_2 to txn)
+        transaction.commit()    # should be nothing
+        tell('T1-txn12-committed')
+
+        wait('T2-conn21-closed')
+        del root11_2
+        conn11_2.close()
+
+        # hold on this thread until main driver tells us
+        wait('T11-exit-command')
+
+
+    # open, modify, abort
+    def T21():
+        tell, wait = c21_1.tell, c12_1.wait
+
+        # - wait until T1 finish setting up initial data for zfile and closes connection.
+        # - open that connection before T1 is asleep - because ZODB organizes
+        #   connection pool as stack (with correction for #active objects),
+        #   we should get exactly the same connection T1 had.
+        wait('T1-conn11_1-closed')
+        conn21 = db.open()
+        assert conn21 is conn01
+        tell('T2-conn21-opened')
+
+        # modify zfile and arrange timings so that T1 commits after zfile is
+        # modified, but before we commit/abort.
+        root21 = conn21.root()
+        a21 = root21['zarray2']
+
+        fh21  = a21._v_fileh
+        vma21 = fh21.mmap(0, 1)
+
+        Blk(vma21, 0)[0] = 21
+
+        tell('T2-zfile2-modified')
+        wait('T1-txn12-committed')
+
+        # abort - zfile2 should stay unchanged
+        transaction.abort()
+
+        del vma21, fh21, a21, root21
+        conn21.close()
+        tell('T2-conn21-closed')
+
+
+    t11, t21 = Thread(target=T11), Thread(target=T21)
+    t11.start(); t21.start()
+    t11_ident = t11.ident
+    t21.join()     # NOTE not joining t11 yet
+
+    # now verify that zfile2 stays at 11 state, i.e. T21 was really aborted
+    conn02 = db.open()
+    # NOTE top of connection stack is conn21(=conn01), becase conn11_2 has 0
+    # active objects
+    assert conn02 is conn01
+    root02 = conn02.root()
+
+    f02 = root02['zfile2']
+    # NOTE verification is done using afresh fileh to avoid depending on
+    # leftover state from T11/T21.
+    fh02  = f02.fileh_open()
+    vma02 = fh02.mmap(0, 1)
+
+    assert Blk(vma02, 0)[0] == 11
+
+    del vma02, fh02, f02, root02
+    conn02.close()
+
+
+    c12_2 = NotifyChannel()   # T12 -> T22
+    c21_2 = NotifyChannel()   # T22 -> T12
+
+    # open, abort
+    def T12():
+        tell, wait = c12_2.tell, c21_2.wait
+
+        wait('T2-conn22-opened')
+
+        conn12 = db.open()
+
+        tell('T1-conn12-opened')
+        wait('T2-zfile2-modified')
+
+        transaction.abort()
+
+        tell('T1-txn-aborted')
+        wait('T2-txn-committed')
+
+        conn12.close()
+
+
+    # open, modify, commit
+    def T22():
+        tell, wait = c21_2.tell, c12_2.wait
+
+        # make sure we are not the same thread which ran T11
+        # (should be so because we cared not to stop T11 yet)
+        assert _thread.get_ident() != t11_ident
+
+        conn22 = db.open()
+        assert conn22 is conn01
+        tell('T2-conn22-opened')
+
+        # modify zfile and arrange timings so that T1 does abort after we
+        # modify, but before we commit
+        wait('T1-conn12-opened')
+        root22 = conn22.root()
+        a22 = root22['zarray2']
+
+        fh22  = a22._v_fileh
+        vma22 = fh22.mmap(0, 1)
+
+        Blk(vma22, 0)[0] = 22
+
+        tell('T2-zfile2-modified')
+        wait('T1-txn-aborted')
+
+        # commit - changes should propagate to zfile
+        transaction.commit()
+
+        tell('T2-txn-committed')
+
+        conn22.close()
+
+
+    t12, t22 = Thread(target=T12), Thread(target=T22)
+    t12.start(); t22.start()
+    t12.join();  t22.join()
+
+    # tell T11 to stop also
+    c21_1.tell('T11-exit-command')
+    t11.join()
+
+    # now verify that zfile2 changed to 22 state, i.e. T22 was really committed
+    conn03 = db.open()
+    # NOTE top of connection stack is conn22(=conn01), becase it has most # of
+    # active objectd
+    assert conn03 is conn01
+    root03 = conn03.root()
+
+    f03  = root03['zfile2']
+    fh03 = f03.fileh_open()
+    vma03 = fh03.mmap(0, 1)
+
+    assert Blk(vma03, 0)[0] == 22
+
+    del vma03, fh03, f03
+    dbclose(root03)

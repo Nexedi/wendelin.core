@@ -16,12 +16,14 @@
 #
 # See COPYING file for full licensing terms.
 from wendelin.bigarray.array_zodb import ZBigArray
-from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo
+from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, NotifyChannel
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
 from numpy import dtype, uint8, all, array_equal, arange
+from threading import Thread
+from six.moves import _thread
 
 testdb = None
 def setup_module():
@@ -180,3 +182,178 @@ def test_zbigarray():
     assert a[24*1024*1024+3] ==  13
 
     dbclose(root)
+
+
+# the same as test_bigfile_filezodb_vs_conn_migration but explicitly for ZBigArray
+# ( NOTE this test is almost dup of test_zbigarray_vs_conn_migration() )
+def test_zbigarray_vs_conn_migration():
+    root01 = testdb.dbopen()
+    conn01 = root01._p_jar
+    db     = conn01.db()
+    conn01.close()
+    del root01
+
+    c12_1 = NotifyChannel()   # T11 -> T21
+    c21_1 = NotifyChannel()   # T21 -> T11
+
+    # open, modify, commit, close, open, commit
+    def T11():
+        tell, wait = c12_1.tell, c21_1.wait
+
+        conn11_1 = db.open()
+        assert conn11_1 is conn01
+
+        # setup zarray
+        root11_1 = conn11_1.root()
+        root11_1['zarray2'] = a11 = ZBigArray((10,), uint8)
+        transaction.commit()
+
+        # set initial data
+        a11[0:1] = [11]     # XXX -> [0] = 11 after BigArray can
+        transaction.commit()
+
+        # close conn, wait till T21 reopens it
+        del a11, root11_1
+        conn11_1.close()
+        tell('T1-conn11_1-closed')
+        wait('T2-conn21-opened')
+
+        # open nother connection. it must be different
+        # (see appropriate place in zfile test about why)
+        conn11_2 = db.open()
+        assert conn11_2 is not conn11_1
+        root11_2 = conn11_2.root()
+
+        wait('T2-zarray2-modified')
+
+        transaction.commit()    # should be nothing
+        tell('T1-txn12-committed')
+
+        wait('T2-conn21-closed')
+        del root11_2
+        conn11_2.close()
+
+        # hold on this thread until main driver tells us
+        wait('T11-exit-command')
+
+    # open, modify, abort
+    def T21():
+        tell, wait = c21_1.tell, c12_1.wait
+
+        # wait until T1 finish setting up initial data and get its connection
+        # (see appropriate place in zfile tests for details)
+        wait('T1-conn11_1-closed')
+        conn21 = db.open()
+        assert conn21 is conn01
+        tell('T2-conn21-opened')
+
+        # modify zarray and arrange timings so that T1 commits after zarray is
+        # modified, but before we commit/abort.
+        root21 = conn21.root()
+        a21 = root21['zarray2']
+
+        a21[0:1] = [21]     # XXX -> [0] = 21 after BigArray can
+
+        tell('T2-zarray2-modified')
+        wait('T1-txn12-committed')
+
+        # abort - zarray2 should stay unchanged
+        transaction.abort()
+
+        del a21, root21
+        conn21.close()
+        tell('T2-conn21-closed')
+
+
+    t11, t21 = Thread(target=T11), Thread(target=T21)
+    t11.start(); t21.start()
+    t11_ident = t11.ident
+    t21.join()     # NOTE not joining t11 yet
+
+    # now verify that zarray2 stays at 11 state, i.e. T21 was really aborted
+    conn02 = db.open()
+    # NOTE top of connection stack is conn21(=conn01), becase conn11_2 has 0
+    # active objects
+    assert conn02 is conn01
+    root02 = conn02.root()
+
+    a02 = root02['zarray2']
+    assert a02[0] == 11
+
+    del a02, root02
+    conn02.close()
+
+
+    c12_2 = NotifyChannel()   # T12 -> T22
+    c21_2 = NotifyChannel()   # T22 -> T12
+
+    # open, abort
+    def T12():
+        tell, wait = c12_2.tell, c21_2.wait
+
+        wait('T2-conn22-opened')
+
+        conn12 = db.open()
+
+        tell('T1-conn12-opened')
+        wait('T2-zarray2-modified')
+
+        transaction.abort()
+
+        tell('T1-txn-aborted')
+        wait('T2-txn-committed')
+
+        conn12.close()
+
+
+    # open, modify, commit
+    def T22():
+        tell, wait = c21_2.tell, c12_2.wait
+
+        # make sure we are not the same thread which ran T11
+        # (should be so because we cared not to stop T11 yet)
+        assert _thread.get_ident() != t11_ident
+
+        conn22 = db.open()
+        assert conn22 is conn01
+        tell('T2-conn22-opened')
+
+        # modify zarray and arrange timings so that T1 does abort after we
+        # modify, but before we commit
+        wait('T1-conn12-opened')
+        root22 = conn22.root()
+        a22 = root22['zarray2']
+
+        a22[0:1] = [22]     # XXX -> [0] = 22   after BigArray can
+
+        tell('T2-zarray2-modified')
+        wait('T1-txn-aborted')
+
+        # commit - changes should propagate to zarray
+        transaction.commit()
+
+        tell('T2-txn-committed')
+
+        conn22.close()
+
+
+    t12, t22 = Thread(target=T12), Thread(target=T22)
+    t12.start(); t22.start()
+    t12.join();  t22.join()
+
+    # tell T11 to stop also
+    c21_1.tell('T11-exit-command')
+    t11.join()
+
+    # now verify that zarray2 changed to 22 state, i.e. T22 was really committed
+    conn03 = db.open()
+    # NOTE top of connection stack is conn22(=conn01), becase it has most # of
+    # active objectd
+    assert conn03 is conn01
+    root03 = conn03.root()
+
+    a03  = root03['zarray2']
+    assert a03[0] == 22
+
+    del a03
+    dbclose(root03)
