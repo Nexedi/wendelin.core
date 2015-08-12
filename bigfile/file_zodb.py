@@ -35,6 +35,7 @@ from transaction.interfaces import IDataManager, ISynchronizer
 from persistent import Persistent, PickleCache
 from BTrees.LOBTree import LOBTree
 from zope.interface import implementer
+from ZODB.Connection import Connection
 
 # TODO document that first data access must be either after commit or Connection.add
 
@@ -224,6 +225,33 @@ class ZBigFile(LivePersistent):
     # bigfile-like
     def fileh_open(self):   return _ZBigFileH(self)
 
+
+
+
+# patch for ZODB.Connection to support callback on .open()
+# NOTE on-open  callbacks are setup once and fire many times on every open
+#      on-close callbacks are setup once and fire only once on next close
+Connection._onOpenCallbacks = None
+def Connection_onOpenCallback(self, f):
+    if self._onOpenCallbacks is None:
+        # NOTE WeakSet does not work for bound methods - the are always create
+        # anew for each obj.method access, and thus will go away almost immediately
+        self._onOpenCallbacks = set()
+    self._onOpenCallbacks.add(f)
+
+assert not hasattr(Connection, 'onOpenCallback')
+Connection.onOpenCallback = Connection_onOpenCallback
+
+orig_Connection_open = Connection.open
+def Connection_open(self, transaction_manager=None, delegate=True):
+    orig_Connection_open(self, transaction_manager, delegate)
+
+    if self._onOpenCallbacks:
+        for f in self._onOpenCallbacks:
+            f()
+
+Connection.open = Connection_open
+# ------------
 
 
 
