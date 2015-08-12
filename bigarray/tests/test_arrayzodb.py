@@ -178,3 +178,5 @@ def test_zbigarray():
     assert a[24*1024*1024+1] ==  11
     assert a[24*1024*1024+2] ==  12
     assert a[24*1024*1024+3] ==  13
+
+    dbclose(root)
