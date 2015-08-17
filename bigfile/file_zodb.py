@@ -36,6 +36,7 @@ from persistent import Persistent, PickleCache
 from BTrees.LOBTree import LOBTree
 from zope.interface import implementer
 from ZODB.Connection import Connection
+from weakref import WeakSet
 
 # TODO document that first data access must be either after commit or Connection.add
 
@@ -48,7 +49,9 @@ from ZODB.Connection import Connection
 # data of 1 file block as stored in ZODB
 class ZBlk(Persistent):
     # ._v_blkdata   - bytes
-    __slots__ = ('_v_blkdata')
+    # ._v_zfile     - ZBigFile | None
+    # ._v_blk       - offset of this blk in ._v_zfile | None
+    __slots__ = ('_v_blkdata', '_v_zfile', '_v_blk')
     # NOTE _v_ - so that we can alter it without Persistent noticing -- we'll
     #      manage ZBlk states by ourselves explicitly.
 
@@ -63,7 +66,9 @@ class ZBlk(Persistent):
         #  intermediate copy not to waste memory - see below)
         if self._v_blkdata is None:
             # ZODB says: further accesses will cause object data to be reloaded.
-            self._p_invalidate()
+            # NOTE directly Persistent._p_invalidate() to avoid
+            # virtmem->loadblk->invalidate callback
+            Persistent._p_invalidate(self)
 
         blkdata = self._v_blkdata
         assert blkdata is not None
@@ -102,7 +107,40 @@ class ZBlk(Persistent):
     # DB (through pickle) loads data to memory
     def __setstate__(self, state):
         self._v_blkdata = state
+        self._v_zfile   = None
+        self._v_blk     = None
 
+    # ZBlk as initially created (empty placeholder)
+    def __init__(self):
+        self._v_zfile   = None
+        self._v_blk     = None
+        # NOTE ._v_blkdata is not set - the master will set it from outside
+
+
+    # make this ZBlk know it represents zfile[blk]
+    # NOTE this has to be called by master every time ZBlk object potentially
+    #      goes from GHOST to Live state
+    # NOTE it is ok to keep reference to zfile (yes it creates
+    #      ZBigFile->ZBlk->ZBigFile cycle but that does not hurt).
+    def bindzfile(self, zfile, blk):
+        # bind; if already bound, should be the same
+        if self._v_zfile is None:
+            self._v_zfile   = zfile
+            self._v_blk     = blk
+        else:
+            assert self._v_zfile    is zfile
+            assert self._v_blk      == blk
+
+
+    # DB notifies this object has to be invalidated
+    # (DB -> invalidate ._v_blkdata -> invalidate memory-page)
+    def _p_invalidate(self):
+        # on invalidation we must be already bound
+        # (to know which ZBigFileH to propagate invalidation to)
+        assert self._v_zfile    is not None
+        assert self._v_blk      is not None
+        self._v_zfile.invalidateblk(self._v_blk)
+        Persistent._p_invalidate(self)
 
 
 # XXX merge Persistent/BigFile comments into 1 place
@@ -177,6 +215,7 @@ class ZBigFile(LivePersistent):
     #   .blktab       {} blk -> ZBlk(blkdata)
 
     # ._v_file      _ZBigFile helper
+    # ._v_filehset  weakset( _ZBigFileH ) that we created
     #
     # NOTE Live: don't allow us to go to ghost state not to loose ._v_file
     #      which DataManager _ZBigFileH refers to.
@@ -193,6 +232,7 @@ class ZBigFile(LivePersistent):
     def __setstate__(self, state):
         self.blksize, self.blktab = state
         self._v_file = _ZBigFile(self, self.blksize)
+        self._v_filehset = WeakSet()
 
 
     # load data     ZODB obj -> page
@@ -209,6 +249,7 @@ class ZBigFile(LivePersistent):
         #      also in DB better store directly {#blk -> #dataref} without ZBlk overhead
         blkdata = zblk.loadblkdata()
         assert len(blkdata) == self._v_file.blksize
+        zblk.bindzfile(self, blk)
         memcpy(buf, blkdata)        # FIXME memcpy
 
 
@@ -220,10 +261,21 @@ class ZBigFile(LivePersistent):
 
         zblk._v_blkdata = bytes(buf)    # FIXME does memcpy
         zblk._p_changed = True          # if zblk was already in DB: _p_state -> CHANGED
+        zblk.bindzfile(self, blk)
+
+
+    # invalidate data   .blktab[blk] invalidated -> invalidate page
+    def invalidateblk(self, blk):
+        for fileh in self._v_filehset:
+            fileh.invalidate_page(blk)  # XXX assumes blksize == pagesize
+
 
 
     # bigfile-like
-    def fileh_open(self):   return _ZBigFileH(self)
+    def fileh_open(self):
+        fileh = _ZBigFileH(self)
+        self._v_filehset.add(fileh)
+        return fileh
 
 
 
@@ -340,6 +392,9 @@ class _ZBigFileH(object):
     def mmap(self, pgoffset, pglen):    return self.zfileh.mmap(pgoffset, pglen)
     # .dirty_writeout?  -- not needed - these are handled via
     # .dirty_discard?   -- transaction commit/abort
+
+    def invalidate_page(self, pgoffset):
+        return self.zfileh.invalidate_page(pgoffset)
 
 
     # ~~~~ ISynchronizer ~~~~

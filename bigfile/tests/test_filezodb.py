@@ -21,6 +21,7 @@ from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST
 import transaction
+from transaction import TransactionManager
 from numpy import ndarray, array_equal, uint8, zeros
 from threading import Thread
 from six.moves import _thread
@@ -484,3 +485,57 @@ def test_bigfile_filezodb_vs_conn_migration():
 
     del vma03, fh03, f03
     dbclose(root03)
+
+
+# ZBlk should properly handle 'invalidate' messages from DB
+# ( NOTE this test is almost dupped at test_zbigarray_vs_cache_invalidation() )
+def test_bigfile_filezodb_vs_cache_invalidation():
+    root = dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+
+    # setup zfile with fileh view to it
+    root1['zfile3'] = f1 = ZBigFile(blksize)
+    tm1.commit()
+
+    fh1 = f1.fileh_open()
+    tm1.commit()
+
+    # set zfile initial data
+    vma1 = fh1.mmap(0, 1)
+    Blk(vma1, 0)[0] = 1
+    tm1.commit()
+
+
+    # read zfile and setup fileh for it in conn2
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+
+    f2 = root2['zfile3']
+    fh2 = f2.fileh_open()
+    vma2 = fh2.mmap(0, 1)
+
+    assert Blk(vma2, 0)[0] == 1 # read data in conn2 + make sure read correctly
+
+    # now zfile content is both in ZODB.Connection cache and in _ZBigFileH
+    # cache for each conn1 and conn2. Modify data in conn1 and make sure it
+    # fully propagate to conn2.
+
+    Blk(vma1, 0)[0] = 2
+    tm1.commit()
+    tm2.commit()                # just transaction boundary for t2
+
+    # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
+    assert Blk(vma2, 0)[0] == 2
+
+    conn2.close()
+    del conn2, root2
+    dbclose(root1)

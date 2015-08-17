@@ -324,6 +324,21 @@ PyFunc(pyfileh_isdirty, "isdirty() - are there any changes to fileh memory at al
 }
 
 
+PyFunc(pyfileh_invalidate_page, "invalidate_page(pgoffset) - invalidate fileh page")
+    (PyObject *pyfileh0, PyObject *args)
+{
+    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    Py_ssize_t  pgoffset;   // XXX Py_ssize_t vs pgoff_t ?
+
+    if (!PyArg_ParseTuple(args, "n", &pgoffset))
+        return NULL;
+
+    fileh_invalidate_page(pyfileh, pgoffset);
+
+    Py_RETURN_NONE;
+}
+
+
 static void
 pyfileh_dealloc(PyObject *pyfileh0)
 {
@@ -365,6 +380,7 @@ static /*const*/ PyMethodDef pyfileh_methods[] = {
     {"dirty_writeout",  pyfileh_dirty_writeout, METH_VARARGS,   pyfileh_dirty_writeout_doc},
     {"dirty_discard",   pyfileh_dirty_discard,  METH_VARARGS,   pyfileh_dirty_discard_doc},
     {"isdirty",         pyfileh_isdirty,        METH_VARARGS,   pyfileh_isdirty_doc},
+    {"invalidate_page", pyfileh_invalidate_page,METH_VARARGS,   pyfileh_invalidate_page_doc},
     {NULL}
 };
 
