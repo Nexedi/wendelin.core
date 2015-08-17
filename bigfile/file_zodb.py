@@ -86,15 +86,15 @@ class ZBlk(Persistent):
         # storeblk), and only once.
         assert self._v_blkdata is not None
         # NOTE self._p_changed is not necessarily true here - e.g. it is not
-        # for newly created objects irregardles of initial ._p_changed=True
+        # for newly created objects irregardless of initial ._p_changed=True
 
         blkdata = self._v_blkdata
         # do not waste memory for duplicated data - as soon as blkdata lands
-        # into DB we can drop it here becase ._v_blkdata was only an
+        # into DB we can drop it here because ._v_blkdata was only an
         # intermediate copy from fileh memory to database.
         #
         # FIXME this works, but transaction first prepares all objects for
-        #       commit and ony the saves thems. For use it means __getstate__
+        #       commit and only then saves them. For use it means __getstate__
         #       gets called very late and for all objects and thus we'll be
         #       keeping ._v_blkdata for all of them before final phase =
         #       2·NDirty peak memory consumption.
@@ -258,7 +258,7 @@ class ZBigFile(LivePersistent):
 Connection._onOpenCallbacks = None
 def Connection_onOpenCallback(self, f):
     if self._onOpenCallbacks is None:
-        # NOTE WeakSet does not work for bound methods - the are always create
+        # NOTE WeakSet does not work for bound methods - they are always created
         # anew for each obj.method access, and thus will go away almost immediately
         self._onOpenCallbacks = WeakSet()
     self._onOpenCallbacks.add(f)
@@ -397,7 +397,7 @@ class _ZBigFileH(object):
         # currently forbidden.
         #
         # More cleaner fix would be to teach transaction to allow joining
-        # DataManagers while commit is running, but that comes with dificulties
+        # DataManagers while commit is running, but that comes with difficulties
         # if wanting to support whole transaction semantics (i.e. whether to
         # call joined tpc_begin(), if we are already at commit()? And also what
         # to do about order - newly joined sortKey() could be lesser than
@@ -422,7 +422,7 @@ class _ZBigFileH(object):
 
     # key ordering us wrt other DataManager in tpc_*() sequence calling
     # NOTE for our propagated-to-objects changes to propagate to ZODB, we need
-    # to act earlier than ZODB DataManager managin zfile.blktab - hence the trick.
+    # to act earlier than ZODB DataManager managing zfile.blktab - hence the trick.
     def sortKey(self):
         # XXX _p_jar can be None - if that object is new?
         zkey = self.zfile._p_jar.sortKey()
