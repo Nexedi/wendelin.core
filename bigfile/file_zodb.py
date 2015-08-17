@@ -260,7 +260,7 @@ def Connection_onOpenCallback(self, f):
     if self._onOpenCallbacks is None:
         # NOTE WeakSet does not work for bound methods - the are always create
         # anew for each obj.method access, and thus will go away almost immediately
-        self._onOpenCallbacks = set()
+        self._onOpenCallbacks = WeakSet()
     self._onOpenCallbacks.add(f)
 
 assert not hasattr(Connection, 'onOpenCallback')
@@ -270,9 +270,12 @@ orig_Connection_open = Connection.open
 def Connection_open(self, transaction_manager=None, delegate=True):
     orig_Connection_open(self, transaction_manager, delegate)
 
+    # FIXME method name hardcoded. Better not do it and allow f to be general
+    # callable, but that does not work with bound method - see above.
+    # ( Something like WeakMethod from py3 could help )
     if self._onOpenCallbacks:
         for f in self._onOpenCallbacks:
-            f()
+            f.on_connection_open()
 
 Connection.open = Connection_open
 # ------------
@@ -332,7 +335,7 @@ class _ZBigFileH(object):
         self.transaction_manager = zfile._p_jar.transaction_manager
 
         # when connection will be reopened -> txn_manager.registerSynch(self)
-        zfile._p_jar.onOpenCallback(self.on_connection_open)
+        zfile._p_jar.onOpenCallback(self)   # -> self.on_connection_open()
 
         # when we are just initially created, the connection is already opened,
         # so manually compensate for it.

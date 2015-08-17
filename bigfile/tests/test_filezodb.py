@@ -25,6 +25,8 @@ from transaction import TransactionManager
 from numpy import ndarray, array_equal, uint8, zeros
 from threading import Thread
 from six.moves import _thread
+import weakref
+import gc
 
 from pytest import raises
 from six.moves import range as xrange
@@ -539,3 +541,34 @@ def test_bigfile_filezodb_vs_cache_invalidation():
     conn2.close()
     del conn2, root2
     dbclose(root1)
+
+
+# verify that fileh are garbage-collected after user free them
+def test_bigfile_filezodb_fileh_gc():
+    root1= dbopen()
+    conn1= root1._p_jar
+    db   = conn1.db()
+    root1['zfile4'] = f1 = ZBigFile(blksize)
+    transaction.commit()
+
+    fh1  = f1.fileh_open()
+    vma1 = fh1.mmap(0, 1)
+    wfh1 = weakref.ref(fh1)
+    assert wfh1() is fh1
+
+    conn1.close()
+    del vma1, fh1, f1, root1
+
+
+    conn2 = db.open()
+    root2 = conn2.root()
+    f2 = root2['zfile4']
+
+    fh2  = f2.fileh_open()
+    vma2 = fh2.mmap(0, 1)
+
+    gc.collect()
+    assert wfh1() is None   # fh1 should be gone
+
+    del vma2, fh2, f2
+    dbclose(root2)
