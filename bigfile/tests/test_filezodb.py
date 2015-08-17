@@ -95,11 +95,11 @@ def test_livepersistent():
     root = dbopen()
     db = root._p_jar.db()
 
-    # known to connection & cache & UPTODATE (ZODB < 3.10) or GHOST (ZODB >= 3.10)
+    # known to connection & cache & GHOST
     # right after first loading from DB
     lp = root['live']
     assert lp._p_jar   is not None
-    assert lp._p_state in (UPTODATE, GHOST)
+    assert lp._p_state is GHOST
     ci = cacheInfo(db)
     assert ci[kkey(LivePersistent)] == 1
 

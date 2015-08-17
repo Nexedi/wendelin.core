@@ -164,43 +164,15 @@ class _ZBigFile(BigFile):
 # Persistent that never goes to ghost state, if it was ever uptodate.
 # XXX move to common place?
 class LivePersistent(Persistent):
-    # NOTE in ZODB < 3.10 (exactly before commit a9cda7fb) objects coming from
-    # db are first created in seemingly uptodate state and then deactivated
-    # just to register them by the way to persistent machinery.
-    #
-    # In ZODB >= 3.10 such registration happens explicitly and no such first
-    # deactivation is done.
-    if not hasattr(PickleCache, 'new_ghost'):
-        _v_registered = False   # were we registered to Persistent machinery?
-    else:
-        _v_registered = True
-
     # don't allow us to go to ghost
     #
     # NOTE we can't use STICKY as that state is assumed as
     # short-lived-temporary by ZODB and is changed back to UPTODATE by
     # persistent code. In fact ZODB says: STICKY is UPTODATE+keep in memory.
     def _p_deactivate(self):
-        # on ZODB < 3.10 need to call Persistent._p_deactivate() the first time
-        # - it registers the object with its own machinery on first ghostify
-        # (which happens right before-on object load from DB) see comments in
-        # Per__p_deactivate() in persistent.
-        if not self._v_registered:
-            Persistent._p_deactivate(self)
-            # 1) prevents calling Persistent._p_deactivate() next time, and
-            # 2) causes Persistent to change state to UPTODATE
-            self._v_registered = True
-
         # just returning here won't allow Persistent._p_deactivate() run and
         # thus we'll stay in non-ghost state.
         return
-
-
-    # when creating initially (contrast to loading from DB), no need to go to
-    # Persistent._p_deactivate() even for the first time
-    def __init__(self):
-        Persistent.__init__(self)
-        self._v_registered = True
 
 
 

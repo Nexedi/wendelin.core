@@ -225,7 +225,7 @@ setup(
                    # ( NOTE: ZODB3 3.11 just pulls in latest ZODB _4_, so this way
                    #   specifying ZODB _3_ we allow external requirements to
                    #   specify either to use e.g. ZODB3.10 or ZODB4 )
-                   'ZODB3',
+                   'ZODB3 >= 3.10',
 
                    'six',       # compat py2/py3
 
