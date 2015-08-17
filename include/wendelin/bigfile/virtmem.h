@@ -68,7 +68,7 @@ struct BigFileH {
     // XXX not sure we need this
     //     -> currently is used to know whether to join ZODB DataManager serving ZBigFile
     // XXX maybe change into dirty_list in the future?
-    unsigned    dirty   : 1;
+    unsigned    dirty;
 };
 typedef struct BigFileH BigFileH;
 
@@ -213,6 +213,20 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
  *   - its backing memory is released to OS.
  */
 void fileh_dirty_discard(BigFileH *fileh);
+
+
+
+/* invalidate fileh page
+ *
+ * Make sure that page corresponding to pgoffset is not present in fileh memory.
+ *
+ * The page could be in either dirty or loaded or empty state. In all
+ * cases page transitions to empty state and its memory is forgotten.
+ *
+ * ( Such invalidation is needed to synchronize fileh memory, when we know a
+ *   file was changed externally )
+ */
+void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset);
 
 
 /* pagefault handler

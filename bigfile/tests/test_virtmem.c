@@ -728,6 +728,105 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+
+    diag("invalidate");
+    mkdirty2();
+
+    fileh_invalidate_page(fh, 101);
+
+    ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
+    ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
+    ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
+    ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
+
+    ok1( fh->dirty);
+    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    CHECK_PAGE  (page3,   103,    PAGE_LOADED,    0);
+
+    ok1(ram->lru_list.prev == &page2->lru);
+    ok1(page2->lru.prev == &page0->lru);
+    ok1(page0->lru.prev == &page3->lru);
+    ok1(page3->lru.prev == &ram->lru_list);
+
+
+    fileh_invalidate_page(fh, 103);
+
+    ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
+    ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
+    ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
+    ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
+
+    ok1( fh->dirty);
+    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    CHECK_PAGE  (page3,   103,    PAGE_EMPTY,     0);
+
+    ok1(ram->lru_list.prev == &page2->lru);
+    ok1(page2->lru.prev == &page0->lru);
+    ok1(page0->lru.prev == &page3->lru);
+    ok1(page3->lru.prev == &ram->lru_list);
+
+
+    fileh_invalidate_page(fh, 102);
+
+    ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
+    ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
+    ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
+    ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
+
+    ok1( fh->dirty);
+    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
+    CHECK_PAGE  (page3,   103,    PAGE_EMPTY,     0);
+
+    ok1(ram->lru_list.prev == &page2->lru);
+    ok1(page2->lru.prev == &page0->lru);
+    ok1(page0->lru.prev == &page3->lru);
+    ok1(page3->lru.prev == &ram->lru_list);
+
+
+    fileh_invalidate_page(fh, 100);
+
+    ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
+    ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
+    ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
+    ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
+
+    ok1(!fh->dirty);
+    CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
+    CHECK_PAGE  (page3,   103,    PAGE_EMPTY,     0);
+
+    ok1(ram->lru_list.prev == &page2->lru);
+    ok1(page2->lru.prev == &page0->lru);
+    ok1(page0->lru.prev == &page3->lru);
+    ok1(page3->lru.prev == &ram->lru_list);
+
+    /* read page[3] back */
+    vma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
+
+    ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
+    ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
+    ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
+    ok1( M(vma, 3));                B(vma, 3*PSb);      MUST_FAULT( B(vma, 3*PSb) = 13  );
+
+    ok1(!fh->dirty);
+    CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
+    CHECK_PAGE  (page3,   103,    PAGE_LOADED,    1);
+
+    ok1(ram->lru_list.prev == &page3->lru);
+    ok1(page3->lru.prev == &page2->lru);
+    ok1(page2->lru.prev == &page0->lru);
+    ok1(page0->lru.prev == &ram->lru_list);
+
+
     diag("fileh_close");
     /* dirty some pages again - so that test fileh_close with not all pages being non-dirty */
     mkdirty2();

@@ -346,6 +346,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
         /* page.state -> PAGE_LOADED and correct mappings RW -> R */
         if (flags & WRITEOUT_MARKSTORED) {
             page->state = PAGE_LOADED;
+            fileh->dirty--;
 
             list_for_each(hmmap, &fileh->mmaps) {
                 VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
@@ -355,8 +356,10 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     }
 
 
+    /* if we successfully finished with markstored flag set - all dirty pages
+     * should become non-dirty */
     if (flags & WRITEOUT_MARKSTORED)
-        fileh->dirty = 0;
+        BUG_ON(fileh->dirty);
 
 out:
     virt_unlock();
@@ -379,7 +382,29 @@ void fileh_dirty_discard(BigFileH *fileh)
         if (page->state == PAGE_DIRTY)
             page_drop_memory(page);
 
-    fileh->dirty = 0;
+    BUG_ON(fileh->dirty);
+
+    virt_unlock();
+    sigsegv_restore(&save_sigset);
+}
+
+
+/****************
+ * INVALIDATION *
+ ****************/
+
+void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset)
+{
+    Page *page;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
+    virt_lock();
+
+    page = pagemap_get(&fileh->pagemap, pgoffset);
+    if (page)
+        page_drop_memory(page);
+
     virt_unlock();
     sigsegv_restore(&save_sigset);
 }
@@ -615,9 +640,9 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     }
 
     // XXX also call page->markdirty() ?
+    if (newstate == PAGE_DIRTY  &&  newstate != page->state)
+        fileh->dirty++;
     page->state = max(page->state, newstate);
-    if (page->state == PAGE_DIRTY)
-        fileh->dirty = 1;
 
     /* mark page as used recently */
     // XXX = list_move_tail()
@@ -738,6 +763,8 @@ static void page_drop_memory(Page *page)
 
     /* 2) release memory to ram */
     ramh_drop_memory(page->ramh, page->ramh_pgoffset);
+    if (page->state == PAGE_DIRTY)
+        page->fileh->dirty--;
     page->state = PAGE_EMPTY;
 
     // XXX touch lru?
