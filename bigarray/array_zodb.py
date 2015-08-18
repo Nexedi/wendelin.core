@@ -51,6 +51,18 @@ class ZBigArray(BigArray,
 
     def __setstate__(self, state):
         super(ZBigArray, self).__setstate__(state)
+
+        # NOTE __setstate__() is done after either
+        #   - 1st time loading from DB, or
+        #   - loading from DB after invalidation.
+        #
+        # as invalidation can happen e.g. by just changing .shape in another DB
+        # connection (e.g. resizing array and appending some data), via always
+        # resetting ._v_fileh we discard all data from it.
+        #
+        # IOW we discard whole cache just because some data were appended.
+        #
+        # -> TODO (optimize) do not through ._v_fileh if we can (.zfile not changed, etc)
         self._v_fileh = None
 
 

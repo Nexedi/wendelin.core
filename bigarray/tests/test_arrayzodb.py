@@ -406,3 +406,52 @@ def test_zbigarray_vs_cache_invalidation():
     conn2.close()
     del conn2, root2
     dbclose(root1)
+
+
+# verify how ZBigArray behaves when plain properties are changed / invalidated
+def test_zbigarray_invalidate_shape():
+    root = testdb.dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+
+    print
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+
+    # setup zarray
+    root1['zarray4'] = a1 = ZBigArray((10,), uint8)
+    tm1.commit()
+
+    # set zarray initial data
+    a1[0:1] = [1]           # XXX -> [0] = 1  after BigArray can
+    tm1.commit()
+
+    # read zarray in conn2
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+
+    a2 = root2['zarray4']
+    assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
+                            # XXX -> [0] == 1  after BigArray can
+
+    # append to a1 which changes both RAM pages and a1.shape
+    assert a1.shape == (10,)
+    a1.append([123])
+    assert a1.shape == (11,)
+    assert a1[10:11] == [123]   # XXX -> [10] = 123  after BigArray can
+    tm1.commit()
+    tm2.commit()            # just transaction boundary for t2
+
+    # data from tm1 should propagate to tm
+    assert a2.shape == (11,)
+    assert a2[10:11] == [123]   # XXX -> [10] = 123  after BigArray can
+
+
+    conn2.close()
+    del conn2, root2, a2
+    dbclose(root1)
