@@ -22,6 +22,7 @@ from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST, CHANGED
 import transaction
 from transaction import TransactionManager
+from ZODB.POSException import ConflictError
 from numpy import ndarray, array_equal, uint8, zeros
 from threading import Thread
 from six.moves import _thread
@@ -610,6 +611,71 @@ def test_bigfile_filezodb_vs_cache_invalidation():
     conn2.close()
     del conn2, root2
     dbclose(root1)
+
+
+# verify that conflicts on ZBlk are handled properly
+# ( NOTE this test is almost dupped at test_zbigarray_vs_conflicts() )
+def test_bigfile_filezodb_vs_conflicts():
+    root = dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+
+    # setup zfile with fileh view to it
+    root1['zfile3a'] = f1 = ZBigFile(blksize)
+    tm1.commit()
+
+    fh1 = f1.fileh_open()
+    tm1.commit()
+
+    # set zfile initial data
+    vma1 = fh1.mmap(0, 1)
+    Blk(vma1, 0)[0] = 1
+    tm1.commit()
+
+    # read zfile and setup fileh for it in conn2
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+
+    f2 = root2['zfile3a']
+    fh2 = f2.fileh_open()
+    vma2 = fh2.mmap(0, 1)
+
+    assert Blk(vma2, 0)[0] == 1 # read data in conn2 + make sure read correctly
+
+    # now zfile content is both in ZODB.Connection cache and in _ZBigFileH
+    # cache for each conn1 and conn2. Modify data in both conn1 and conn2 and
+    # see how it goes.
+
+    Blk(vma1, 0)[0] = 11
+    Blk(vma2, 0)[0] = 12
+
+    # txn1 should commit ok
+    tm1.commit()
+
+    # txn2 should raise ConflictError and stay at 11 state
+    raises(ConflictError, 'tm2.commit()')
+    tm2.abort()
+
+    assert Blk(vma2, 0)[0] == 11    # re-read in conn2
+    Blk(vma2, 0)[0] = 13
+    tm2.commit()
+
+    assert Blk(vma1, 0)[0] == 11    # not yet propagated to conn1
+    tm1.commit()                    # transaction boundary
+
+    assert Blk(vma1, 0)[0] == 13    # re-read in conn1
+
+    conn2.close()
+    dbclose(root1)
+
 
 
 # verify that fileh are garbage-collected after user free them

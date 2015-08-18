@@ -32,7 +32,7 @@ from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.lib.mem import bzero, memcpy
 
 from transaction.interfaces import IDataManager, ISynchronizer
-from persistent import Persistent, PickleCache
+from persistent import Persistent, PickleCache, GHOST
 from BTrees.LOBTree import LOBTree
 from zope.interface import implementer
 from ZODB.Connection import Connection
@@ -135,6 +135,9 @@ class ZBlk(Persistent):
     # DB notifies this object has to be invalidated
     # (DB -> invalidate ._v_blkdata -> invalidate memory-page)
     def _p_invalidate(self):
+        # do real invalidation only once - else we already lost ._v_zfile last time
+        if self._p_state is GHOST:
+            return
         # on invalidation we must be already bound
         # (to know which ZBigFileH to propagate invalidation to)
         assert self._v_zfile    is not None
