@@ -162,6 +162,16 @@ class _ZBigFile(BigFile):
 
 
 # Persistent that never goes to ghost state, if it was ever uptodate.
+#
+# NOTE
+#
+# On invalidation LivePersistent still goes to ghost state, because
+# invalidation cannot be ignored, i.e. they indicate the object has been
+# changed externally.
+#
+# Invalidation can happen only at transaction boundary, so during the course of
+# transaction LivePersistent is guaranteed to stay uptodate.
+#
 # XXX move to common place?
 class LivePersistent(Persistent):
     # don't allow us to go to ghost
@@ -174,6 +184,8 @@ class LivePersistent(Persistent):
         # thus we'll stay in non-ghost state.
         return
 
+
+    # NOTE _p_invalidate() is triggered on invalidations. We do not override it.
 
 
 # NOTE Can't inherit from Persistent and BigFile at the same time - both are C

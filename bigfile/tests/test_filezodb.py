@@ -19,7 +19,7 @@ from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile
 from wendelin.bigfile import ram_reclaim
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
-from persistent import UPTODATE, GHOST
+from persistent import UPTODATE, GHOST, CHANGED
 import transaction
 from transaction import TransactionManager
 from numpy import ndarray, array_equal, uint8, zeros
@@ -121,6 +121,75 @@ def test_livepersistent():
 
     # ok
     dbclose(root)
+    del root, db, lp
+
+
+    # demo that upon cache invalidation LivePersistent can go back to ghost
+    root = dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+    lp1 = root1['live']
+
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+    lp2 = root2['live']
+
+    # 2 connections are setup running in parallel with initial obj state as ghost
+    assert lp1._p_jar   is conn1
+    assert lp2._p_jar   is conn2
+
+    assert lp1._p_state is GHOST
+    assert lp2._p_state is GHOST
+
+    # conn1: modify  ghost -> changed
+    lp1.attr = 1
+
+    assert lp1._p_state is CHANGED
+    assert lp2._p_state is GHOST
+
+    # conn2: read    ghost -> uptodate
+    assert getattr(lp1, 'attr', None) == 1
+    assert getattr(lp2, 'attr', None) is None
+
+    assert lp1._p_state is CHANGED
+    assert lp2._p_state is UPTODATE
+
+    # conn1: commit  changed -> uptodate; conn2 untouched
+    tm1.commit()
+
+    assert lp1._p_state is UPTODATE
+    assert lp2._p_state is UPTODATE
+
+    assert getattr(lp1, 'attr', None) == 1
+    assert getattr(lp2, 'attr', None) is None
+
+    # conn2: commit  (nothing changed - just transaction boundary)
+    #                 uptodate -> ghost (invalidation)
+    tm2.commit()
+
+    assert lp1._p_state is UPTODATE
+    assert lp2._p_state is GHOST
+
+    assert getattr(lp1, 'attr', None) == 1
+
+    # conn2: after reading, the state is again uptodate + changes from conn1 are here
+    a = getattr(lp2, 'attr', None)
+    assert lp2._p_state is UPTODATE
+    assert a == 1
+
+
+    conn2.close()
+    del conn2, root2
+    dbclose(root1)
+
 
 
 # i'th memory block as u8 ndarray
