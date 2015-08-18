@@ -469,6 +469,64 @@ def test_zbigarray_vs_conflicts():
     dbclose(root1)
 
 
+# verify that conflicts on array metadata are handled properly
+# ( NOTE this test is close to test_zbigarray_vs_conflicts() )
+def test_zbigarray_vs_conflicts_metadata():
+    root = testdb.dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+
+    # setup zarray
+    root1['zarray3b'] = a1 = ZBigArray((10,), uint8)
+    tm1.commit()
+
+    # set zarray initial data
+    a1[0:1] = [1]           # XXX -> [0] = 1  after BigArray can
+    tm1.commit()
+
+    # read zarray in conn2
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+
+    a2 = root2['zarray3b']
+    assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
+                            # XXX -> [0] == 1  after BigArray can
+
+    # now zarray content is both in ZODB.Connection cache and in _ZBigFileH
+    # cache for each conn1 and conn2. Resize arrays in both conn1 and conn2 and
+    # see how it goes.
+
+    a1.resize((11,))
+    a2.resize((12,))
+
+    # txn1 should commit ok
+    tm1.commit()
+
+    # txn2 should raise ConflictError and stay at 11 state
+    raises(ConflictError, 'tm2.commit()')
+    tm2.abort()
+
+    assert len(a2) == 11    # re-read in conn2
+    a2.resize((13,))
+    tm2.commit()
+
+    assert len(a1) == 11    # not yet propagated to conn1
+    tm1.commit()            # transaction boundary
+
+    assert len(a1) == 13    # re-read in conn1
+
+    conn2.close()
+    dbclose(root1)
+
+
 # verify how ZBigArray behaves when plain properties are changed / invalidated
 def test_zbigarray_invalidate_shape():
     root = testdb.dbopen()
