@@ -204,7 +204,7 @@ if os.path.exists('.git'):  # FIXME won't work if we are checked out as e.g. sub
 
 setup(
     name        = 'wendelin.core',
-    version     = '0.3',
+    version     = '0.4',
     description = 'Out-of-core NumPy arrays',
     url         = 'http://www.wendelin.io/',
     license     = 'GPLv3+ with wide exception for Open-Source',

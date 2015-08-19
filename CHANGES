@@ -1,6 +1,33 @@
 Wendelin.core change history
 ============================
 
+0.4 (2015-08-19)
+----------------
+
+- Add support for O(δ) in-place BigArray.append()
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/1245acc9
+
+- Implement proper multithreading support
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/d53271b9
+
+- Implement proper RAM pages invalidation when backing ZODB objects are changed
+  from outside
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/cb779c7b
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/92bfd03e
+
+- Fix all kind of failures that could happen when ZODB connection changes
+  worker thread in-between handling requests
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/c7c01ce4
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/64d1f40b
+
+- Tox tests now cover usage with FileStorage, ZEO and NEO ZODB storages
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/010eeb35
+  https://lab.nexedi.cn/nexedi/wendelin.core/commit/7fc4ec66
+
+- Various bugfixes
+
+
+
 0.3 (2015-06-12)
 ----------------
 
