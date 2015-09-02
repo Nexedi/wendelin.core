@@ -50,6 +50,16 @@ def teardown_module():
     testdb.teardown()
 
 
+# reclaim all pages
+def ram_reclaim_all():
+    reclaimed = 0
+    while 1:
+        n = ram_reclaim()   # TODO + ram
+        if n == 0:
+            break
+        reclaimed += n
+    return reclaimed
+
 
 # like db.cacheDetail(), but {} instead of []
 def cacheInfo(db):
@@ -258,12 +268,7 @@ def test_bigfile_filezodb():
 
     # evict all loaded pages and test loading them again
     # (verifies ZBlk.loadblkdata() & loadblk logic when loading data the second time)
-    reclaimed = 0
-    while 1:
-        n = ram_reclaim()   # TODO + ram
-        if n == 0:
-            break
-        reclaimed += n
+    reclaimed = ram_reclaim_all()
     assert reclaimed >= blen    # XXX assumes pagesize=blksize
 
     for i in xrange(blen):
