@@ -608,7 +608,16 @@ def test_bigfile_filezodb_vs_cache_invalidation():
 
     Blk(vma1, 0)[0] = 2
     tm1.commit()
-    tm2.commit()                # just transaction boundary for t2
+
+    # still should be read as old value in conn2
+    assert Blk(vma2, 0)[0] == 1
+    # and even after virtmem pages reclaim
+    # ( verifies that _p_invalidate() in ZBlk.loadblkdata() does not lead to
+    #   reloading data as updated )
+    ram_reclaim_all()
+    assert Blk(vma2, 0)[0] == 1
+
+    tm2.commit()                # transaction boundary for t2
 
     # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
     assert Blk(vma2, 0)[0] == 2

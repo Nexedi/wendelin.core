@@ -16,7 +16,7 @@
 #
 # See COPYING file for full licensing terms.
 from wendelin.bigarray.array_zodb import ZBigArray
-from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, NotifyChannel
+from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, NotifyChannel, ram_reclaim_all
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
@@ -401,7 +401,16 @@ def test_zbigarray_vs_cache_invalidation():
 
     a1[0:1] = [2]           # XXX -> [0] = 2  after BigArray can
     tm1.commit()
-    tm2.commit()            # just transaction boundary for t2
+
+    # still should be read as old value in conn2
+    assert a2[0:1]  == [1]
+    # and even after virtmem pages reclaim
+    # ( verifies that _p_invalidate() in ZBlk.loadblkdata() does not lead to
+    #   reloading data as updated )
+    ram_reclaim_all()
+    assert a2[0:1]  == [1]
+
+    tm2.commit()            # transaction boundary for t2
 
     # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
     assert a2[0] == 2
