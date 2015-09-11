@@ -55,8 +55,6 @@ class ZBlk(Persistent):
     # NOTE _v_ - so that we can alter it without Persistent noticing -- we'll
     #      manage ZBlk states by ourselves explicitly.
 
-    # TODO __getstate__ / __reduce__ so that it pickles minimally?
-
     # client requests us to load blkdata from DB
     # (DB -> ._v_blkdata -> memory-page)
     def loadblkdata(self):
