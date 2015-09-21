@@ -361,10 +361,16 @@ class BigArray(object):
             byte0_start  = idx0_start  * stride0
             byte0_stop   = idx0_stop   * stride0
             byte0_stride = idx0_stride * stride0
+            #print('byte0:\t[%s:%s:%s]' % (byte0_start, byte0_stop, byte0_stride))
 
             # major slice -> in file pages, always increasing, inclusive
-            page0_min  = min(byte0_start, byte0_stop+byte0_stride) // pagesize # TODO -> fileh.pagesize
-            page0_max  = max(byte0_stop-byte0_stride, byte0_start) // pagesize # TODO -> fileh.pagesize
+            if byte0_stride >= 0:
+                page0_min = byte0_start     // pagesize                 # TODO -> fileh.pagesize
+                page0_max = (byte0_stop-1)  // pagesize                 # TODO -> fileh.pagesize
+            else:
+                page0_min = (byte0_stop  - byte0_stride)     // pagesize# TODO -> fileh.pagesize
+                page0_max = (byte0_start - byte0_stride - 1) // pagesize# TODO -> fileh.pagesize
+            #print('page0:\t[%s, %s]' % (page0_min, page0_max))
 
 
             # ~~~ mmap file part corresponding to full major slice into memory
@@ -376,6 +382,7 @@ class BigArray(object):
             view0_offset  = byte0_start - page0_min * pagesize # TODO -> fileh.pagesize
             view0_stridev = (byte0_stride,) + self._stridev[1:]
             #print('view0_shape:\t', view0_shape, self.shape)
+            #print('view0_stridv:\t', view0_stridev)
             #print('view0_offset:\t', view0_offset)
             #print('len(vma0):\t', len(vma0))
             view0 = ndarray(view0_shape, self._dtype, vma0, view0_offset, view0_stridev)

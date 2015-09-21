@@ -99,6 +99,14 @@ class DoubleGet:
         return self.obj1[key], self.obj2[key]
 
 
+# DoubleCheck(A1, A2)[key] -> assert array_equal(A1[key], A2[key])
+class DoubleCheck(DoubleGet):
+
+    def __getitem__(self, key):
+        a1, a2 = DoubleGet.__getitem__(self, key)
+        assert array_equal(a1, a2)
+
+
 # getitem/setitem (1d case)
 def test_bigarray_indexing_1d():
     Z  = BigFile_Zero(PS)
@@ -257,6 +265,45 @@ def test_bigarray_indexing_1d():
     assert a[2*PS+6] == 5
 
     assert raises(ValueError, 'A[:4] = range(5)')
+
+
+# indexing where accessed element overlaps edge between pages
+def test_bigarray_indexing_pageedge():
+    shape = (10, PS-1)
+    data  = arange(mul(shape), dtype=uint32).view(uint8)    # NOTE 4 times bigger than uint8
+
+    f  = BigFile_Data_RO(data, PS)
+    fh = f.fileh_open()
+
+    A  = BigArray(shape, uint8, fh)                     # bigarray with test data and shape
+    A_ = data[:mul(shape)].reshape(shape)               # ndarray  ----//----
+
+    # AA[key] -> assert array_equal(A[key], A_[key])
+    AA = DoubleCheck(A, A_)
+
+    AA[0]
+    AA[1]           # tail of page0 - page1
+    AA[1:2]         # ---- // ----
+    AA[1:2:-1]      # []
+    AA[1:0]         # []
+    AA[1:0:-1]      # tail of page0 - page1
+
+
+    shape = (10, PS+1)
+    f  = BigFile_Data_RO(data, PS)
+    fh = f.fileh_open()
+
+    A  = BigArray(shape, uint8, fh)
+    A_ = data[:mul(shape)].reshape(shape)
+
+    AA = DoubleCheck(A, A_)
+
+    AA[0]           # page0 - head of page1
+    AA[0:1]         # ---- // ----
+    AA[0:1:-1]      # []
+    AA[1:0]         # []
+    AA[1:0:-1]      # page0 - head of page1
+
 
 
 # given dimension length n, yield index variants to test
