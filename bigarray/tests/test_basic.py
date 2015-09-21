@@ -55,6 +55,12 @@ class BigFile_Data(BigFile):
         memcpy(self.datab[self.blksize * blk : self.blksize * (blk+1)], buf)
 
 
+# synthetic bigfile that only loads data from numpy array
+class BigFile_Data_RO(BigFile_Data):
+    def storeblk(self, blk, buf):
+        raise RuntimeError('tests should not try to change test data')
+
+
 PS = 2*1024*1024    # FIXME hardcoded, TODO -> ram.pagesize
 
 
@@ -292,11 +298,6 @@ def test_bigarray_indexing_Nd():
     # NOTE +PS so that BigFile_Data has no problem loading last blk
     #      (else data slice will be smaller than buf)
     data  = arange(mul(shape) + PS, dtype=uint32)
-
-    # synthetic bigfile that only loads data from numpy array
-    class BigFile_Data_RO(BigFile_Data):
-        def storeblk(self, blk, buf):
-            raise RuntimeError('tests should not try to change test data')
 
     f  = BigFile_Data_RO(data, PS)
     fh = f.fileh_open()
