@@ -36,7 +36,7 @@ def memset(buf, c):
 # precondition: len(dst) == len(src)
 def memcpy(dst, src):
     l = len(src)
-    assert len(dst) == l
+    assert len(dst) >= l
     adst = ndarray(l, buffer=dst, dtype=uint8)
     asrc = ndarray(l, buffer=src, dtype=uint8)
     copyto(adst, asrc)
