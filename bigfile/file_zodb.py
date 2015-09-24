@@ -45,17 +45,64 @@ from weakref import WeakSet
 # XXX write about why we can't memory-dirty -> ZBlk (memory could be modified
 # later one more time)
 
-
-# data of 1 file block as stored in ZODB
-class ZBlk(Persistent):
-    # ._v_blkdata   - bytes
+# Base class for data of 1 file block as stored in ZODB
+class ZBlkBase(Persistent):
     # ._v_zfile     - ZBigFile | None
     # ._v_blk       - offset of this blk in ._v_zfile | None
-    __slots__ = ('_v_blkdata', '_v_zfile', '_v_blk')
+    __slots__ = ('_v_zfile', '_v_blk')
     # NOTE _v_ - so that we can alter it without Persistent noticing -- we'll
     #      manage ZBlk states by ourselves explicitly.
 
+    def __init__(self):
+        self._v_zfile = None
+        self._v_blk   = None
+
+
     # client requests us to load blkdata from DB, which will then go to memory
+    # DB -> .blkdata  (-> memory-page)
+    def loadblkdata(self):
+        raise NotImplementedError()
+
+    # client requests us to set blkdata to be later saved to DB
+    # (DB <- )  .blkdata <- memory-page
+    def setblkdata(self, buf):
+        raise NotImplementedError()
+
+
+    # make this ZBlk know it represents zfile[blk]
+    # NOTE this has to be called by master every time ZBlk object potentially
+    #      goes from GHOST to Live state
+    # NOTE it is ok to keep reference to zfile (yes it creates
+    #      ZBigFile->ZBlk->ZBigFile cycle but that does not hurt).
+    def bindzfile(self, zfile, blk):
+        # bind; if already bound, should be the same
+        if self._v_zfile is None:
+            self._v_zfile   = zfile
+            self._v_blk     = blk
+        else:
+            assert self._v_zfile    is zfile
+            assert self._v_blk      == blk
+
+
+    # DB notifies this object has to be invalidated
+    # (DB -> invalidate .blkdata -> invalidate memory-page)
+    def _p_invalidate(self):
+        # do real invalidation only once - else we already lost ._v_zfile last time
+        if self._p_state is GHOST:
+            return
+        # on invalidation we must be already bound
+        # (to know which ZBigFileH to propagate invalidation to)
+        assert self._v_zfile    is not None
+        assert self._v_blk      is not None
+        self._v_zfile.invalidateblk(self._v_blk)
+        Persistent._p_invalidate(self)
+
+
+# data of 1 file block as stored in ZODB
+class ZBlk(ZBlkBase):
+    # ._v_blkdata   - bytes
+    __slots__ = ('_v_blkdata',)
+
     # DB -> ._v_blkdata  (-> memory-page)
     def loadblkdata(self):
         # ensure ._v_blkdata is loaded
@@ -76,7 +123,6 @@ class ZBlk(Persistent):
 
         return blkdata
 
-    # client requests us to set blkdata to be later saved to DB
     # (DB <- )  ._v_blkdata <- memory-page
     def setblkdata(self, buf):
         blkdata = bytes(buf)                    # FIXME does memcpy
@@ -112,42 +158,12 @@ class ZBlk(Persistent):
     # DB (through pickle) loads data to memory
     # DB -> ._v_blkdata  (-> memory-page)
     def __setstate__(self, state):
+        super(ZBlk, self).__init__()
         self._v_blkdata = state
-        self._v_zfile   = None
-        self._v_blk     = None
 
     # ZBlk as initially created (empty placeholder)
     def __init__(self):
         self.__setstate__(None)
-
-
-    # make this ZBlk know it represents zfile[blk]
-    # NOTE this has to be called by master every time ZBlk object potentially
-    #      goes from GHOST to Live state
-    # NOTE it is ok to keep reference to zfile (yes it creates
-    #      ZBigFile->ZBlk->ZBigFile cycle but that does not hurt).
-    def bindzfile(self, zfile, blk):
-        # bind; if already bound, should be the same
-        if self._v_zfile is None:
-            self._v_zfile   = zfile
-            self._v_blk     = blk
-        else:
-            assert self._v_zfile    is zfile
-            assert self._v_blk      == blk
-
-
-    # DB notifies this object has to be invalidated
-    # (DB -> invalidate ._v_blkdata -> invalidate memory-page)
-    def _p_invalidate(self):
-        # do real invalidation only once - else we already lost ._v_zfile last time
-        if self._p_state is GHOST:
-            return
-        # on invalidation we must be already bound
-        # (to know which ZBigFileH to propagate invalidation to)
-        assert self._v_zfile    is not None
-        assert self._v_blk      is not None
-        self._v_zfile.invalidateblk(self._v_blk)
-        Persistent._p_invalidate(self)
 
 
 # helper for ZBigFile - just redirect loadblk/storeblk back
