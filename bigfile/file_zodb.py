@@ -144,7 +144,6 @@ class ZBlk(Persistent):
         Persistent._p_invalidate(self)
 
 
-# XXX merge Persistent/BigFile comments into 1 place
 # helper for ZBigFile - just redirect loadblk/storeblk back
 # (because it is not possible to inherit from both Persistent and BigFile at
 #  the same time - see below)
