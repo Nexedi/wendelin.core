@@ -50,14 +50,30 @@ will be our future approach after we teach NEO about object deduplication.
 
 ~~~~
 
-TODO big picture module description
+As file pages are changed in RAM with changes being managed by virtmem
+subsystem, we need to propagate the changes to ZODB objects back at some time.
 
-Things are done this way (vs more ZODB-like way) because:
+Two approaches exist:
 
-    - compatibility with FS approach    (to be able to switch to fuse)
-    - only one manager (vs two managers - bigfile & Connection and synchronizing them)
-    - on abort no need to synchronize changes (= "only 1 manager" as above)
-    - TODO ...
+    1) on every RAM page dirty, in a callback invoked by virtmem, mark
+       corresponding ZODB object as dirty, and at commit time, in
+       obj.__getstate__ retrieve memory content.
+
+    2) hook into commit process, and before committing, synchronize RAM page
+       state to ZODB objects state, propagating all dirtied pages to ZODB objects
+       and then do the commit process as usual.
+
+"1" is more natural to how ZODB works, but requires tight integration between
+virtmem subsystem and ZODB (to be able to receive callback on a page dirtying).
+
+"2" is less natural to how ZODB works, but requires less-tight integration
+between virtmem subsystem and ZODB, and virtmem->ZODB propagation happens only
+at commit time.
+
+Since, for performance reasons, virtmem subsystem is going away and BigFiles
+will be represented by real FUSE-based filesystem with virtual memory being
+done by kernel, where we cannot get callback on a page-dirtying, it is more
+natural to also use "2" here.
 """
 
 from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
@@ -76,8 +92,6 @@ import os
 
 # FIXME peak 2·Ndirty memory consumption on write (should be 1·NDirty)
 
-# XXX write about why we can't memory-dirty -> ZBlk (memory could be modified
-# later one more time)
 
 # Base class for data of 1 file block as stored in ZODB
 class ZBlkBase(Persistent):
