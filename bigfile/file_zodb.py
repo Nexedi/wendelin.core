@@ -210,7 +210,7 @@ class ZBigFile(LivePersistent):
         self.__setstate__((blksize, LOBTree()))     # NOTE L enough for blk_t
 
 
-    # TODO verify get,set state
+    # state is (.blksize, .blktab)
     def __getstate__(self):
         return (self.blksize, self.blktab)
 
