@@ -118,9 +118,7 @@ class ZBlk(Persistent):
 
     # ZBlk as initially created (empty placeholder)
     def __init__(self):
-        self._v_zfile   = None
-        self._v_blk     = None
-        # NOTE ._v_blkdata is not set - the master will set it from outside
+        self.__setstate__(None)
 
 
     # make this ZBlk know it represents zfile[blk]
