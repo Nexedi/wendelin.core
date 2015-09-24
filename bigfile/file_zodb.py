@@ -55,8 +55,8 @@ class ZBlk(Persistent):
     # NOTE _v_ - so that we can alter it without Persistent noticing -- we'll
     #      manage ZBlk states by ourselves explicitly.
 
-    # client requests us to load blkdata from DB
-    # (DB -> ._v_blkdata -> memory-page)
+    # client requests us to load blkdata from DB, which will then go to memory
+    # DB -> ._v_blkdata  (-> memory-page)
     def loadblkdata(self):
         # ensure ._v_blkdata is loaded
         # (it could be not, if e.g. loadblk is called second time for the same
@@ -78,7 +78,7 @@ class ZBlk(Persistent):
 
 
     # DB (through pickle) requests us to emit state to save
-    # (DB <- ._v_blkdata <- memory-page)
+    # DB <- ._v_blkdata  (<- memory-page)
     def __getstate__(self):
         # request to pickle should go in only when zblk was set changed (by
         # storeblk), and only once.
@@ -103,6 +103,7 @@ class ZBlk(Persistent):
 
 
     # DB (through pickle) loads data to memory
+    # DB -> ._v_blkdata  (-> memory-page)
     def __setstate__(self, state):
         self._v_blkdata = state
         self._v_zfile   = None
