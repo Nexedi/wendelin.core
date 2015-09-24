@@ -33,20 +33,9 @@
  *      in hugetlbfs_setattr() and it looks like extending this support to cover
  *      "truncating range" (i.e. holepunch) should not be that hard.
  *
- *      -> TODO fix hugetlbfs
+ *      -> hugetlbfs supports fallocate starting from 4.3-rc1
  *
- *      NOTE care should be taken to correctly maintain huge-pages reservation
- *      numbers etc (HugePages_Rsvd in /proc/meminfo) as hugetlbfs plays own
- *      games with reservation on each mmap to be able to promise not to get
- *      SIGBUS at later page access.
- *
- *      https://lkml.org/lkml/2011/11/16/499
- *
- *      patch: http://lwn.net/Articles/640751/  (hugetlbfs: add fallocate support)
- *             http://lwn.net/Articles/641681/   v2
- *             http://lwn.net/Articles/645458/   v3
- *             http://lwn.net/Articles/647962/   v4
- *             http://lwn.net/Articles/649077/   v5
+ *         https://git.kernel.org/linus/70c3547e36f5c9fbc4caecfeca98f0effa6932c5
  */
 #define _GNU_SOURCE
 #include <sys/types.h>
