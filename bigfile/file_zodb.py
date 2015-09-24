@@ -37,6 +37,7 @@ from BTrees.LOBTree import LOBTree
 from zope.interface import implementer
 from ZODB.Connection import Connection
 from weakref import WeakSet
+import os
 
 # TODO document that first data access must be either after commit or Connection.add
 
@@ -98,8 +99,13 @@ class ZBlkBase(Persistent):
         Persistent._p_invalidate(self)
 
 
-# data of 1 file block as stored in ZODB
-class ZBlk(ZBlkBase):
+
+# ZBlk storage formats
+# NOTE once established formats do not change on disk
+
+
+# ZBlk format 0: raw bytes
+class ZBlk0(ZBlkBase):
     # ._v_blkdata   - bytes
     __slots__ = ('_v_blkdata',)
 
@@ -158,12 +164,29 @@ class ZBlk(ZBlkBase):
     # DB (through pickle) loads data to memory
     # DB -> ._v_blkdata  (-> memory-page)
     def __setstate__(self, state):
-        super(ZBlk, self).__init__()
+        super(ZBlk0, self).__init__()
         self._v_blkdata = state
 
     # ZBlk as initially created (empty placeholder)
     def __init__(self):
         self.__setstate__(None)
+
+
+# backward compatibility (early versions wrote ZBlk0 named as ZBlk)
+ZBlk = ZBlk0
+
+# format-name -> blk format type
+ZBlk_fmt_registry = {
+    'ZBlk0':    ZBlk0,
+}
+
+# format for updated blocks
+ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT', 'ZBlk0')
+if ZBlk_fmt_write not in ZBlk_fmt_registry:
+    raise RuntimeError('E: Unknown ZBlk format %r' % ZBlk_fmt_write)
+
+
+# ----------------------------------------
 
 
 # helper for ZBigFile - just redirect loadblk/storeblk back
@@ -218,7 +241,7 @@ class ZBigFile(LivePersistent):
     # file is split into blocks; each block is stored as separate object in the DB
     #
     #   .blksize
-    #   .blktab       {} blk -> ZBlk(blkdata)
+    #   .blktab       {} blk -> ZBlk*(blkdata)
 
     # ._v_file      _ZBigFile helper
     # ._v_filehset  weakset( _ZBigFileH ) that we created
@@ -263,8 +286,11 @@ class ZBigFile(LivePersistent):
     # store data    dirty page -> ZODB obj
     def storeblk(self, blk, buf):
         zblk = self.blktab.get(blk)
-        if zblk is None:
-            zblk = self.blktab[blk] = ZBlk()
+        zblk_type_write = ZBlk_fmt_registry[ZBlk_fmt_write]
+        # if zblk was absent or of different type - we (re-)create it anew
+        if zblk is None  or \
+           type(zblk) is not zblk_type_write:
+            zblk = self.blktab[blk] = zblk_type_write()
 
         zblk.setblkdata(buf)
         zblk._p_changed = True          # if zblk was already in DB: _p_state -> CHANGED
