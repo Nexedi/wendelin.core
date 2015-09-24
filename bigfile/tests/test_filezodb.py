@@ -15,8 +15,8 @@
 # warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
 # See COPYING file for full licensing terms.
-from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile
-from wendelin.bigfile import ram_reclaim
+from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile, ZBlk_fmt_registry
+from wendelin.bigfile import file_zodb, ram_reclaim
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST, CHANGED
@@ -26,6 +26,8 @@ from ZODB.POSException import ConflictError
 from numpy import ndarray, array_equal, uint8, zeros
 from threading import Thread
 from six.moves import _thread
+from six import b
+import struct
 import weakref
 import gc
 
@@ -721,3 +723,41 @@ def test_bigfile_filezodb_fileh_gc():
 
     del vma2, fh2, f2
     dbclose(root2)
+
+
+# verify how zblk format change works
+def test_bigfile_filezodb_fmt_change():
+    root = dbopen()
+    root['zfile5'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    fh  = f.fileh_open()    # TODO + ram
+    vma = fh.mmap(0, blen)
+
+    # save/restore original ZBlk_fmt_write
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+
+    try:
+        # check all combinations of format pairs via working with blk #0 and
+        # checking internal f structure
+        for src_fmt, src_type in ZBlk_fmt_registry.items():
+            for dst_fmt, dst_type in ZBlk_fmt_registry.items():
+                if src_fmt == dst_fmt:
+                    continue    # skip checking e.g. ZBlk0 -> ZBlk0
+
+                file_zodb.ZBlk_fmt_write = src_fmt
+                struct.pack_into('p', vma, 0, b(src_fmt))
+                transaction.commit()
+
+                assert type(f.blktab[0]) is src_type
+
+                file_zodb.ZBlk_fmt_write = dst_fmt
+                struct.pack_into('p', vma, 0, b(dst_fmt))
+                transaction.commit()
+
+                assert type(f.blktab[0]) is dst_type
+
+    finally:
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+
+    dbclose(root)
