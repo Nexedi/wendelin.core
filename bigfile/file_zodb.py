@@ -18,6 +18,38 @@
 # See COPYING file for full licensing terms.
 """ BigFile backed by ZODB objects
 
+To represent BigFile as ZODB objects, each file block is represented separately
+either as
+
+    1) one ZODB object, or          (ZBlk0)
+    2) group of ZODB objects        (ZBlk1)
+
+with top-level BTree directory #blk -> objects representing block.
+
+For "1" we have
+
+    - low-overhead access time (only 1 object loaded from DB), but
+    - high-overhead in terms of ZODB size (with FileStorage / ZEO, every change
+      to a block causes it to be written into DB in full again)
+
+For "2" we have
+
+    - low-overhead in terms of ZODB size (only part of a block is overwritten
+      in DB on single change), but
+    - high-overhead in terms of access time
+      (several objects need to be loaded for 1 block)
+
+In general it is not possible to have low-overhead for both i) access-time, and
+ii) DB size, with approach where we do block objects representation /
+management on *client* side.
+
+On the other hand, if object management is moved to DB *server* side, it is
+possible to deduplicate them there and this way have low-overhead for both
+access-time and DB size with just client storing 1 object per file block. This
+will be our future approach after we teach NEO about object deduplication.
+
+~~~~
+
 TODO big picture module description
 
 Things are done this way (vs more ZODB-like way) because:
@@ -34,6 +66,7 @@ from wendelin.lib.mem import bzero, memcpy
 from transaction.interfaces import IDataManager, ISynchronizer
 from persistent import Persistent, PickleCache, GHOST
 from BTrees.LOBTree import LOBTree
+from BTrees.IOBTree import IOBTree
 from zope.interface import implementer
 from ZODB.Connection import Connection
 from weakref import WeakSet
@@ -172,12 +205,131 @@ class ZBlk0(ZBlkBase):
         self.__setstate__(None)
 
 
+# ZBlk format 1: block splitted into chunks of fixed size in BTree
+#
+# NOTE zeros are not stored -> either no chunk at all, or trailing zeros
+#      are stripped.
+
+# data as Persistent object
+class ZData(Persistent):
+    __slots__ = ('data')
+    def __init__(self, data):
+        self.data = data
+
+    def __getstate__(self):
+        return self.data
+
+    def __setstate__(self, state):
+        self.data = state
+
+
+class ZBlk1(ZBlkBase):
+    # .chunktab {} offset -> ZData(chunk)
+    __slots__ = ('chunktab')
+
+    # NOTE the reader does not assume chunks are of this size - it decodes
+    # .chunktab as it was originally encoded - only we write new chunks with
+    # this size -> so CHUNKSIZE can be changed over time.
+    CHUNKSIZE = 4096    # XXX ad-hoc ?  (but is a good number = OS pagesize)
+
+
+    # DB -> .chunktab  (-> memory-page)
+    def loadblkdata(self):
+        # empty?
+        if not self.chunktab:
+            return b''
+
+        # find out whole blk len via inspecting tail chunk
+        tail_start = self.chunktab.maxKey()
+        tail_chunk = self.chunktab[tail_start]
+        blklen = tail_start + len(tail_chunk.data)
+
+        # whole buffer initialized as 0 + tail_chunk
+        blkdata = bytearray(blklen)
+        blkdata[tail_start:] = tail_chunk.data
+
+        # go through all chunks besides tail and extract them
+        stop = 0
+        for start, chunk in self.chunktab.items(max=tail_start, excludemax=True):
+            assert start >= stop    # verify chunks don't overlap
+            stop = start+len(chunk.data)
+            blkdata[start:stop] = chunk.data
+
+        # deactivate .chunktab to not waste memory
+        # (see comments about why in ZBlk0.loadblkdata())
+        for chunk in self.chunktab.values():
+            chunk._p_deactivate()
+        self.chunktab._p_deactivate()
+        # TODO deactivate all chunktab buckets - XXX how?
+
+        return blkdata
+
+
+    # (DB <- )  .chunktab <- memory-page
+    def setblkdata(self, buf):
+        chunktab  = self.chunktab
+        CHUNKSIZE = self.CHUNKSIZE
+
+        # first make sure chunktab was previously written with the same CHUNKSIZE
+        # (for simplicity we don't allow several chunk sizes to mix)
+        for start, chunk in chunktab.items():
+            if (start % CHUNKSIZE) or len(chunk.data) >= CHUNKSIZE:
+                chunktab.clear()
+                break
+
+        # scan over buf and update/delete changed chunks
+        for start in range(0, len(buf), CHUNKSIZE):
+            data = buf[start:start+CHUNKSIZE]   # FIXME copy on py2
+            # make sure data is bytes
+            # (else we cannot .rstrip() it below)
+            if not isinstance(data, bytes):
+                data = bytes(data)              # FIXME copy on py3
+            # trim trailing \0
+            data = data.rstrip(b'\0')           # FIXME copy
+            chunk = chunktab.get(start)
+
+            # all 0 -> make sure to remove chunk
+            if not data:
+                if chunk is not None:
+                    del chunktab[start]
+
+            # some !0 data -> compare and store if changed
+            else:
+                if chunk is None:
+                    chunk = chunktab[start] = ZData(b'')
+
+                if chunk.data != data:
+                    chunk.data = data
+
+
+    # DB (through pickle) requests us to emit state to save
+    # DB <- .chunktab  (<- memory-page)
+    def __getstate__(self):
+        # TODO do not waste memory for duplicated data? (.chunktab memory is
+        # only intermediate on path from memory-page to DB). The freeing could
+        # be done with e.g. delayed deactivation after transaction completes.
+        return self.chunktab
+
+    # DB (through pickle) loads data to memory
+    # DB -> .chunktab  (-> memory-page)
+    def __setstate__(self, state):
+        super(ZBlk1, self).__init__()
+        self.chunktab = state
+
+
+    # ZBlk1 as initially created (empty placeholder)
+    def __init__(self):
+        super(ZBlk1, self).__init__()
+        self.__setstate__(IOBTree())
+
+
 # backward compatibility (early versions wrote ZBlk0 named as ZBlk)
 ZBlk = ZBlk0
 
 # format-name -> blk format type
 ZBlk_fmt_registry = {
     'ZBlk0':    ZBlk0,
+    'ZBlk1':    ZBlk1,
 }
 
 # format for updated blocks
