@@ -76,6 +76,11 @@ class ZBlk(Persistent):
 
         return blkdata
 
+    # client requests us to set blkdata to be later saved to DB
+    # (DB <- )  ._v_blkdata <- memory-page
+    def setblkdata(self, buf):
+        self._v_blkdata = bytes(buf)    # FIXME does memcpy
+
 
     # DB (through pickle) requests us to emit state to save
     # DB <- ._v_blkdata  (<- memory-page)
@@ -244,7 +249,7 @@ class ZBigFile(LivePersistent):
         if zblk is None:
             zblk = self.blktab[blk] = ZBlk()
 
-        zblk._v_blkdata = bytes(buf)    # FIXME does memcpy
+        zblk.setblkdata(buf)
         zblk._p_changed = True          # if zblk was already in DB: _p_state -> CHANGED
         zblk.bindzfile(self, blk)
 
