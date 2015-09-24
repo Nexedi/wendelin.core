@@ -79,7 +79,9 @@ class ZBlk(Persistent):
     # client requests us to set blkdata to be later saved to DB
     # (DB <- )  ._v_blkdata <- memory-page
     def setblkdata(self, buf):
-        self._v_blkdata = bytes(buf)    # FIXME does memcpy
+        blkdata = bytes(buf)                    # FIXME does memcpy
+        # trim trailing \0
+        self._v_blkdata = blkdata.rstrip(b'\0') # FIXME copy
 
 
     # DB (through pickle) requests us to emit state to save
@@ -238,9 +240,10 @@ class ZBigFile(LivePersistent):
         # TODO use specialized unpickler and load data directly to blk.
         #      also in DB better store directly {#blk -> #dataref} without ZBlk overhead
         blkdata = zblk.loadblkdata()
-        assert len(blkdata) == self._v_file.blksize
+        assert len(blkdata) <= self._v_file.blksize
         zblk.bindzfile(self, blk)
         memcpy(buf, blkdata)        # FIXME memcpy
+        #bzero(buftail)             # not needed - buf comes pre-cleared from OS
 
 
     # store data    dirty page -> ZODB obj
