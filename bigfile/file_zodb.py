@@ -287,7 +287,7 @@ class ZBlk1(ZBlkBase):
         # first make sure chunktab was previously written with the same CHUNKSIZE
         # (for simplicity we don't allow several chunk sizes to mix)
         for start, chunk in chunktab.items():
-            if (start % CHUNKSIZE) or len(chunk.data) >= CHUNKSIZE:
+            if (start % CHUNKSIZE) or len(chunk.data) > CHUNKSIZE:
                 chunktab.clear()
                 break
 

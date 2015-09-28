@@ -761,3 +761,50 @@ def test_bigfile_filezodb_fmt_change():
         file_zodb.ZBlk_fmt_write = fmt_write_save
 
     dbclose(root)
+
+
+# test that ZData are reused for changed chunks in ZBlk1 format
+def test_bigfile_zblk1_zdata_reuse():
+    # set ZBlk_fmt_write to ZBlk1 for this test
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+    file_zodb.ZBlk_fmt_write = 'ZBlk1'
+    try:
+        _test_bigfile_zblk1_zdata_reuse()
+    finally:
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+
+def _test_bigfile_zblk1_zdata_reuse():
+    root = dbopen()
+    root['zfile6'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    fh  = f.fileh_open()    # TODO + ram
+    vma = fh.mmap(0, 1)
+    b   = Blk(vma, 0)
+
+    # initially empty and zero
+    assert len(f.blktab) == 0
+    assert (b == 0).all()
+
+    # set all to 1 and save ZData instances
+    b[:] = 1
+    assert (b == 1).all()
+    transaction.commit()
+    assert len(f.blktab) == 1
+    zblk0_v1 = f.blktab[0]
+    assert len(zblk0_v1.chunktab) == blksize / file_zodb.ZBlk1.CHUNKSIZE
+    zdata_v1 = zblk0_v1.chunktab.values()
+
+    # set all to 2 and verify ZBlk/ZData instances were reused
+    b[:] = 2
+    assert (b == 2).all()
+    transaction.commit()
+    assert len(f.blktab) == 1
+    zblk0_v2 = f.blktab[0]
+    assert zblk0_v2 is zblk0_v1
+    assert len(zblk0_v2.chunktab) == blksize / file_zodb.ZBlk1.CHUNKSIZE
+    zdata_v2 = zblk0_v2.chunktab.values()
+
+    assert len(zdata_v1) == len(zdata_v2)
+    for i in range(len(zdata_v1)):
+        assert zdata_v1[i] is zdata_v2[i]
