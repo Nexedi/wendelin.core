@@ -231,7 +231,20 @@ class ZData(Persistent):
         self.data = data
 
     def __getstate__(self):
-        return self.data
+        # request to pickle should go in only when zblk was set changed (by
+        # storeblk), and only once.
+        assert self._p_state is not GHOST
+
+        data = self.data
+        # do not waste memory for duplicated data - it was extracted from
+        # memory page, so as soon as it lands to DB, we do not need to keep
+        # data here. (see ZBlk0.__getstate__() for details)
+        #
+        # release .data and thus it will free after return will be processed
+        # (invalidate because .data was changed - so deactivate won't work)
+        self._p_invalidate()
+
+        return data
 
     def __setstate__(self, state):
         self.data = state
@@ -306,6 +319,7 @@ class ZBlk1(ZBlkBase):
             if not data:
                 if chunk is not None:
                     del chunktab[start]
+                    chunk._p_deactivate()
 
             # some !0 data -> compare and store if changed
             else:
@@ -314,14 +328,23 @@ class ZBlk1(ZBlkBase):
 
                 if chunk.data != data:
                     chunk.data = data
+                    # data changed and is queued to be committed to db.
+                    # ZData will care about this chunk deactivation after DB
+                    # asks for its data - see ZData.__getstate__().
+
+                else:
+                    # we loaded chunk for .data comparison, but now it is no
+                    # more needed
+                    chunk._p_deactivate()
 
 
     # DB (through pickle) requests us to emit state to save
     # DB <- .chunktab  (<- memory-page)
     def __getstate__(self):
-        # TODO do not waste memory for duplicated data? (.chunktab memory is
-        # only intermediate on path from memory-page to DB). The freeing could
-        # be done with e.g. delayed deactivation after transaction completes.
+        # .chunktab memory is only intermediate on path from memory-page to DB.
+        # We will free it on a per-chunk basis, after each chunk is queried for
+        # data by DB. See ZData.__getstate__() for details, and
+        # ZBlk0.__getstate__() for more comments.
         return self.chunktab
 
     # DB (through pickle) loads data to memory
