@@ -2,10 +2,16 @@
 # -*- coding: utf-8 -*-
 """Demo program that generates and computes on ZBigArray bigger than RAM
 
-gen:    generate signal
-read:   read generated signal and compute its mean/var/sum
+This program demonstrates how it is possible to work with arrays bigger than
+RAM. There are 2 execution modes:
 
-TODO text
+    gen:    generate signal
+    read:   read generated signal and compute its mean/var/sum
+
+Generation mode writes signal parts in limited-by-size blocks, because the
+amount of changes in one transaction should be less than available RAM.
+
+Read mode creates ndarray view for the whole array and process it in full.
 """
 
 from __future__ import print_function
