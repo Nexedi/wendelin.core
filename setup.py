@@ -199,13 +199,17 @@ if os.path.exists('.git'):  # FIXME won't work if we are checked out as e.g. sub
     register_as_entrypoint(git_lsfiles, 'git', 'setuptools.file_finders', 'setuptools')
 
 
-
-
+# read file content
+def readfile(path):
+    with open(path, 'r') as f:
+        return f.read()
 
 setup(
     name        = 'wendelin.core',
     version     = '0.4',
     description = 'Out-of-core NumPy arrays',
+    long_description = '%s\n----\n\n%s' % (
+                            readfile('README.rst'), readfile('CHANGELOG')),
     url         = 'https://lab.nexedi.com/nexedi/wendelin.core',
     license     = 'GPLv3+ with wide exception for Open-Source',
     author      = 'Kirill Smelkov',
