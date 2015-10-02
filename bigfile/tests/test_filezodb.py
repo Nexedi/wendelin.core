@@ -23,7 +23,7 @@ from persistent import UPTODATE, GHOST, CHANGED
 import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError
-from numpy import ndarray, array_equal, uint8, zeros
+from numpy import ndarray, array_equal, uint32, zeros, arange
 from threading import Thread
 from six.moves import _thread
 from six import b
@@ -205,9 +205,10 @@ def test_livepersistent():
 
 
 
-# i'th memory block as u8 ndarray
+# i'th memory block as u32 ndarray
+blksize32 = blksize // 4
 def Blk(vma, i):
-    return ndarray(blksize, offset=i*blksize, buffer=vma, dtype=uint8)
+    return ndarray(blksize32, offset=i*blksize, buffer=vma, dtype=uint32)
 
 def test_bigfile_filezodb():
     root = dbopen()
@@ -218,13 +219,14 @@ def test_bigfile_filezodb():
     vma = fh.mmap(0, blen)  # XXX assumes blksize == pagesize
 
     # verify that empty file reads as all zeros
-    data0 = zeros(blksize, dtype=uint8)
+    data0 = zeros(blksize32, dtype=uint32)
+    dataX = lambda i: arange(i*blksize32, (i+1)*blksize32, dtype=uint32)
     for i in xrange(blen):
         assert array_equal(data0, Blk(vma, i))
 
     # dirty data
     for i in xrange(blen):
-        Blk(vma, i)[0] = i
+        Blk(vma, i)[:] = dataX(i)
 
     # verify that the changes are lost after abort
     transaction.abort()
@@ -235,7 +237,7 @@ def test_bigfile_filezodb():
     # dirty & abort once again
     # (verifies that ZBigFile data manager re-registers with transaction)
     for i in xrange(blen):
-        Blk(vma, i)[0] = i
+        Blk(vma, i)[:] = dataX(i)
 
     transaction.abort()
     for i in xrange(blen):
@@ -244,7 +246,7 @@ def test_bigfile_filezodb():
 
     # dirty data & commit
     for i in xrange(blen):
-        Blk(vma, i)[0] = i
+        Blk(vma, i)[:] = dataX(i)
 
     transaction.commit()
 
@@ -265,7 +267,7 @@ def test_bigfile_filezodb():
 
     # verify data as re-loaded
     for i in xrange(blen):
-        assert Blk(vma, i)[0] == i
+        assert array_equal(Blk(vma, i), dataX(i))
 
 
     # evict all loaded pages and test loading them again
@@ -274,7 +276,7 @@ def test_bigfile_filezodb():
     assert reclaimed >= blen    # XXX assumes pagesize=blksize
 
     for i in xrange(blen):
-        assert Blk(vma, i)[0] == i
+        assert array_equal(Blk(vma, i), dataX(i))
 
     # dirty once again & commit
     # (verified ZBlk.__setstate__() & storeblk logic when storing data the second time)
@@ -298,6 +300,7 @@ def test_bigfile_filezodb():
     # verify data as re-loaded
     for i in xrange(blen):
         assert Blk(vma, i)[0] == i+1
+        assert array_equal(Blk(vma, i)[1:], dataX(i)[1:])
 
 
     # ZBigFile should survive Persistent cache clearing and not go to ghost
@@ -314,6 +317,7 @@ def test_bigfile_filezodb():
 
     # verify that data changes propagation continue to work
     assert Blk(vma, 0)[0] == 1
+    assert array_equal(Blk(vma, 0)[1:], dataX(0)[1:])
     Blk(vma, 0)[0] = 99
     transaction.commit()
 
@@ -329,8 +333,10 @@ def test_bigfile_filezodb():
 
     # verify data as re-loaded
     assert Blk(vma, 0)[0] == 99
+    assert array_equal(Blk(vma, 0)[1:], dataX(0)[1:])
     for i in xrange(1, blen):
         assert Blk(vma, i)[0] == i+1
+        assert array_equal(Blk(vma, i)[1:], dataX(i)[1:])
 
 
     dbclose(root)
