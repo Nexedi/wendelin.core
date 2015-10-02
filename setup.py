@@ -206,7 +206,7 @@ setup(
     name        = 'wendelin.core',
     version     = '0.4',
     description = 'Out-of-core NumPy arrays',
-    url         = 'http://www.wendelin.io/',
+    url         = 'https://lab.nexedi.com/nexedi/wendelin.core',
     license     = 'GPLv3+ with wide exception for Open-Source',
     author      = 'Kirill Smelkov',
     author_email= 'kirr@nexedi.com',
