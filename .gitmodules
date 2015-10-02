@@ -6,4 +6,4 @@
 # but people are sometimes blocked to access git:// because of firewalls.
 #
 # Also it is better to not depend on thirdparty hosting sites
-	url = https://lab.nexedi.cn/mirror/ccan.git
+	url = https://lab.nexedi.com/mirror/ccan.git
