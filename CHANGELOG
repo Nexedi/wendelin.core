@@ -4,25 +4,31 @@ Wendelin.core change history
 0.4 (2015-08-19)
 ----------------
 
-- Add support for O(δ) in-place BigArray.append()
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/1245acc9
+- Add support for O(δ) in-place BigArray.append() (commit__)
 
-- Implement proper multithreading support
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/d53271b9
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/1245acc9
+
+- Implement proper multithreading support (commit__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/d53271b9
 
 - Implement proper RAM pages invalidation when backing ZODB objects are changed
-  from outside
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/cb779c7b
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/92bfd03e
+  from outside (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/cb779c7b
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/92bfd03e
 
 - Fix all kind of failures that could happen when ZODB connection changes
-  worker thread in-between handling requests
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/c7c01ce4
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/64d1f40b
+  worker thread in-between handling requests (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/c7c01ce4
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/64d1f40b
 
 - Tox tests now cover usage with FileStorage, ZEO and NEO ZODB storages
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/010eeb35
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/7fc4ec66
+  (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/010eeb35
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/7fc4ec66
 
 - Various bugfixes
 
@@ -40,7 +46,9 @@ Wendelin.core change history
   either succeeds, or raises MemoryError if not enough address space is
   available to cover whole A. (current limitation is ~ 127TB on linux/amd64)
 
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/00db08d6
+  (commit__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/00db08d6
 
 - Various bugfixes (build-fixes, crashes, overflows, etc)
 
@@ -48,8 +56,9 @@ Wendelin.core change history
 0.2 (2015-05-25)
 ----------------
 
-- Add support for O(1) in-place BigArray.resize()
-  https://lab.nexedi.com/nexedi/wendelin.core/commit/ca064f75
+- Add support for O(1) in-place BigArray.resize() (commit__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/ca064f75
 
 - Various build bugfixes (older systems, non-std python, etc)
 
