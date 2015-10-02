@@ -1,6 +1,19 @@
 Wendelin.core change history
 ============================
 
+0.5 (2015-10-02)
+----------------
+
+- Introduce another storage format, which is optimized for small changes, and
+  make it the default.
+  (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/13c0c17c
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/9ae42085
+
+- Various bugfixes and documentation improvements
+
+
 0.4 (2015-08-19)
 ----------------
 
