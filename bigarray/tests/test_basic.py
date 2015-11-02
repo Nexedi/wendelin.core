@@ -88,6 +88,25 @@ def test_bigarray_basic():
     # TODO .base
 
 
+    B = BigArray((10,3), int32, Zh, order='F')
+
+    raises(TypeError, "B.data")
+    assert B.strides    == (4, 40)
+    assert B.dtype      == dtype(int32)
+    # XXX .flags?
+    # XXX .flat?    (non-basic)
+    # XXX .imag?    (non-basic)
+    # XXX .real?    (non-basic)
+    assert B.size       == 10*3
+    assert len(B)       == 3
+    assert B.itemsize   == 4
+    assert B.nbytes     == 4*10*3
+    assert B.ndim       == 2
+    assert B.shape      == (10,3)
+    # XXX .ctypes   (non-basic)
+    # TODO .base
+
+
 
 # DoubleGet(obj1, obj2)[key] -> obj1[key], obj2[key]
 class DoubleGet:
@@ -349,59 +368,60 @@ def test_bigarray_indexing_Nd():
     f  = BigFile_Data_RO(data, PS)
     fh = f.fileh_open()
 
-    A  = BigArray(shape, uint32, fh)                    # bigarray with test data and shape
-    A_ = data[:mul(shape)].reshape(shape)               # ndarray  ----//----
+    for order in ('C', 'F'):
+        A  = BigArray(shape, uint32, fh, order=order)       # bigarray with test data and shape
+        A_ = data[:mul(shape)].reshape(shape, order=order)  # ndarray  ----//----
 
-    # AA[key] -> A[key], A_[key]
-    AA = DoubleGet(A, A_)
-
-
-    # now just go over combinations of various slice at each dimension, and see
-    # whether slicing result is the same ndarray would do.
-    for idx in idx_to_test(shape):
-        a, a_ = AA[idx]
-        assert array_equal(a, a_)
+        # AA[key] -> A[key], A_[key]
+        AA = DoubleGet(A, A_)
 
 
-    # any part of index out of range
-    # - element access  -> raises IndexError
-    # - slice access    -> empty
-    for idxpos in range(len(shape)):
-        idx  = [0]*len(shape)
-        # idx -> tuple(idx)
-        # ( list would mean advanced indexing - not what we want )
-        idxt = lambda : tuple(idx)
-
-        # valid access element access
-        idx[idxpos] = shape[idxpos] - 1     # 0, 0, 0,  Ni-1, 0 ,0, 0
-        a, a_ = AA[idxt()]
-        assert array_equal(a, a_)
-
-        # out-of-range element access
-        idx[idxpos] = shape[idxpos]         # 0, 0, 0,  Ni  , 0 ,0, 0
-        raises(IndexError, 'A [idxt()]')
-        raises(IndexError, 'A_[idxt()]')
-
-        # out-of-range slice access
-        idx[idxpos] = slice(shape[idxpos],  # 0, 0, 0,  Ni:Ni+1  , 0 ,0, 0
-                            shape[idxpos]+1)
-        a, a_ = AA[idxt()]
-        assert array_equal(a, a_)
-        assert a .size == 0
-        assert a_.size == 0
+        # now just go over combinations of various slice at each dimension, and see
+        # whether slicing result is the same ndarray would do.
+        for idx in idx_to_test(shape):
+            a, a_ = AA[idx]
+            assert array_equal(a, a_)
 
 
-    # TODO ... -> expanded (0,1,2,negative), rejected if many
-    # TODO newaxis
-    # TODO nidx < len(shape)
-    # TODO empty slice in major row, empty slice in secondary row
-    """
-    # ellipsis  - take some idx[a:b] and replace it by ...
-    for ellipsis in range(2):   # 0 - no ellipsis
+        # any part of index out of range
+        # - element access  -> raises IndexError
+        # - slice access    -> empty
+        for idxpos in range(len(shape)):
+            idx  = [0]*len(shape)
+            # idx -> tuple(idx)
+            # ( list would mean advanced indexing - not what we want )
+            idxt = lambda : tuple(idx)
 
-        # newaxis   - added after at some position(s)
-        for newaxis in range(3):    # 0 - no newaxis
-    """
+            # valid access element access
+            idx[idxpos] = shape[idxpos] - 1     # 0, 0, 0,  Ni-1, 0 ,0, 0
+            a, a_ = AA[idxt()]
+            assert array_equal(a, a_)
+
+            # out-of-range element access
+            idx[idxpos] = shape[idxpos]         # 0, 0, 0,  Ni  , 0 ,0, 0
+            raises(IndexError, 'A [idxt()]')
+            raises(IndexError, 'A_[idxt()]')
+
+            # out-of-range slice access
+            idx[idxpos] = slice(shape[idxpos],  # 0, 0, 0,  Ni:Ni+1  , 0 ,0, 0
+                                shape[idxpos]+1)
+            a, a_ = AA[idxt()]
+            assert array_equal(a, a_)
+            assert a .size == 0
+            assert a_.size == 0
+
+
+        # TODO ... -> expanded (0,1,2,negative), rejected if many
+        # TODO newaxis
+        # TODO nidx < len(shape)
+        # TODO empty slice in major row, empty slice in secondary row
+        """
+        # ellipsis  - take some idx[a:b] and replace it by ...
+        for ellipsis in range(2):   # 0 - no ellipsis
+
+            # newaxis   - added after at some position(s)
+            for newaxis in range(3):    # 0 - no newaxis
+        """
 
 
 def test_bigarray_resize():
@@ -465,42 +485,53 @@ def test_bigarray_resize():
 
 
 # ~ arange(n*3*2).reshape(n,3,2)
-def arange32(start, stop, dtype=None):
+def arange32_c(start, stop, dtype=None):
     return arange(start*3*2, stop*3*2, dtype=dtype).reshape((stop-start),3,2)
+def arange32_f(start, stop, dtype=None):
+    return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start), order='F')
+    #return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start))
 
 def test_bigarray_append():
-    data = zeros(8*PS, dtype=uint32)
-    f   = BigFile_Data(data, PS)
-    fh  = f.fileh_open()
+    for order in ('C', 'F'):
+        data = zeros(8*PS, dtype=uint32)
+        f   = BigFile_Data(data, PS)
+        fh  = f.fileh_open()
 
-    # first make sure arange32 works correctly
-    x = numpy.append( arange32(0,4), arange32(4,7), axis=0 )
-    assert array_equal(x, arange32(0,7))
-    assert array_equal(x.ravel(), arange(7*3*2))
+        arange32 = {'C': arange32_c, 'F': arange32_f} [order]
 
-    # init empty BigArray of shape (x,3,2)
-    A   = BigArray((0,3,2), int64, fh)
-    assert array_equal(A[:], arange32(0,0))
+        # first make sure arange32 works correctly
+        x = numpy.append( arange32(0,4), arange32(4,7), axis={'C': 0, 'F': 2} [order] )
+        #x = numpy.append( arange32(0,4), arange32(4,7), axis=0)
+        #x = numpy.append( arange32(0,4), arange32(4,7))
+        assert array_equal(x, arange32(0,7))
+        assert array_equal(x.ravel(order), arange(7*3*2))
 
-    # append initial data
-    A.append(arange32(0,2))
-    assert array_equal(A[:], arange32(0,2))
-    A.append(arange32(2,3))
-    assert array_equal(A[:], arange32(0,3))
+        # init empty BigArray of shape (x,3,2)
+        A   = BigArray({'C': (0,3,2), 'F': (2,3,0)} [order], int64, fh, order=order)
+        assert array_equal(A[:], arange32(0,0))
 
-    # append plain list (test for arg conversion)
-    A.append([[[18,19], [20,21], [22,23]]])
-    assert array_equal(A[:], arange32(0,4))
+        # append initial data
+        A.append(arange32(0,2))
+        assert array_equal(A[:], arange32(0,2))
+        A.append(arange32(2,3))
+        assert array_equal(A[:], arange32(0,3))
 
-    # append with incorrect shape - rejected, original stays the same
-    assert raises(ValueError, 'A.append(arange(3))')
-    assert array_equal(A[:], arange32(0,4))
-    assert raises(ValueError, 'A.append(arange(3*2).reshape(3,2))')
-    assert array_equal(A[:], arange32(0,4))
+        # append plain list (test for arg conversion)
+        A.append({'C': [[[18,19], [20,21], [22,23]]],   \
+                  'F': [[[18],[20],[22]], [[19],[21],[23]]]}  [order])
+        assert array_equal(A[:], arange32(0,4))
 
-    # append with correct shape, but incompatible dtype - rejected, original stays the same
-    assert raises(ValueError, 'A.append(asarray([[[0,1], [2,3], [4,"abc"]]], dtype=object))')
-    assert array_equal(A[:], arange32(0,4))
+        # append with incorrect shape - rejected, original stays the same
+        assert raises(ValueError, 'A.append(arange(3))')
+        assert array_equal(A[:], arange32(0,4))
+        assert raises(ValueError, 'A.append(arange(3*2).reshape(3,2))')
+        assert array_equal(A[:], arange32(0,4))
+
+        # append with correct shape, but incompatible dtype - rejected, original stays the same
+        assert raises(ValueError,
+                {'C': 'A.append(asarray([[[0,1], [2,3], [4,"abc"]]], dtype=object))',
+                 'F': 'A.append(asarray([[[0],[1],[2]], [[3],[4],["abc"]]], dtype=object))'} [order] )
+        assert array_equal(A[:], arange32(0,4))
 
 
 

@@ -36,7 +36,7 @@ of physical RAM.
 
 from __future__ import print_function
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, sign, newaxis, asarray
+from numpy import ndarray, dtype, sign, newaxis, asarray, argmax
 import logging
 
 
@@ -53,9 +53,9 @@ class BigArray(object):
 
         # ._stridev       []int
         #                           j-1
-        #                   strj = prod shapej  # XXX *dtype.itemsize
-        # XXX on start translates to strides
-        # .order            'C' or 'F'  XXX other orders?
+        #                   strj = prod shapej  # XXX *dtype.itemsize (for C order)
+        #
+        # ._order           'C' or 'F'
 
         '_v_fileh',     # bigfile memory mapping for this array
     )
@@ -64,7 +64,6 @@ class BigArray(object):
 
     # TODO doc -> see ndarray
     # NOTE does not accept strides
-    # TODO handle order
     # NOTE please be cooperative to ZBigArray and name helper data members starting with _v_
     def __init__(self, shape, dtype_, bigfileh, order='C'):
         self._init0(shape, dtype_, order)
@@ -75,17 +74,28 @@ class BigArray(object):
     def _init0(self, shape, dtype_, order):
         self._dtype = dtype(dtype_)
         self._shape = shape
+        self._order = order
         # TODO +offset ?
         # TODO +strides ?
 
-        if order != 'C':
+        # order -> stride_in_items(i)
+        ordering = {
+            'C': lambda i:  mul(shape[i+1:]),
+            'F': lambda i:  mul(shape[:i]),
+        }
+        Si = ordering.get(order)
+        if Si is None:
             raise NotImplementedError('Order %s not supported' % order)
-
 
         # shape, dtype -> ._stridev
         # TODO take dtype.alignment into account ?
-        self._stridev = tuple( mul(shape[i+1:]) * self._dtype.itemsize  \
+        self._stridev = tuple( Si(i) * self._dtype.itemsize  \
                                     for i in range(len(shape)) )
+
+    # major axis for this array
+    @property
+    def _major_axis(self):
+        return argmax(self._stridev)    # NOTE assumes _stridev >= 0
 
 
 
@@ -114,8 +124,8 @@ class BigArray(object):
         return mul(self._shape)
 
     def __len__(self):
-        # lengths of the first axis
-        return self._shape[0]    # FIXME valid only for C-order
+        # lengths of the major axis
+        return self._shape[self._major_axis]
 
     @property
     def itemsize(self):
@@ -177,7 +187,7 @@ class BigArray(object):
         #   end.
         #
         #   TODO discard data from backing file on shrinks.
-        self._init0(new_shape, self.dtype, order='C')   # FIXME order hardcoded
+        self._init0(new_shape, self.dtype, order=self._order)
 
 
     # append BigArray in-place
@@ -195,28 +205,30 @@ class BigArray(object):
     #
     #   BigArray    (N,10,5)
     #   values      (3,10,5)
-    #
-    # XXX we assume major axis is 0 (C ordering)
     def append(self, values):
         values = asarray(values)
 
         # make sure appended values, after major axis, are of the same shape
-        if self.shape[1:] != values.shape[1:]:
+        M = self._major_axis
+        if self.shape[:M] != values.shape[:M]  or  self.shape[M+1:] != values.shape[M+1:]:
             # NOTE the same exception as in numpy.append()
             raise ValueError('all the input array dimensions except for the'
                     'concatenation axis must match exactly')
 
         # resize us, and prepare to rollback, in case of e.g. dtype
         # incompatibility catched on follow-up assignment
-        n, delta = self.shape[0], values.shape[0]
-        self.resize( (n+delta,) + self.shape[1:] )
+        n, delta = self.shape[M], values.shape[M]
+        self.resize( self.shape[:M] + (n+delta,) + self.shape[M+1:] )
 
         # copy values to prepared tail place, and we are done
         try:
-            self[-delta:] = values
+            # delta_idx = [-delta:] in M, : in all other axis
+            delta_idx = [slice(None)] * len(self.shape)
+            delta_idx[M] = slice(-delta, None)
+            self[tuple(delta_idx)] = values
         except:
             # in case of error - rollback the resize and re-raise
-            self.resize( (n,) + self.shape[1:] )
+            self.resize( self.shape[:M] + (n,) + self.shape[M+1:] )
             raise
 
 
@@ -326,71 +338,74 @@ class BigArray(object):
         #   account after we take ndarray view
 
         # major index / stride
-        # FIXME assumes C ordering
-        idx0    = idx[0]
-        stride0 = self._stridev[0]
-        shape0  = self._shape[0]
+        M       = self._major_axis
+        idxM    = idx[M]
+        strideM = self._stridev[M]
+        shapeM  = self._shape[M]
+
+        # utility: replace M'th element in a sequence tuple/list -> tuple
+        Mreplace = lambda t, value: tuple(t[:M]) + (value,) + tuple(t[M+1:])
 
         # major idx start/stop/stride
         try:
-            idx0_start, idx0_stop, idx0_stride = idx0.indices(shape0)
+            idxM_start, idxM_stop, idxM_stride = idxM.indices(shapeM)
         except OverflowError as e:
             # overflow error here means slice indices do not fit into std long,
             # which also practically means we cannot allocate such amount of
             # address space.
             raise MemoryError(e)
 
-        #print('idx0:\t', idx0, '-> [%s:%s:%s]' % (idx0_start, idx0_stop, idx0_stride))
-        #print('strid0:\t', stride0)  #, self._stridev
-        #print('shape0:\t', shape0)   #, self._shape
+        #print('idxM:\t', idxM, '-> [%s:%s:%s]' % (idxM_start, idxM_stop, idxM_stride))
+        #print('stridM:\t', strideM)  #, self._stridev
+        #print('shapeM:\t', shapeM)   #, self._shape
 
 
         # nitems in major row
-        nitems0 = (idx0_stop - idx0_start - sign(idx0_stride)) // idx0_stride + 1
-        #print('nitem0:\t', nitems0)
+        nitemsM = (idxM_stop - idxM_start - sign(idxM_stride)) // idxM_stride + 1
+        #print('nitemM:\t', nitemsM)
 
         # if major row is "empty" slice, we can build view right away without creating vma.
         # e.g. 10:5:1, 5:10:-1, 5:5,  size+100:size+200  ->  []
-        if nitems0 <= 0:
-            view = ndarray((0,) + self._shape[1:], self._dtype)
+        if nitemsM <= 0:
+            view = ndarray(Mreplace(self._shape, 0), self._dtype)
 
         # create appropriate vma and ndarray view to it
         else:
 
             # major slice -> in bytes
-            byte0_start  = idx0_start  * stride0
-            byte0_stop   = idx0_stop   * stride0
-            byte0_stride = idx0_stride * stride0
-            #print('byte0:\t[%s:%s:%s]' % (byte0_start, byte0_stop, byte0_stride))
+            byteM_start  = idxM_start  * strideM
+            byteM_stop   = idxM_stop   * strideM
+            byteM_stride = idxM_stride * strideM
+            #print('byteM:\t[%s:%s:%s]' % (byteM_start, byteM_stop, byteM_stride))
 
             # major slice -> in file pages, always increasing, inclusive
-            if byte0_stride >= 0:
-                page0_min = byte0_start     // pagesize                 # TODO -> fileh.pagesize
-                page0_max = (byte0_stop-1)  // pagesize                 # TODO -> fileh.pagesize
+            if byteM_stride >= 0:
+                pageM_min = byteM_start     // pagesize                 # TODO -> fileh.pagesize
+                pageM_max = (byteM_stop-1)  // pagesize                 # TODO -> fileh.pagesize
             else:
-                page0_min = (byte0_stop  - byte0_stride)     // pagesize# TODO -> fileh.pagesize
-                page0_max = (byte0_start - byte0_stride - 1) // pagesize# TODO -> fileh.pagesize
-            #print('page0:\t[%s, %s]' % (page0_min, page0_max))
+                pageM_min = (byteM_stop  - byteM_stride)     // pagesize# TODO -> fileh.pagesize
+                pageM_max = (byteM_start - byteM_stride - 1) // pagesize# TODO -> fileh.pagesize
+            #print('pageM:\t[%s, %s]' % (pageM_min, pageM_max))
 
 
             # ~~~ mmap file part corresponding to full major slice into memory
-            vma0 = self._fileh.mmap(page0_min, page0_max-page0_min+1)
+            vmaM = self._fileh.mmap(pageM_min, pageM_max-pageM_min+1)
 
 
             # first get ndarray view with only major slice specified and rest indices being ":"
-            view0_shape   = (nitems0,) + self._shape[1:]
-            view0_offset  = byte0_start - page0_min * pagesize # TODO -> fileh.pagesize
-            view0_stridev = (byte0_stride,) + self._stridev[1:]
-            #print('view0_shape:\t', view0_shape, self.shape)
-            #print('view0_stridv:\t', view0_stridev)
-            #print('view0_offset:\t', view0_offset)
-            #print('len(vma0):\t', len(vma0))
-            view0 = ndarray(view0_shape, self._dtype, vma0, view0_offset, view0_stridev)
+            viewM_shape   = Mreplace(self._shape, nitemsM)
+            viewM_offset  = byteM_start - pageM_min * pagesize # TODO -> fileh.pagesize
+            viewM_stridev = Mreplace(self._stridev, byteM_stride)
+            #print('viewM_shape:\t', viewM_shape, self.shape)
+            #print('viewM_stridv:\t', viewM_stridev)
+            #print('viewM_offset:\t', viewM_offset)
+            #print('len(vmaM):\t', len(vmaM))
+            viewM = ndarray(viewM_shape, self._dtype, vmaM, viewM_offset, viewM_stridev)
 
             # now take into account indices after major one
-            view  = view0[(slice(None),) + tuple(idx[1:])]
+            view  = viewM[Mreplace(idx, slice(None))]
 
-            #print('view0:\t', view0.shape)
+            #print('viewM:\t', viewM.shape)
             #print('view:\t',  view.shape)
 
         #print('View:\t',  view)
