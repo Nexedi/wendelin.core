@@ -41,6 +41,7 @@
 #include <sys/vfs.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <errno.h>
 
 
 /* we'll manage RAM in "pages" of 2M
@@ -122,8 +123,12 @@ pgoff_t shmfs_alloc_page(RAMH *ramh0, pgoff_t pgoffset_hint)
     err = fallocate(ramh->ramh_fd, 0 /* without KEEP_SIZE */,
             ramh_pgoffset * pagesize, pagesize);
 
-    if (err)
+    if (err) {
+        /* warn users explicitly, if fallocate() is not supported */
+        if (errno == EOPNOTSUPP)
+            WARN("fallocate() not supported");
         return RAMH_PGOFF_ALLOCFAIL;
+    }
 
     if (ramh_pgoffset >= ramh->ramh_fpgsize)
         ramh->ramh_fpgsize = ramh_pgoffset+1;
