@@ -61,20 +61,35 @@ static int      __ram_reclaim(RAM *ram);
 static pthread_mutex_t virtmem_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 static const VirtGilHooks *virtmem_gilhooks;
 
+void *virt_gil_ensure_unlocked(void)
+{
+    void *gilstate = NULL;
+
+    if (virtmem_gilhooks)
+        gilstate = virtmem_gilhooks->gil_ensure_unlocked();
+
+    return gilstate;
+}
+
+
+void virt_gil_retake_if_waslocked(void *gilstate)
+{
+    if (gilstate)
+        virtmem_gilhooks->gil_retake_if_waslocked(gilstate);
+}
+
 void virt_lock()
 {
     void *gilstate = NULL;
 
     /* make sure we don't hold e.g. python GIL (not to deadlock, as GIL oscillates) */
-    if (virtmem_gilhooks)
-        gilstate = virtmem_gilhooks->gil_ensure_unlocked();
+    gilstate = virt_gil_ensure_unlocked();
 
     /* acquire virtmem lock */
     xpthread_mutex_lock(&virtmem_lock);
 
     /* retake GIL if we were holding it originally */
-    if (gilstate)
-        virtmem_gilhooks->gil_retake_if_waslocked(gilstate);
+    virt_gil_retake_if_waslocked(gilstate);
 }
 
 void virt_unlock()
