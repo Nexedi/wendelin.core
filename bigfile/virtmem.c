@@ -557,7 +557,6 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     }
 
     /* (5) if page was not yet loaded - load it */
-    // XXX protect from concurrent loading of the same page (should be ok with mutex)
     if (page->state < PAGE_LOADED) {
         /* NOTE if we load data in-place, there would be a race with concurrent
          * access to the page here - after first enabling memory-access to
@@ -603,7 +602,6 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         TODO(!pageram); // XXX err
 
         /* loadblk() -> pageram memory */
-        // XXX locking, vs gil?
         blk = page->f_pgoffset;     // NOTE because blksize = pagesize
         err = fileh->file->file_ops->loadblk(fileh->file, blk, pageram);
         /* TODO on error -> try to throw exception somehow to the caller, so
