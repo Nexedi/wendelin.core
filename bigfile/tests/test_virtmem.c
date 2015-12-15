@@ -221,6 +221,25 @@ int M(VMA *vma, pgoff_t idx) {  return bitmap_test_bit(vma->page_ismappedv, idx)
 } while (0)
 
 
+/* vma_on_pagefault() assumes virtmem_lock is taken by caller and can ask it to
+ * retry. Handle fault to the end, like on_pagefault() does. */
+void xvma_on_pagefault(VMA *vma, uintptr_t addr, int write) {
+    virt_lock();
+    while (1) {
+        VMFaultResult vmres;
+        vmres = vma_on_pagefault(vma, addr, write);
+
+        if (vmres == VM_HANDLED)
+            break;
+        if (vmres == VM_RETRY)
+            continue;
+
+        fail("Unexpected return code from vma_on_pagefault: %i", vmres);
+    }
+    virt_unlock();
+}
+
+
 /* test access to file mappings via explicit vma_on_pagefault() calls */
 void test_file_access_synthetic(void)
 {
@@ -317,7 +336,7 @@ void test_file_access_synthetic(void)
 
     /* simulate read access to page[0] - it should load it */
     diag("read page[0]");
-    vma_on_pagefault(vma, vma->addr_start + 0*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 0*PS, 0);
 
     ok1( M(vma, 0));                B(vma, 0*PSb);      MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -341,7 +360,7 @@ void test_file_access_synthetic(void)
 
     /* simulate write access to page[2] - it should load it and mark page dirty */
     diag("write page[2]");
-    vma_on_pagefault(vma, vma->addr_start + 2*PS, 1);
+    xvma_on_pagefault(vma, vma->addr_start + 2*PS, 1);
 
     ok1( M(vma, 0));                B(vma, 0*PSb);      MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -369,7 +388,7 @@ void test_file_access_synthetic(void)
 
     /* read access to page[3] - load */
     diag("read page[3]");
-    vma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
 
     ok1( M(vma, 0));                B(vma, 0*PSb);      MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -401,7 +420,7 @@ void test_file_access_synthetic(void)
 
     /* write access to page[0] - upgrade loaded -> dirty */
     diag("write page[0]");
-    vma_on_pagefault(vma, vma->addr_start + 0*PS, 1);
+    xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);
 
     ok1( M(vma, 0));                B(vma, 0*PSb);                  B(vma, 0*PSb) = 10;
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -436,7 +455,7 @@ void test_file_access_synthetic(void)
      * RAMLimited with 3 allocated pages max). Evicted will be page[3] - as it
      * is the only PAGE_LOADED page. */
     diag("read page[1]");
-    vma_on_pagefault(vma, vma->addr_start + 1*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 1*PS, 0);
 
     ok1( M(vma, 0));                B(vma, 0*PSb);                  B(vma, 0*PSb) = 10;
     ok1( M(vma, 1));                B(vma, 1*PSb);      MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -557,7 +576,7 @@ void test_file_access_synthetic(void)
 
     /* read access to page[2] - should map it R/W - the page is in PAGE_DIRTY state */
     diag("read page[2]");
-    vma_on_pagefault(vma, vma->addr_start + 2*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 2*PS, 0);
 
     ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -612,7 +631,7 @@ void test_file_access_synthetic(void)
 
     /* read  page[3] (so that we have 1 PAGE_LOADED besides PAGE_DIRTY pages) */
     ok1(!pagemap_get(&fh->pagemap, 103));
-    vma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
     page3 = pagemap_get(&fh->pagemap, 103);
     ok1(page3);
 
@@ -635,12 +654,12 @@ void test_file_access_synthetic(void)
 
     /* prepare state (2 dirty pages, only 1 mapped) */
     void mkdirty2() {
-        vma_on_pagefault(vma, vma->addr_start + 0*PS, 1);   /* write page[0] */
-        vma_on_pagefault(vma, vma->addr_start + 2*PS, 1);   /* write page[2] */
+        xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);  /* write page[0] */
+        xvma_on_pagefault(vma, vma->addr_start + 2*PS, 1);  /* write page[2] */
         vma_unmap(vma);
         err = fileh_mmap(vma, fh, 100, 4);
         ok1(!err);
-        vma_on_pagefault(vma, vma->addr_start + 2*PS, 0);
+        xvma_on_pagefault(vma, vma->addr_start + 2*PS, 0);
 
         ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
         ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -808,7 +827,7 @@ void test_file_access_synthetic(void)
     ok1(page3->lru.prev == &ram->lru_list);
 
     /* read page[3] back */
-    vma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
+    xvma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
 
     ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );

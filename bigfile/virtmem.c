@@ -54,11 +54,8 @@ static int      __ram_reclaim(RAM *ram);
 /* global lock which protects manipulating virtmem data structures
  *
  * NOTE not scalable, but this is temporary solution - as we are going to move
- * memory managment back into the kernel, where it is done properly.
- *
- * NOTE type is recursive to support deleting virtmem object via python
- * finalizers (triggered either from decref or from gc - both from sighandler). */
-static pthread_mutex_t virtmem_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+ * memory managment back into the kernel, where it is done properly. */
+static pthread_mutex_t virtmem_lock = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 static const VirtGilHooks *virtmem_gilhooks;
 
 void *virt_gil_ensure_unlocked(void)
@@ -175,6 +172,9 @@ void fileh_close(BigFileH *fileh)
 
     /* drop all pages (dirty or not) associated with this fileh */
     pagemap_for_each(page, &fileh->pagemap) {
+        /* it's an error to close fileh to mapping of which an access is
+         * currently being done in another thread */
+        BUG_ON(page->state == PAGE_LOADING);
         page_drop_memory(page);
         list_del(&page->lru);
         bzero(page, sizeof(*page)); /* just in case */
@@ -417,8 +417,20 @@ void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset)
     virt_lock();
 
     page = pagemap_get(&fileh->pagemap, pgoffset);
-    if (page)
-        page_drop_memory(page);
+    if (page) {
+        /* for pages where loading is in progress, we just remove the page from
+         * pagemap and mark it to be dropped by their loaders after it is done.
+         * In the mean time, as pagemap entry is now empty, on next access to
+         * the memory the page will be created/loaded anew */
+        if (page->state == PAGE_LOADING) {
+            pagemap_del(&fileh->pagemap, pgoffset);
+            page->state = PAGE_LOADING_INVALIDATED;
+        }
+        /* else we just make sure to drop page memory */
+        else {
+            page_drop_memory(page);
+        }
+    }
 
     virt_unlock();
     sigsegv_restore(&save_sigset);
@@ -535,7 +547,7 @@ void *mem_xvalloc(void *addr, size_t len)
 /* pagefault entry when we know request came to our memory area
  *
  * (virtmem_lock already taken by caller)   */
-void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
+VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 {
     pgoff_t pagen;
     Page *page;
@@ -571,8 +583,8 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         pagemap_set(&fileh->pagemap, pagen, page);
     }
 
-    /* (5) if page was not yet loaded - load it */
-    if (page->state < PAGE_LOADED) {
+    /* (5a) if page was not yet loaded - start loading it */
+    if (page->state == PAGE_EMPTY) {
         /* NOTE if we load data in-place, there would be a race with concurrent
          * access to the page here - after first enabling memory-access to
          * the page, other threads could end up reading corrupt data, while
@@ -589,13 +601,15 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         blk_t blk;
         void *pageram;
         int err;
+        BigFile *file;
 
         /*
          * if pagesize < blksize - need to prepare several adjacent pages for blk;
          * if pagesize > blksize - will need to either 1) rescan which blk got
          *    dirty, or 2) store not-even-touched blocks adjacent to modified one.
          */
-        TODO (fileh->file->blksize != page_size(page));
+        file = fileh->file;
+        TODO (file->blksize != page_size(page));
 
         // FIXME doing this mmap-to-temp/unmap is somewhat costly. Better
         // constantly have whole RAM mapping somewhere R/W and load there.
@@ -618,7 +632,18 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 
         /* loadblk() -> pageram memory */
         blk = page->f_pgoffset;     // NOTE because blksize = pagesize
-        err = fileh->file->file_ops->loadblk(fileh->file, blk, pageram);
+
+        /* mark page as loading and unlock virtmem before calling loadblk()
+         *
+         * that call is potentially slow and external code can take other
+         * locks. If that "other locks" are also taken before external code
+         * calls e.g. fileh_invalidate_page() in different codepath a deadlock
+         * can happen. */
+        page->state = PAGE_LOADING;
+        virt_unlock();
+
+        err = file->file_ops->loadblk(file, blk, pageram);
+
         /* TODO on error -> try to throw exception somehow to the caller, so
          *      that it can abort current transaction, but not die.
          *
@@ -627,9 +652,51 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
          */
         TODO (err);
 
+        /* relock virtmem */
+        virt_lock();
+
         xmunmap(pageram, page_size(page));
 
-        page->state = PAGE_LOADED;
+        /* if the page was invalidated while we were loading it, we have to drop
+         * it's memory and the Page structure completely - invalidater already
+         * removed it from pagemap */
+        if (page->state == PAGE_LOADING_INVALIDATED) {
+            page_drop_memory(page);
+            list_del(&page->lru);
+            bzero(page, sizeof(*page)); /* just in case */
+            free(page);
+        }
+
+        /* else just mark the page as loaded ok */
+        else
+            page->state = PAGE_LOADED;
+
+        /* we have to retry the whole fault, because the vma could have been
+         * changed while we were loading page with virtmem lock released */
+        return VM_RETRY;
+    }
+
+    /* (5b) page is currently being loaded by another thread - wait for load to complete
+     *
+     * NOTE a page is protected from being concurently loaded by two threads at
+     * the same time via:
+     *
+     *   - virtmem lock - we get/put pages from fileh->pagemap only under it
+     *   - page->state is set PAGE_LOADING for loading in progress pages
+     *   - such page is inserted in fileh->pagepam
+     *
+     * so if second thread faults at the same memory page, and the page is
+     * still loading, it will find the page in PAGE_LOADING state and will just
+     * wait for it to complete. */
+    if (page->state == PAGE_LOADING) {
+        /* XXX polling instead of proper completion */
+        void *gilstate;
+        virt_unlock();
+        gilstate = virt_gil_ensure_unlocked();
+        usleep(10000);  // XXX with 1000 uslepp still busywaits
+        virt_gil_retake_if_waslocked(gilstate);
+        virt_lock();
+        return VM_RETRY;
     }
 
     /* (6) page data ready. Mmap it atomically into vma address space, or mprotect
@@ -666,7 +733,7 @@ void vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
      * (7) access to page prepared - now it is ok to return from signal handler
      *     - the caller will re-try executing faulting instruction.
      */
-    return;
+    return VM_HANDLED;
 }
 
 
@@ -690,7 +757,8 @@ static int __ram_reclaim(RAM *ram)
         hlru = hlru->next;
         scanned++;
 
-        /* can release ram only from loaded non-dirty pages */
+        /* can release ram only from loaded non-dirty pages
+         * NOTE PAGE_LOADING pages are not dropped - they just continue to load */
         if (page->state == PAGE_LOADED) {
             page_drop_memory(page);
             batch--;
@@ -765,6 +833,10 @@ static void page_drop_memory(Page *page)
 {
     /* Memory for this page goes out. 1) unmap it from all mmaps */
     struct list_head *hmmap;
+
+    /* NOTE we try not to drop memory for loading-in-progress pages.
+     *      so if this is called for such a page - it is a bug. */
+    BUG_ON(page->state == PAGE_LOADING);
 
     if (page->state == PAGE_EMPTY)
         return;

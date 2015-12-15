@@ -76,8 +76,12 @@ typedef struct BigFileH BigFileH;
 /* Page - describes fixed-size item of physical RAM associated with content from fileh */
 enum PageState {
     PAGE_EMPTY      = 0, /* file content has not been loaded yet */
-    PAGE_LOADED     = 1, /* file content has     been loaded and was not modified */
-    PAGE_DIRTY      = 2, /* file content has     been loaded and was     modified */
+    PAGE_LOADING    = 1, /* file content              loading is  in progress */
+    PAGE_LOADING_INVALIDATED
+                    = 2, /* file content              loading was in progress
+                            while request to invalidate the page came in */
+    PAGE_LOADED     = 3, /* file content has     been loaded and was not modified */
+    PAGE_DIRTY      = 4, /* file content has     been loaded and was     modified */
 };
 typedef enum PageState PageState;
 
@@ -220,7 +224,7 @@ void fileh_dirty_discard(BigFileH *fileh);
  *
  * Make sure that page corresponding to pgoffset is not present in fileh memory.
  *
- * The page could be in either dirty or loaded or empty state. In all
+ * The page could be in either dirty or loaded/loading or empty state. In all
  * cases page transitions to empty state and its memory is forgotten.
  *
  * ( Such invalidation is needed to synchronize fileh memory, when we know a
@@ -236,7 +240,12 @@ void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset);
  *
  * (clients call this indirectly via triggering SIGSEGV on read/write to memory)
  */
-void vma_on_pagefault(VMA *vma, uintptr_t addr, int write);
+enum VMFaultResult {
+    VM_HANDLED  = 0, /* pagefault handled */
+    VM_RETRY    = 1, /* pagefault handled partly - handling have to be retried */
+};
+typedef enum VMFaultResult VMFaultResult;
+VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write);
 int pagefault_init(void);   /* in pagefault.c */
 
 

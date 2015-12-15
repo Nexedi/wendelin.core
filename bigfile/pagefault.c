@@ -82,24 +82,39 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
      * coredump (see comments wrt SA_NODEFER in pagefault_init()), but anyway -
      * better check just in case.
      *
-     * NOTE since we are under virtmem lock, here we can use just one static
-     * variable, instead of several per-thread ones.    */
-    static int in_on_pagefault;
+     * NOTE it is ok to use __thread in synchronous sighandler - even if TLS
+     * block is allocated dynamically at runtime, we can overlap with such
+     * allocation only if SIGSEGV happens in that original TLS allocation,
+     * which should not happen, and thus it is already a bug somewhere in
+     * thread datatructures. */
+    static __thread int in_on_pagefault;
     BUG_ON(in_on_pagefault);
     ++in_on_pagefault;
 
+    /* vma_on_pagefault() can tell us to retry handling the fault, e.g. after a
+     * page has been loaded. Loop until pagefault is handled */
+    while (1) {
+        VMFaultResult vmres;
 
-    /* (1) addr -> vma  ;lookup VMA covering faulting memory address */
-    vma = virt_lookup_vma(si->si_addr);
-    if (!vma) {
-        --in_on_pagefault;
-        virt_unlock();
-        goto dont_handle;  /* fault outside registered file slices */
+        /* (1) addr -> vma  ;lookup VMA covering faulting memory address */
+        vma = virt_lookup_vma(si->si_addr);
+        if (!vma) {
+            --in_on_pagefault;
+            virt_unlock();
+            goto dont_handle;  /* fault outside registered file slices */
+        }
+
+        /* now, since we found faulting address in registered memory areas, we know
+         * we should serve this pagefault. */
+        vmres = vma_on_pagefault(vma, (uintptr_t)si->si_addr, write);
+
+        /* see if pagefault handled or should be retried */
+        if (vmres == VM_HANDLED)
+            break;
+        if (vmres == VM_RETRY)
+            continue;
+        BUG();  /* unreachable */
     }
-
-    /* now, since we found faulting address in registered memory areas, we know
-     * we should serve this pagefault. */
-    vma_on_pagefault(vma, (uintptr_t)si->si_addr, write);
 
     /* pagefault served - restore and return from sighandler */
     --in_on_pagefault;
