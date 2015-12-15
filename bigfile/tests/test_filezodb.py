@@ -17,6 +17,7 @@
 # See COPYING file for full licensing terms.
 from wendelin.bigfile.file_zodb import LivePersistent, ZBigFile, ZBlk_fmt_registry
 from wendelin.bigfile import file_zodb, ram_reclaim
+from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE, GHOST, CHANGED
@@ -341,33 +342,6 @@ def test_bigfile_filezodb():
 
     dbclose(root)
 
-
-
-# Notify channel for
-#   - one thread to     .wait('condition'), until
-#   - other thread does .tell('condition')
-class NotifyChannel:
-
-    def __init__(self):
-        self.state = None
-
-    def tell(self, condition):
-        #print >>sys.stderr, '  tell %s\tthread_id: %s\n'    \
-        #        % (condition, _thread.get_ident()),
-        # wait until other thread reads previous tell
-        while self.state is not None:
-            pass
-
-        self.state = condition
-
-    def wait(self, condition):
-        #print >>sys.stderr, '  wait %s\tthread_id: %s\n'    \
-        #        % (condition, _thread.get_ident()),
-        while self.state != condition:
-            pass
-        #print >>sys.stderr, '  have %s\tthread_id: %s\n'    \
-        #        % (condition, _thread.get_ident()),
-        self.state = None
 
 
 # connection can migrate between threads handling requests.

@@ -16,7 +16,8 @@
 #
 # See COPYING file for full licensing terms.
 from wendelin.bigarray.array_zodb import ZBigArray
-from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, NotifyChannel, ram_reclaim_all
+from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, ram_reclaim_all
+from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE

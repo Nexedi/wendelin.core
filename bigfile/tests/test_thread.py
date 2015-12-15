@@ -20,6 +20,34 @@ from threading import Thread
 from time import sleep
 
 from wendelin.bigfile.tests.test_basic import bchr_py2
+from six.moves import _thread
+
+# Notify channel for
+#   - one thread to     .wait('condition'), until
+#   - other thread does .tell('condition')
+class NotifyChannel:
+
+    def __init__(self):
+        self.state = None
+
+    def tell(self, condition):
+        #print >>sys.stderr, '  tell %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        # wait until other thread reads previous tell
+        while self.state is not None:
+            pass
+
+        self.state = condition
+
+    def wait(self, condition):
+        #print >>sys.stderr, '  wait %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        while self.state != condition:
+            pass
+        #print >>sys.stderr, '  have %s\tthread_id: %s\n'    \
+        #        % (condition, _thread.get_ident()),
+        self.state = None
+
 
 
 # Synthetic bigfile that verifies there is no concurrent calls to loadblk
