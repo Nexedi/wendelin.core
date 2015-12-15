@@ -165,7 +165,7 @@ static void shmfs_close(RAMH *ramh0)
     ramh->ramh_fd = -1;
     ramh->ramh_fpgsize = 0;
 
-    // TODO free(self) ?
+    free(ramh);
 }
 
 

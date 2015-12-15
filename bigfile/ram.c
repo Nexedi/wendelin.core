@@ -65,6 +65,7 @@ void ramh_drop_memory(RAMH *ramh, pgoff_t ramh_pgoffset)
 
 void ramh_close(RAMH *ramh)
 {
+    /* NOTE ->close() should free ramh structure itself */
     ramh->ramh_ops->close(ramh);
 }
 

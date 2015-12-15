@@ -125,7 +125,7 @@ void ramh_limited_close(RAMH *ramh0)
 {
     RAMHLimited *ramh = upcast(RAMHLimited *, ramh0);
     ramh->backend->ramh_ops->close(ramh->backend);
-    // TODO free(self) ?
+    free(ramh);
 }
 
 
