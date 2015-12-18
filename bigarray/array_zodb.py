@@ -24,9 +24,15 @@ TODO text
 
 from wendelin.bigarray import BigArray
 from wendelin.bigfile.file_zodb import ZBigFile, LivePersistent
+import inspect
 
 
 # TODO document that first access data must be either before commit or Connection.add
+
+# {} BigArray arg -> default value
+_ = inspect.getargspec(BigArray.__init__)
+BigArray_defaults = dict(zip(reversed(_.args), reversed(_.defaults)))
+
 
 class ZBigArray(BigArray,
                 # Live: don't allow us to go to ghost
@@ -51,6 +57,14 @@ class ZBigArray(BigArray,
 
     def __setstate__(self, state):
         super(ZBigArray, self).__setstate__(state)
+
+        # for backward compatibility: if a member is missing in state - set it
+        # to BigArray default. Ex. `order` was not set in early versions of
+        # ZBigArray and when loading such objects from DB, without adjustment,
+        # they won't work properly.
+        for k, v in BigArray_defaults.items():
+            if not hasattr(self, '_'+k):
+                setattr(self, '_'+k, v)
 
         # NOTE __setstate__() is done after either
         #   - 1st time loading from DB, or

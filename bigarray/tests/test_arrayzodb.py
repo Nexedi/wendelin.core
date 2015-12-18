@@ -189,6 +189,53 @@ def test_zbigarray():
     dbclose(root)
 
 
+# test array ordering is saved properly into DB and is picked up in
+# backward-compatible manner - for data saved before order parameter was
+# introduced.
+# (actual ordering indexing test is in BigArray tests, not here)
+def test_zbigarray_order():
+    # make sure order is properly saved/restored to/from DB
+    root = testdb.dbopen()
+    root['carray'] = ZBigArray((16*1024*1024,), uint8)
+    root['farray'] = ZBigArray((16*1024*1024,), uint8, order='F')
+    transaction.commit()
+
+    dbclose(root)
+    del root
+
+    root = testdb.dbopen()
+    C = root['carray']
+    F = root['farray']
+
+    assert isinstance(C, ZBigArray)
+    assert C.shape  == (16*1024*1024,)
+    assert C.dtype  == dtype(uint8)
+    assert C._order == 'C'
+
+    assert isinstance(F, ZBigArray)
+    assert F.shape  == (16*1024*1024,)
+    assert F.dtype  == dtype(uint8)
+    assert F._order == 'F'
+
+    # make sure we can read previously saved data which had no order set
+    root['coldarray'] = Cold = ZBigArray((16*1024*1024,), uint8)
+    del Cold._order # simulate that it is without
+    assert '_order' not in Cold.__getstate__()
+    transaction.commit()
+
+    dbclose(root)
+    del root, Cold
+
+    root = testdb.dbopen()
+    Cold = root['coldarray']
+
+    assert Cold._order == 'C'
+
+    dbclose(root)
+    del root
+
+
+
 # the same as test_bigfile_filezodb_vs_conn_migration but explicitly for ZBigArray
 # ( NOTE this test is almost dup of test_zbigarray_vs_conn_migration() )
 def test_zbigarray_vs_conn_migration():

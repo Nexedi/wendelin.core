@@ -64,7 +64,11 @@ class BigArray(object):
 
     # TODO doc -> see ndarray
     # NOTE does not accept strides
-    # NOTE please be cooperative to ZBigArray and name helper data members starting with _v_
+    # NOTE please be cooperative to ZBigArray and
+    #      - name helper data members starting with _v_.
+    #      - do not rename data members which go to DB (not starting with _v_).
+    #      - if new argument is added - it has to have default which is
+    #        semantically equivalent to how the code was working before.
     def __init__(self, shape, dtype_, bigfileh, order='C'):
         self._init0(shape, dtype_, order)
         self._v_fileh = bigfileh
