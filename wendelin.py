@@ -28,24 +28,39 @@
 # see https://www.python.org/doc/essays/packages/ about __path__
 # XXX avoid being imported twice, e.g. `import wendelin.wendelin` should not work.
 
-from os.path import dirname, realpath
-__path__ = [realpath(dirname(__file__))]
-del dirname, realpath
 
+# first make sure setuptools will recognize wendelin.py as package,
+# but do not setup proper __path__ yet.
+# ( _handle_ns() checks for __path__ attribute presence and refuses to further
+#   process "not a package"
+#
+#   https://github.com/pypa/setuptools/blob/9803058d/pkg_resources/__init__.py#L2012 )
+__path__ = []
 
-# Also tell setuptools/pkg_resources 'wendelin' is a namespace package
+# tell setuptools/pkg_resources 'wendelin' is a namespace package
 # ( so that wendelin.core installed in development mode does not brake
 #   'wendelin' namespacing wrt other wendelin software )
 __import__('pkg_resources').declare_namespace(__name__)
 
-# pkg_resources will append '.../wendelin' to __path__ which is not right for
-# in-tree setup and thus is not needed here. Remove it.
-del __path__[1:]
+# pkg_resources will append '.../wendelin.core/wendelin' to __path__ which is
+# not right for in-tree setup and thus needs to be corrected:
+# Rewrite '.../wendelin.core/wendelin' -> '.../wendelin.core'
+from os.path import dirname, realpath, splitext
+myfile = realpath(__file__)
+mymod  = splitext(myfile)[0]    # .../wendelin.py   -> .../wendelin
+mydir  = dirname(myfile)        # .../wendelin      -> ...
+i = None    # in case vvv loop is empty, so we still can `del i` in the end
+for i in range(len(__path__)):
+    # NOTE realpath(...) for earlier setuptools, where __path__ entry could be
+    # added as relative
+    if realpath(__path__[i]) == mymod:
+        __path__[i] = mydir
+del dirname, realpath, splitext, myfile, mymod, mydir, i
 
 
 # in the end we have:
-# __path__ has 1 item
-# __path__[0] points to working tree
+# __path__ has >= 1 items
+# __path__ entry for wendelin.core points to top of working tree
 # __name__ registered as namespace package
 #
 # so the following should work:
