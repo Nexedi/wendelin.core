@@ -113,6 +113,12 @@ class ZBlkBase(Persistent):
 
     # client requests us to set blkdata to be later saved to DB
     # (DB <- )  .blkdata <- memory-page
+    #
+    # return: blkchanged=(True|False) - whether blk should be considered changed
+    #         after setting its data.
+    #
+    #         False - when we know the data set was the same
+    #         True  - data was not the same or we don't know
     def setblkdata(self, buf):
         raise NotImplementedError()
 
@@ -181,6 +187,10 @@ class ZBlk0(ZBlkBase):
         blkdata = bytes(buf)                    # FIXME does memcpy
         # trim trailing \0
         self._v_blkdata = blkdata.rstrip(b'\0') # FIXME copy
+
+        # buf always considered to be "changed", as we do not keep old data to
+        # compare.
+        return True
 
 
     # DB (through pickle) requests us to emit state to save
@@ -296,6 +306,7 @@ class ZBlk1(ZBlkBase):
     def setblkdata(self, buf):
         chunktab  = self.chunktab
         CHUNKSIZE = self.CHUNKSIZE
+        blkchanged= False
 
         # first make sure chunktab was previously written with the same CHUNKSIZE
         # (for simplicity we don't allow several chunk sizes to mix)
@@ -320,6 +331,7 @@ class ZBlk1(ZBlkBase):
                 if chunk is not None:
                     del chunktab[start]
                     chunk._p_deactivate()
+                    blkchanged = True
 
             # some !0 data -> compare and store if changed
             else:
@@ -328,6 +340,7 @@ class ZBlk1(ZBlkBase):
 
                 if chunk.data != data:
                     chunk.data = data
+                    blkchanged = True
                     # data changed and is queued to be committed to db.
                     # ZData will care about this chunk deactivation after DB
                     # asks for its data - see ZData.__getstate__().
@@ -336,6 +349,8 @@ class ZBlk1(ZBlkBase):
                     # we loaded chunk for .data comparison, but now it is no
                     # more needed
                     chunk._p_deactivate()
+
+        return blkchanged
 
 
     # DB (through pickle) requests us to emit state to save
@@ -481,8 +496,9 @@ class ZBigFile(LivePersistent):
            type(zblk) is not zblk_type_write:
             zblk = self.blktab[blk] = zblk_type_write()
 
-        zblk.setblkdata(buf)
-        zblk._p_changed = True          # if zblk was already in DB: _p_state -> CHANGED
+        blkchanged = zblk.setblkdata(buf)
+        if blkchanged:
+            zblk._p_changed = True      # if zblk was already in DB: _p_state -> CHANGED
         zblk.bindzfile(self, blk)
 
 
