@@ -209,7 +209,7 @@ setup(
     version     = '0.5',
     description = 'Out-of-core NumPy arrays',
     long_description = '%s\n----\n\n%s' % (
-                            readfile('README.rst'), readfile('CHANGELOG')),
+                            readfile('README.rst'), readfile('CHANGELOG.rst')),
     url         = 'https://lab.nexedi.com/nexedi/wendelin.core',
     license     = 'GPLv3+ with wide exception for Open-Source',
     author      = 'Kirill Smelkov',
