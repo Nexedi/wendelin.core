@@ -1,6 +1,23 @@
 Wendelin.core change history
 ============================
 
+0.6 (2016-06-13)
+----------------
+
+- Add support for FORTRAN ordering (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/ab9ca2df
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/2ca0f076
+
+
+- Avoid deadlocks via doing `loadblk()` calls with virtmem lock released
+  (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/f49c11a3
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/0231a65d
+
+- Various bugfixes
+
 0.5 (2015-10-02)
 ----------------
 
