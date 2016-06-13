@@ -69,5 +69,4 @@ Please see `demo/demo_zbigarray.py`__ for a complete example.
 .. _NEO:            http://www.neoppod.org/
 .. _ZEO:            https://pypi.python.org/pypi/ZEO
 
-.. relative links are made so they show ok on project main page
-__ wendelin.core/blob/master/demo/demo_zbigarray.py
+__ demo/demo_zbigarray.py
