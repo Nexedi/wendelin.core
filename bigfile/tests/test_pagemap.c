@@ -214,6 +214,9 @@ int main()
                 {I2-1,   199},
                 {I2,     200},
                 {I2+1,   201},
+
+                /* NOTE on not adjacent page to I2 */
+                {2*I2+100, 777},
     };
 
 

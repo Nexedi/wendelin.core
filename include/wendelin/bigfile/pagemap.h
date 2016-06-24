@@ -193,17 +193,16 @@ void  pagemap_clear(PageMap *pmap);
         if (l < __height) {                                                     \
                                                                                 \
             /* loop over entries in tab - continuing from where we stopped */   \
-            for (void ***__tail     = tailv[l],                                 \
-                       **__tab_prev = PTR_POINTER(*tailv[l-1]),                 \
+            for ( void **__tab_prev = PTR_POINTER(*tailv[l-1]),                 \
                        **__tab;                                                 \
                                                                                 \
-                    (void **)__tail - __tab_prev < PAGEMAP_LEVEL_ENTRIES;       \
+                    (void **)tailv[l] - __tab_prev < PAGEMAP_LEVEL_ENTRIES;     \
                                                                                 \
-                        ++__tail                                                \
+                        ++tailv[l]                                              \
                 )                                                               \
                                                                                 \
                 /* load entry; no entry -> next entry */                        \
-                if (!(__tab = *__tail))                                         \
+                if (!(__tab = *tailv[l]))                                       \
                     continue;                                                   \
                                                                                 \
                 /* go down 1 level with tab */                                  \
