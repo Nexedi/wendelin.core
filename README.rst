@@ -63,6 +63,10 @@ several nodes in a cluster.
 
 Please see `demo/demo_zbigarray.py`__ for a complete example.
 
+Additional Info
+---------------
+
+Please see `wiki`__ for more info: current state, roadmap, additional materials, ...
 
 .. _NumPy:          http://www.numpy.org/
 .. _numpy.memmap:   http://docs.scipy.org/doc/numpy/reference/generated/numpy.memmap.html
@@ -70,3 +74,4 @@ Please see `demo/demo_zbigarray.py`__ for a complete example.
 .. _ZEO:            https://pypi.python.org/pypi/ZEO
 
 __ demo/demo_zbigarray.py
+__ https://lab.nexedi.com/nexedi/wendelin.core/wikis/home
