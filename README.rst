@@ -63,15 +63,55 @@ several nodes in a cluster.
 
 Please see `demo/demo_zbigarray.py`__ for a complete example.
 
-Additional Info
----------------
+__ demo/demo_zbigarray.py
 
-Please see `wiki`__ for more info: current state, roadmap, additional materials, ...
+
+Current state and Roadmap
+=========================
+
+Wendelin.core works in real life for workloads Nexedi_ is using in production,
+including 24/7 projects. We are, however, aware of the following
+limitations and things that need to be improved:
+
+- wendelin.core is currently not very fast
+- there are big - proportional to input in size - temporary array allocations
+  in third-party libraries (NumPy_, `scikit-learn`_, ...) which might practically
+  prevent processing out-of-core arrays depending on the functionality used.
+
+Thus
+
+- we are currently working on improved wendelin.core design and implementation,
+  which will use kernel virtual memory manager (instead of one implemented__ in__
+  userspace__) with arrays backend presented to kernel via FUSE as virtual
+  filesystem implemented in Go.
+
+__  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/include/wendelin/bigfile/virtmem.h
+__  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/bigfile/virtmem.c
+__  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/bigfile/pagefault.c
+
+In parallel we will also:
+
+- try wendelin.core 1.0 on large data sets
+- identify and incrementally fix big-temporaries allocation issues in NumPy and
+  scikit-learn
+
+We are open to community help with the above.
+
+
+Additional materials
+====================
+
+- Wendelin.core tutorial__
+- Slides__ (pdf__) from presentation about wendelin.core in PyData Paris 2015
+
+__  https://www.nexedi.com/wendelin-Core.Tutorial.2016
+__  http://www.wendelin.io/NXD-Wendelin.Core.Non.Secret/asEntireHTML
+__  http://www.wendelin.io/NXD-Wendelin.Core.Non.Secret?format=pdf
+
 
 .. _NumPy:          http://www.numpy.org/
+.. _scikit-learn:   http://scikit-learn.org/
 .. _numpy.memmap:   http://docs.scipy.org/doc/numpy/reference/generated/numpy.memmap.html
 .. _NEO:            http://www.neoppod.org/
 .. _ZEO:            https://pypi.python.org/pypi/ZEO
-
-__ demo/demo_zbigarray.py
-__ https://lab.nexedi.com/nexedi/wendelin.core/wikis/home
+.. _Nexedi:         https://www.nexedi.com/
