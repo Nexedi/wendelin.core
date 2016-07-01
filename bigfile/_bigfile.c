@@ -777,16 +777,6 @@ static /*const*/ PyMethodDef pybigfile_modulemeths[] = {
 
 
 /* GIL hooks for virtmem big lock */
-static PyThreadState *_PyThreadState_Current_GET(void)
-{
-    /* non-debug version of PyThreadState_GET() */
-#if PY_MAJOR_VERSION < 3
-    return _PyThreadState_Current;
-#else
-    return (PyThreadState*)_Py_atomic_load_relaxed(&_PyThreadState_Current);
-#endif
-}
-
 static void *py_gil_ensure_unlocked(void)
 {
     /* make sure we don't hold python GIL (not to deadlock, as GIL oscillates)
@@ -799,7 +789,7 @@ static void *py_gil_ensure_unlocked(void)
      * NOTE2 we don't call PyThreadState_Get() as that thinks it is a bug when
      *       _PyThreadState_Current == NULL */
     PyThreadState *ts_my        = PyGILState_GetThisThreadState();
-    PyThreadState *ts_current   = _PyThreadState_Current_GET();
+    PyThreadState *ts_current   = _PyThreadState_UncheckedGet();
     PyThreadState *ts;
 
     if (ts_my && (ts_my == ts_current)) {

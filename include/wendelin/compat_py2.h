@@ -51,4 +51,18 @@ typedef struct {
 #endif
 
 
+/* get current thread state without asserting it is !NULL
+ * (PyThreadState_Get() does the assert) */
+#if PY_MAJOR_VERSION < 3
+static inline PyThreadState * _PyThreadState_UncheckedGet(void)
+{
+    return _PyThreadState_Current;
+}
+#else
+static inline PyThreadState * _PyThreadState_UncheckedGet(void)
+{
+    return (PyThreadState*)_Py_atomic_load_relaxed(&_PyThreadState_Current);
+}
+#endif
+
 #endif
