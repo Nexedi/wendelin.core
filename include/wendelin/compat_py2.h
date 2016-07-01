@@ -58,11 +58,22 @@ static inline PyThreadState * _PyThreadState_UncheckedGet(void)
 {
     return _PyThreadState_Current;
 }
-#else
+/* _PyThreadState_UncheckedGet() was added in CPython 3.5.2rc1
+ * https://github.com/python/cpython/commit/df858591
+ *
+ * During CPython 3.5.0 - 3.5.rc1 there is a window when
+ * - public access to pyatomics was removed, and
+ * - _PyThreadState_UncheckedGet() was not added yet
+ *
+ * https://bugs.python.org/issue25150
+ * https://bugs.python.org/issue26154 */
+#elif PY_VERSION_HEX < 0x03050000
 static inline PyThreadState * _PyThreadState_UncheckedGet(void)
 {
     return (PyThreadState*)_Py_atomic_load_relaxed(&_PyThreadState_Current);
 }
+#elif PY_VERSION_HEX < 0x03050200
+# error "You are using CPython 3.5.X series. Upgrade your CPython to >= 3.5.2 to get _PyThreadState_UncheckedGet() support."
 #endif
 
 #endif
