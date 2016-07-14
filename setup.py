@@ -112,7 +112,8 @@ class build_py(_build_py):
 
 # run `make <target>`
 def runmake(target):
-    err = os.system('make %s PYTHON="%s"' % (target, sys.executable))
+    err = os.system('make %s PYTHON="%s" PYTHONPATH="%s"' % \
+            (target, sys.executable, ':'.join(sys.path)))
     if err:
         raise DistutilsExecError('Failed to execute `make %s`' % target)
 
