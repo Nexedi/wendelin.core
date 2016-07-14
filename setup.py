@@ -114,12 +114,8 @@ class build_py(_build_py):
 def runmake(target):
     setuptools_location = pkg_resources.working_set.find(
         pkg_resources.Requirement.parse('setuptools')).location
-    original_python_path = os.environ.get('PYTHONPATH')
-    os.environ['PYTHONPATH'] = setuptools_location
-    try:
-      err = os.system('make %s PYTHON="%s"' % (target, sys.executable))
-    finally:
-      os.environ['PYTHONPATH'] = original_python_path
+    err = os.system('make %s PYTHON="%s" PYTHONPATH="%s"' % \
+        (target, sys.executable, setuptools_location))
     if err:
         raise DistutilsExecError('Failed to execute `make %s`' % target)
 
