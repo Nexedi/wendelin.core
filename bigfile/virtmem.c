@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <unistd.h>
 
 static size_t   page_size(const Page *page);
 static void     page_drop_memory(Page *page);
