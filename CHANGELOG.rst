@@ -1,6 +1,20 @@
 Wendelin.core change history
 ============================
 
+0.7 (2016-07-14)
+------------------
+
+- Add support for Python 3.5 (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/20115391
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/e6beab19
+
+- Fix bug in pagemap code which could lead to crashes and other issues (`commit`__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/ee9bcd00
+
+- Various bugfixes
+
 0.6 (2016-06-13)
 ----------------
 
