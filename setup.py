@@ -18,6 +18,7 @@
 from setuptools import setup, Extension, Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from setuptools.command.build_ext import build_ext as _build_ext
+from pkg_resources import working_set, EntryPoint
 from distutils.errors import DistutilsExecError
 from subprocess import Popen, PIPE
 
@@ -112,8 +113,17 @@ class build_py(_build_py):
 
 # run `make <target>`
 def runmake(target):
+    # NOTE we care to propagate setuptools path to subpython because it could
+    # be "inserted" to us by buildout. Propagating whole sys.path is more
+    # risky, as e.g. it can break gdb which is using python3, while
+    # building/testing under python2.
+    pypathv = [working_set.by_key['setuptools'].location]
+    pypath  = os.environ.get('PYTHONPATH')
+    if pypath is not None:
+        pypathv.append(pypath)
+
     err = os.system('make %s PYTHON="%s" PYTHONPATH="%s"' % \
-            (target, sys.executable, ':'.join(sys.path)))
+            (target, sys.executable, ':'.join(pypathv)))
     if err:
         raise DistutilsExecError('Failed to execute `make %s`' % target)
 
@@ -144,7 +154,6 @@ class build_ext(_build_ext):
 
 # register `func` as entry point `entryname` in `groupname` in distribution `distname` on the fly
 def register_as_entrypoint(func, entryname, groupname, distname):
-    from pkg_resources import working_set, EntryPoint
     dist = working_set.by_key[distname]
 
     # register group if it is not yet registered
