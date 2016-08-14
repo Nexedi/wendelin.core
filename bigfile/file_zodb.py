@@ -78,6 +78,7 @@ natural to also use "2" here.
 
 from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.lib.mem import bzero, memcpy
+from wendelin.lib.zodb import deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
 from persistent import Persistent, PickleCache, GHOST
@@ -292,12 +293,8 @@ class ZBlk1(ZBlkBase):
             stop = start+len(chunk.data)
             blkdata[start:stop] = chunk.data
 
-        # deactivate .chunktab to not waste memory
-        # (see comments about why in ZBlk0.loadblkdata())
-        for chunk in self.chunktab.values():
-            chunk._p_deactivate()
-        self.chunktab._p_deactivate()
-        # TODO deactivate all chunktab buckets - XXX how?
+        # deactivate whole .chunktab not to waste memory
+        deactivate_btree(self.chunktab)
 
         return blkdata
 

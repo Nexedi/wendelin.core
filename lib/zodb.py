@@ -18,6 +18,8 @@
 
 from ZODB.FileStorage import FileStorage
 from ZODB import DB
+from persistent import Persistent
+import gc
 
 
 # open db storage by uri
@@ -62,3 +64,32 @@ def dbclose(root):
     conn.close()
     db.close()
     stor.close()
+
+
+# deactivate a btree, including all internal buckets and leaf nodes
+def deactivate_btree(btree):
+    # first activate btree, to make sure its first bucket is loaded at all.
+    #
+    # we have to do this because btree could be automatically deactivated
+    # before by cache (the usual way) and then in its ghost state it does not
+    # contain pointer to first bucket and thus we won't be able to start
+    # bucket deactivation traversal.
+    btree._p_activate()
+
+    for _ in gc.get_referents(btree):
+        # for top-level btree we ignore any direct referent besides bucket
+        # (there are _p_jar, cache, etc)
+        if type(_) is btree._bucket_type:
+            _deactivate_bucket(_)
+
+    btree._p_deactivate()
+
+def _deactivate_bucket(bucket):
+    # TODO also support objects in keys, when we need it
+    for obj in bucket.values():
+        if type(obj) == type(bucket):
+            _deactivate_bucket(obj)
+        elif isinstance(obj, Persistent):
+            obj._p_deactivate()
+
+    bucket._p_deactivate()
