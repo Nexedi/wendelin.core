@@ -1,6 +1,13 @@
 Wendelin.core change history
 ============================
 
+0.8 (2016-09-28)
+----------------
+
+- Do not leak memory when loading data in ZBlk1 format (`commit`__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/542917d1
+
 0.7 (2016-07-14)
 ------------------
 
