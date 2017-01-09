@@ -654,8 +654,8 @@ void test_file_access_synthetic(void)
 
     /* prepare state (2 dirty pages, only 1 mapped) */
     void mkdirty2() {
-        xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);  /* write page[0] */
         xvma_on_pagefault(vma, vma->addr_start + 2*PS, 1);  /* write page[2] */
+        xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);  /* write page[0] */
         vma_unmap(vma);
         err = fileh_mmap(vma, fh, 100, 4);
         ok1(!err);
