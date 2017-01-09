@@ -51,6 +51,7 @@ Page *ramh_alloc_page(RAMH *ramh, pgoff_t pgoffset_hint)
     page->ramh  = ramh;
     page->ramh_pgoffset = ramh_pgoffset;
     INIT_LIST_HEAD(&page->lru); /* NOTE ->lru    left unlinked */
+    INIT_LIST_HEAD(&page->in_dirty);	/* initially not in dirty list */
     page->refcnt = 0;
 
     return page;

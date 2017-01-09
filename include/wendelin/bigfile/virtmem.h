@@ -65,10 +65,8 @@ struct BigFileH {
     PageMap     pagemap;
 
 
-    // XXX not sure we need this
-    //     -> currently is used to know whether to join ZODB DataManager serving ZBigFile
-    // XXX maybe change into dirty_list in the future?
-    unsigned    dirty;
+    /* fileh dirty pages */
+    struct list_head dirty_pages;   /* _ -> page->in_dirty */
 };
 typedef struct BigFileH BigFileH;
 
@@ -98,6 +96,9 @@ struct Page {
 
     /* in recently-used pages for ramh->ram (ram->lru_list -> _) */
     struct list_head lru;
+
+    /* in dirty pages for fileh (fileh->dirty_pages -> _) */
+    struct list_head in_dirty;
 
     int     refcnt; /* each mapping in a vma counts here */
 };

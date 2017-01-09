@@ -149,6 +149,7 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
 
     fileh->file = file;
     INIT_LIST_HEAD(&fileh->mmaps);
+    INIT_LIST_HEAD(&fileh->dirty_pages);
     pagemap_init(&fileh->pagemap, ilog2_exact(ram->pagesize));
 
 out:
@@ -181,6 +182,8 @@ void fileh_close(BigFileH *fileh)
         bzero(page, sizeof(*page)); /* just in case */
         free(page);
     }
+
+    BUG_ON(!list_empty(&fileh->dirty_pages));
 
     /* and clear pagemap */
     pagemap_clear(&fileh->pagemap);
@@ -296,11 +299,24 @@ void vma_unmap(VMA *vma)
  * WRITEOUT / DISCARD *
  **********************/
 
+/* helper for sorting dirty pages by ->f_pgoffset */
+static int hpage_indirty_cmp_bypgoffset(struct list_head *hpage1, struct list_head *hpage2, void *_)
+{
+    Page *page1 = list_entry(hpage1, typeof(*page1), in_dirty);
+    Page *page2 = list_entry(hpage2, typeof(*page2), in_dirty);
+
+    if (page1->f_pgoffset < page2->f_pgoffset)
+        return -1;
+    if (page1->f_pgoffset > page2->f_pgoffset)
+        return +1;
+    return 0;
+}
+
 int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
 {
     Page *page;
     BigFile *file = fileh->file;
-    struct list_head *hmmap;
+    struct list_head *hpage, *hpage_next, *hmmap;
     sigset_t save_sigset;
     int err = 0;
 
@@ -312,12 +328,14 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     sigsegv_block(&save_sigset);
     virt_lock();
 
+    /* pages are stored (if stored) in sorted order */
+    if (flags & WRITEOUT_STORE)
+        list_sort(&fileh->dirty_pages, hpage_indirty_cmp_bypgoffset, NULL);
+
     /* write out dirty pages */
-    pagemap_for_each(page, &fileh->pagemap) {
-        /* XXX we scan whole file pages which could be slow
-         * TODO -> maintain something like separate dirty_list ? */
-        if (page->state != PAGE_DIRTY)
-            continue;
+    list_for_each_safe(hpage, hpage_next, &fileh->dirty_pages) {
+        page = list_entry(hpage, typeof(*page), in_dirty);
+        BUG_ON(page->state != PAGE_DIRTY);
 
         /* ->storeblk() */
         if (flags & WRITEOUT_STORE) {
@@ -362,7 +380,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
         /* page.state -> PAGE_LOADED and correct mappings RW -> R */
         if (flags & WRITEOUT_MARKSTORED) {
             page->state = PAGE_LOADED;
-            fileh->dirty--;
+            list_del_init(&page->in_dirty);
 
             list_for_each(hmmap, &fileh->mmaps) {
                 VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
@@ -375,7 +393,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     /* if we successfully finished with markstored flag set - all dirty pages
      * should become non-dirty */
     if (flags & WRITEOUT_MARKSTORED)
-        BUG_ON(fileh->dirty);
+        BUG_ON(!list_empty(&fileh->dirty_pages));
 
 out:
     virt_unlock();
@@ -387,18 +405,21 @@ out:
 void fileh_dirty_discard(BigFileH *fileh)
 {
     Page *page;
+    struct list_head *hpage, *hpage_next;
     sigset_t save_sigset;
 
     sigsegv_block(&save_sigset);
     virt_lock();
 
-    /* XXX we scan whole file pages which could be slow
-     * TODO -> maintain something like separate dirty_list ? */
-    pagemap_for_each(page, &fileh->pagemap)
-        if (page->state == PAGE_DIRTY)
-            page_drop_memory(page);
 
-    BUG_ON(fileh->dirty);
+    list_for_each_safe(hpage, hpage_next, &fileh->dirty_pages) {
+        page = list_entry(hpage, typeof(*page), in_dirty);
+        BUG_ON(page->state != PAGE_DIRTY);
+
+        page_drop_memory(page);
+    }
+
+    BUG_ON(!list_empty(&fileh->dirty_pages));
 
     virt_unlock();
     sigsegv_restore(&save_sigset);
@@ -722,7 +743,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 
     // XXX also call page->markdirty() ?
     if (newstate == PAGE_DIRTY  &&  newstate != page->state)
-        fileh->dirty++;
+        list_add_tail(&page->in_dirty, &fileh->dirty_pages);
     page->state = max(page->state, newstate);
 
     /* mark page as used recently */
@@ -850,7 +871,7 @@ static void page_drop_memory(Page *page)
     /* 2) release memory to ram */
     ramh_drop_memory(page->ramh, page->ramh_pgoffset);
     if (page->state == PAGE_DIRTY)
-        page->fileh->dirty--;
+        list_del_init(&page->in_dirty);
     page->state = PAGE_EMPTY;
 
     // XXX touch lru?
