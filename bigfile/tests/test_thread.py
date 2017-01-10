@@ -68,7 +68,7 @@ PS = 2*MB
 #   V -> loadblk
 #                       Z   <- ClientStorage.invalidateTransaction()
 #   Z -> zeo.load
-#                       V   <- fileh_invalidate_page
+#                       V   <- fileh_invalidate_page (possibly of unrelated page)
 def test_thread_lock_vs_virtmem_lock():
     Z = Lock()
     c12 = NotifyChannel()   # T1 -> T2
@@ -77,26 +77,24 @@ def test_thread_lock_vs_virtmem_lock():
     class ZLockBigFile(BigFile):
         def __new__(cls, blksize):
             obj = BigFile.__new__(cls, blksize)
-            obj.cycle = 0
             return obj
 
         def loadblk(self, blk, buf):
             tell, wait = c12.tell, c21.wait
 
-            # on the first cycle we synchronize with invalidate in T2
-            if self.cycle == 0:
-                tell('T1-V-under')
-                wait('T2-Z-taken')
+            # synchronize with invalidate in T2
+            tell('T1-V-under')
+            wait('T2-Z-taken')
 
-                # this will deadlock, if V is plain lock and calling from under-virtmem
-                # is done with V held
-                Z.acquire()
-                Z.release()
+            # this will deadlock, if V is plain lock and calling from under-virtmem
+            # is done with V held
+            Z.acquire()
+            Z.release()
 
-            self.cycle += 1
 
     f   = ZLockBigFile(PS)
     fh  = f.fileh_open()
+    fh2 = f.fileh_open()
     vma = fh.mmap(0, 1)
     m   = memoryview(vma)
 
@@ -111,7 +109,7 @@ def test_thread_lock_vs_virtmem_lock():
         Z.acquire()
         tell('T2-Z-taken')
 
-        fh.invalidate_page(0)
+        fh2.invalidate_page(0)  # NOTE invalidating page _not_ of fh
         Z.release()
 
 
@@ -185,7 +183,7 @@ def test_thread_multiaccess_parallel():
     t1.join(); t2.join()
 
 
-# loading vs invalidate in another thread
+# loading vs invalidate of same page in another thread
 def test_thread_load_vs_invalidate():
     c12 = NotifyChannel()   # T1 -> T2
     c21 = NotifyChannel()   # T2 -> T1
