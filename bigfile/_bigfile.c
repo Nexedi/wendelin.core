@@ -319,8 +319,8 @@ PyFunc(pyfileh_isdirty, "isdirty() - are there any changes to fileh memory at al
     if (!PyArg_ParseTuple(args, ""))
         return NULL;
 
-    /* NOTE not strictly neccessary to virt_lock() for reading ->dirty */
-    return PyBool_FromLong(pyfileh->dirty);
+    /* NOTE not strictly neccessary to virt_lock() for checking ->dirty_pages not empty */
+    return PyBool_FromLong(!list_empty(&pyfileh->dirty_pages));
 }
 
 

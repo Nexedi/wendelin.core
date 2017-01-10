@@ -65,10 +65,11 @@ struct BigFileH {
     PageMap     pagemap;
 
 
-    // XXX not sure we need this
-    //     -> currently is used to know whether to join ZODB DataManager serving ZBigFile
-    // XXX maybe change into dirty_list in the future?
-    unsigned    dirty;
+    /* fileh dirty pages */
+    struct list_head dirty_pages;   /* _ -> page->in_dirty */
+
+    /* whether writeout is currently in progress */
+    int writeout_inprogress;
 };
 typedef struct BigFileH BigFileH;
 
@@ -98,6 +99,9 @@ struct Page {
 
     /* in recently-used pages for ramh->ram (ram->lru_list -> _) */
     struct list_head lru;
+
+    /* in dirty pages for fileh (fileh->dirty_pages -> _) */
+    struct list_head in_dirty;
 
     int     refcnt; /* each mapping in a vma counts here */
 };
@@ -152,6 +156,7 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram);
 /* close fileh
  *
  * it's an error to call fileh_close with existing mappings
+ * it's an error to call fileh_close while writeout for fileh is in progress
  */
 void fileh_close(BigFileH *fileh);
 
@@ -204,6 +209,12 @@ enum WriteoutFlags {
  *
  * No guarantee is made about atomicity - e.g. if this call fails, some
  * pages could be written and some left in memory in dirty state.
+ *
+ * it's an error for a given fileh to call several fileh_dirty_writeout() in
+ * parallel.
+ *
+ * it's an error for a given fileh to modify its pages while writeout is in
+ * progress: until fileh_dirty_writeout(... | WRITEOUT_STORE) has finished.
  */
 int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
 
@@ -215,6 +226,9 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
  *   - it is unmapped from all mmaps;
  *   - its content is discarded;
  *   - its backing memory is released to OS.
+ *
+ * it's an error for a given fileh to call fileh_dirty_discard() while writeout
+ * is in progress.
  */
 void fileh_dirty_discard(BigFileH *fileh);
 
@@ -229,6 +243,9 @@ void fileh_dirty_discard(BigFileH *fileh);
  *
  * ( Such invalidation is needed to synchronize fileh memory, when we know a
  *   file was changed externally )
+ *
+ * it's an error to call fileh_invalidate_page() while writeout for fileh is in
+ * progress.
  */
 void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset);
 

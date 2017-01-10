@@ -325,13 +325,13 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_NOPAGE(         100                      );
     CHECK_NOPAGE(         101                      );
     CHECK_NOPAGE(         102                      );
     CHECK_NOPAGE(         103                      );
 
     ok1(list_empty(&ram->lru_list));
+    ok1(list_empty(&fh->dirty_pages));
 
 
     /* simulate read access to page[0] - it should load it */
@@ -343,7 +343,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     page0 = pagemap_get(&fh->pagemap, 100);
     CHECK_PAGE  (page0,   100,    PAGE_LOADED,    1);
     CHECK_NOPAGE(         101                      );
@@ -357,6 +356,8 @@ void test_file_access_synthetic(void)
     ok1(ram->lru_list.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
 
+    ok1(list_empty(&fh->dirty_pages));
+
 
     /* simulate write access to page[2] - it should load it and mark page dirty */
     diag("write page[2]");
@@ -367,7 +368,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     page2 = pagemap_get(&fh->pagemap, 102);
     CHECK_PAGE  (page0,   100, PAGE_LOADED,   1);
     CHECK_NOPAGE(         101                  );
@@ -385,6 +385,9 @@ void test_file_access_synthetic(void)
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     /* read access to page[3] - load */
     diag("read page[3]");
@@ -395,7 +398,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1( M(vma, 3));                B(vma, 3*PSb);      MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     page3 = pagemap_get(&fh->pagemap, 103);
     CHECK_PAGE  (page0,   100,    PAGE_LOADED,    1);
     CHECK_NOPAGE(         101                      );
@@ -417,6 +419,9 @@ void test_file_access_synthetic(void)
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     /* write access to page[0] - upgrade loaded -> dirty */
     diag("write page[0]");
@@ -427,7 +432,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1( M(vma, 3));                B(vma, 3*PSb);      MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
@@ -448,6 +452,10 @@ void test_file_access_synthetic(void)
     ok1(page3->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     /* read page[1]
      *
@@ -462,7 +470,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     page1 = pagemap_get(&fh->pagemap, 101);
     page3 = pagemap_get(&fh->pagemap, 103);
     ok1(!page3);
@@ -486,6 +493,10 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     /* now explicit reclaim - should evict page[1]  (the only PAGE_LOADED page) */
     diag("reclaim");
@@ -496,7 +507,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     page1 = pagemap_get(&fh->pagemap, 101);
     ok1(!page1);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
@@ -516,6 +526,10 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     /* unmap vma - dirty pages should stay in fh->pagemap and memory should
      * not be forgotten */
@@ -524,7 +538,6 @@ void test_file_access_synthetic(void)
 
     ok1(list_empty(&fh->mmaps));
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     0);
@@ -533,6 +546,10 @@ void test_file_access_synthetic(void)
     ok1(ram->lru_list.prev == &page0->lru);
     ok1(page0->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &ram->lru_list);
+
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
 
     b0 = page_mmap(page0, NULL, PROT_READ);
     ok1(b0);
@@ -563,7 +580,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     0);
@@ -572,6 +588,10 @@ void test_file_access_synthetic(void)
     ok1(ram->lru_list.prev == &page0->lru);
     ok1(page0->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &ram->lru_list);
+
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
 
 
     /* read access to page[2] - should map it R/W - the page is in PAGE_DIRTY state */
@@ -583,7 +603,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
@@ -592,6 +611,10 @@ void test_file_access_synthetic(void)
     ok1(ram->lru_list.prev == &page2->lru);
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
+
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
 
 
     /* discard - changes should go away */
@@ -603,7 +626,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
@@ -612,6 +634,8 @@ void test_file_access_synthetic(void)
     ok1(ram->lru_list.prev == &page2->lru);
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
+
+    ok1(list_empty(&fh->dirty_pages));
 
 
     /* writeout in 3 variants - STORE, MARK, STORE+MARK */
@@ -640,7 +664,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1( M(vma, 3));                B(vma, 3*PSb);      MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
@@ -651,11 +674,13 @@ void test_file_access_synthetic(void)
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
 
+    ok1(list_empty(&fh->dirty_pages));
+
 
     /* prepare state (2 dirty pages, only 1 mapped) */
     void mkdirty2() {
-        xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);  /* write page[0] */
         xvma_on_pagefault(vma, vma->addr_start + 2*PS, 1);  /* write page[2] */
+        xvma_on_pagefault(vma, vma->addr_start + 0*PS, 1);  /* write page[0] */
         vma_unmap(vma);
         err = fileh_mmap(vma, fh, 100, 4);
         ok1(!err);
@@ -666,7 +691,6 @@ void test_file_access_synthetic(void)
         ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
         ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-        ok1( fh->dirty);
         CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
         CHECK_NOPAGE(         101                      );
         CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
@@ -676,6 +700,10 @@ void test_file_access_synthetic(void)
         ok1(page2->lru.prev == &page0->lru);
         ok1(page0->lru.prev == &page3->lru);
         ok1(page3->lru.prev == &ram->lru_list);
+
+        ok1(fh->dirty_pages.prev == &page0->in_dirty);
+        ok1(page0->in_dirty.prev == &page2->in_dirty);
+        ok1(page2->in_dirty.prev == &fh->dirty_pages);
     }
 
     diag("writeout (store)");
@@ -692,12 +720,15 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
     CHECK_PAGE  (page3,   103,    PAGE_LOADED,    0);
 
+    /* NOTE - becomes sorted by ->f_pgoffset */
+    ok1(fh->dirty_pages.next == &page0->in_dirty);
+    ok1(page0->in_dirty.next == &page2->in_dirty);
+    ok1(page2->in_dirty.next == &fh->dirty_pages);
 
     diag("writeout (mark)");
     blkv_len = 0;
@@ -710,7 +741,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);      MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_LOADED,    0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_LOADED,    1);
@@ -721,6 +751,7 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(list_empty(&fh->dirty_pages));
 
     diag("writeout (store+mark)");
     mkdirty2();
@@ -736,7 +767,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);      MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_LOADED,    0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_LOADED,    1);
@@ -747,6 +777,7 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(list_empty(&fh->dirty_pages));
 
     diag("invalidate");
     mkdirty2();
@@ -758,7 +789,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
@@ -769,6 +799,10 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     fileh_invalidate_page(fh, 103);
 
@@ -777,7 +811,6 @@ void test_file_access_synthetic(void)
     ok1( M(vma, 2));                B(vma, 2*PSb);                  B(vma, 2*PSb) = 12;
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
@@ -788,6 +821,10 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &page2->in_dirty);
+    ok1(page2->in_dirty.prev == &fh->dirty_pages);
+
 
     fileh_invalidate_page(fh, 102);
 
@@ -796,7 +833,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1( fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
@@ -807,6 +843,9 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(fh->dirty_pages.prev == &page0->in_dirty);
+    ok1(page0->in_dirty.prev == &fh->dirty_pages);
+
 
     fileh_invalidate_page(fh, 100);
 
@@ -815,7 +854,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1(!M(vma, 3));    MUST_FAULT( B(vma, 3*PSb) );    MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
@@ -826,6 +864,8 @@ void test_file_access_synthetic(void)
     ok1(page0->lru.prev == &page3->lru);
     ok1(page3->lru.prev == &ram->lru_list);
 
+    ok1(list_empty(&fh->dirty_pages));
+
     /* read page[3] back */
     xvma_on_pagefault(vma, vma->addr_start + 3*PS, 0);
 
@@ -834,7 +874,6 @@ void test_file_access_synthetic(void)
     ok1(!M(vma, 2));    MUST_FAULT( B(vma, 2*PSb) );    MUST_FAULT( B(vma, 2*PSb) = 12  );
     ok1( M(vma, 3));                B(vma, 3*PSb);      MUST_FAULT( B(vma, 3*PSb) = 13  );
 
-    ok1(!fh->dirty);
     CHECK_PAGE  (page0,   100,    PAGE_EMPTY,     0);
     CHECK_NOPAGE(         101                      );
     CHECK_PAGE  (page2,   102,    PAGE_EMPTY,     0);
@@ -844,6 +883,8 @@ void test_file_access_synthetic(void)
     ok1(page3->lru.prev == &page2->lru);
     ok1(page2->lru.prev == &page0->lru);
     ok1(page0->lru.prev == &ram->lru_list);
+
+    ok1(list_empty(&fh->dirty_pages));
 
 
     diag("fileh_close");

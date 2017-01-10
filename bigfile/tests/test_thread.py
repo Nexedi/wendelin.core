@@ -15,7 +15,7 @@
 # warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
 # See COPYING file for full licensing terms.
-from wendelin.bigfile import BigFile
+from wendelin.bigfile import BigFile, WRITEOUT_STORE
 from threading import Thread, Lock
 from time import sleep
 
@@ -68,7 +68,17 @@ PS = 2*MB
 #   V -> loadblk
 #                       Z   <- ClientStorage.invalidateTransaction()
 #   Z -> zeo.load
-#                       V   <- fileh_invalidate_page
+#                       V   <- fileh_invalidate_page (possibly of unrelated page)
+#
+#   --------
+#   and similarly for storeblk:
+#
+#   T1                  T2
+#
+#   commit              same as ^^^
+#   V -> storeblk
+#
+#   Z -> zeo.store
 def test_thread_lock_vs_virtmem_lock():
     Z = Lock()
     c12 = NotifyChannel()   # T1 -> T2
@@ -77,42 +87,55 @@ def test_thread_lock_vs_virtmem_lock():
     class ZLockBigFile(BigFile):
         def __new__(cls, blksize):
             obj = BigFile.__new__(cls, blksize)
-            obj.cycle = 0
             return obj
 
-        def loadblk(self, blk, buf):
+        def Zsync_and_lockunlock(self):
             tell, wait = c12.tell, c21.wait
 
-            # on the first cycle we synchronize with invalidate in T2
-            if self.cycle == 0:
-                tell('T1-V-under')
-                wait('T2-Z-taken')
+            # synchronize with invalidate in T2
+            tell('T1-V-under')
+            wait('T2-Z-taken')
 
-                # this will deadlock, if V is plain lock and calling from under-virtmem
-                # is done with V held
-                Z.acquire()
-                Z.release()
+            # this will deadlock, if V is plain lock and calling from under-virtmem
+            # is done with V held
+            Z.acquire()
+            Z.release()
 
-            self.cycle += 1
+        def loadblk(self, blk, buf):
+            self.Zsync_and_lockunlock()
+
+        def storeblk(self, blk, buf):
+            self.Zsync_and_lockunlock()
 
     f   = ZLockBigFile(PS)
     fh  = f.fileh_open()
+    fh2 = f.fileh_open()
     vma = fh.mmap(0, 1)
     m   = memoryview(vma)
 
     def T1():
         m[0]    # calls ZLockBigFile.loadblk()
 
+        tell, wait = c12.tell, c21.wait
+        wait('T2-Z-released')
+        m[0] = bord_py3(b'1')               # make page dirty
+        fh.dirty_writeout(WRITEOUT_STORE)   # calls ZLockBigFile.storeblk()
+
 
     def T2():
         tell, wait = c21.tell, c12.wait
 
-        wait('T1-V-under')
-        Z.acquire()
-        tell('T2-Z-taken')
+        # cycle 0: vs loadblk in T0
+        # cycle 1: vs storeblk in T0
+        for _ in range(2):
+            wait('T1-V-under')
+            Z.acquire()
+            tell('T2-Z-taken')
 
-        fh.invalidate_page(0)
-        Z.release()
+            fh2.invalidate_page(0)  # NOTE invalidating page _not_ of fh
+            Z.release()
+
+            tell('T2-Z-released')
 
 
     t1, t2 = Thread(target=T1), Thread(target=T2)
@@ -185,7 +208,7 @@ def test_thread_multiaccess_parallel():
     t1.join(); t2.join()
 
 
-# loading vs invalidate in another thread
+# loading vs invalidate of same page in another thread
 def test_thread_load_vs_invalidate():
     c12 = NotifyChannel()   # T1 -> T2
     c21 = NotifyChannel()   # T2 -> T1
