@@ -15,7 +15,7 @@
 # warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 #
 # See COPYING file for full licensing terms.
-from wendelin.bigfile import BigFile
+from wendelin.bigfile import BigFile, WRITEOUT_STORE
 from threading import Thread, Lock
 from time import sleep
 
@@ -69,6 +69,16 @@ PS = 2*MB
 #                       Z   <- ClientStorage.invalidateTransaction()
 #   Z -> zeo.load
 #                       V   <- fileh_invalidate_page (possibly of unrelated page)
+#
+#   --------
+#   and similarly for storeblk:
+#
+#   T1                  T2
+#
+#   commit              same as ^^^
+#   V -> storeblk
+#
+#   Z -> zeo.store
 def test_thread_lock_vs_virtmem_lock():
     Z = Lock()
     c12 = NotifyChannel()   # T1 -> T2
@@ -79,7 +89,7 @@ def test_thread_lock_vs_virtmem_lock():
             obj = BigFile.__new__(cls, blksize)
             return obj
 
-        def loadblk(self, blk, buf):
+        def Zsync_and_lockunlock(self):
             tell, wait = c12.tell, c21.wait
 
             # synchronize with invalidate in T2
@@ -91,6 +101,11 @@ def test_thread_lock_vs_virtmem_lock():
             Z.acquire()
             Z.release()
 
+        def loadblk(self, blk, buf):
+            self.Zsync_and_lockunlock()
+
+        def storeblk(self, blk, buf):
+            self.Zsync_and_lockunlock()
 
     f   = ZLockBigFile(PS)
     fh  = f.fileh_open()
@@ -101,16 +116,26 @@ def test_thread_lock_vs_virtmem_lock():
     def T1():
         m[0]    # calls ZLockBigFile.loadblk()
 
+        tell, wait = c12.tell, c21.wait
+        wait('T2-Z-released')
+        m[0] = bord_py3(b'1')               # make page dirty
+        fh.dirty_writeout(WRITEOUT_STORE)   # calls ZLockBigFile.storeblk()
+
 
     def T2():
         tell, wait = c21.tell, c12.wait
 
-        wait('T1-V-under')
-        Z.acquire()
-        tell('T2-Z-taken')
+        # cycle 0: vs loadblk in T0
+        # cycle 1: vs storeblk in T0
+        for _ in range(2):
+            wait('T1-V-under')
+            Z.acquire()
+            tell('T2-Z-taken')
 
-        fh2.invalidate_page(0)  # NOTE invalidating page _not_ of fh
-        Z.release()
+            fh2.invalidate_page(0)  # NOTE invalidating page _not_ of fh
+            Z.release()
+
+            tell('T2-Z-released')
 
 
     t1, t2 = Thread(target=T1), Thread(target=T2)

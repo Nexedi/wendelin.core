@@ -150,6 +150,7 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
     fileh->file = file;
     INIT_LIST_HEAD(&fileh->mmaps);
     INIT_LIST_HEAD(&fileh->dirty_pages);
+    fileh->writeout_inprogress = 0;
     pagemap_init(&fileh->pagemap, ilog2_exact(ram->pagesize));
 
 out:
@@ -171,6 +172,9 @@ void fileh_close(BigFileH *fileh)
     // XXX implement the same semantics usual files have wrt mmaps - if we release
     // fileh, but mapping exists - real fileh release is delayed to last unmap ?
     BUG_ON(!list_empty(&fileh->mmaps));
+
+    /* it's an error to close fileh while writeout is in progress */
+    BUG_ON(fileh->writeout_inprogress);
 
     /* drop all pages (dirty or not) associated with this fileh */
     pagemap_for_each(page, &fileh->pagemap) {
@@ -328,6 +332,10 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     sigsegv_block(&save_sigset);
     virt_lock();
 
+    /* concurrent writeouts are not allowed */
+    BUG_ON(fileh->writeout_inprogress);
+    fileh->writeout_inprogress = 1;
+
     /* pages are stored (if stored) in sorted order */
     if (flags & WRITEOUT_STORE)
         list_sort(&fileh->dirty_pages, hpage_indirty_cmp_bypgoffset, NULL);
@@ -343,35 +351,29 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
             blk_t blk = page->f_pgoffset;   // NOTE assumes blksize = pagesize
 
             void *pagebuf;
-            int   mapped_tmp = 0;
 
-            if (!page->refcnt) {
-                /* page not mmaped anywhere - mmap it temporarily somewhere */
-                pagebuf = page_mmap(page, NULL, PROT_READ);
-                TODO(!pagebuf); // XXX err
-                mapped_tmp = 1;
-            }
+            /* mmap page temporarily somewhere
+             *
+             * ( we cannot use present page mapping in some vma directly,
+             *   because while storeblk is called with virtmem lock released that
+             *   mapping can go away ) */
+            pagebuf = page_mmap(page, NULL, PROT_READ);
+            TODO(!pagebuf); // XXX err
 
-            else {
-                /* some vma mmaps page - use that memory directly */
-
-                /* XXX this assumes there is small #vma and is ugly - in general it
-                 * should be simpler via back-pointers from page?   */
-                pagebuf = NULL;
-                list_for_each(hmmap, &fileh->mmaps) {
-                    VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
-                    if (vma_page_ismapped(vma, page)) {
-                        pagebuf = vma_page_addr(vma, page);
-                        break;
-                    }
-                }
-                BUG_ON(!pagebuf);
-            }
+            /* unlock virtmem before calling storeblk()
+             *
+             * that call is potentially slow and external code can take other
+             * locks. If that "other locks" are also taken before external code
+             * calls e.g. fileh_invalidate_page() in different codepath a deadlock
+             * can happen. (similar to loadblk case) */
+            virt_unlock();
 
             err = file->file_ops->storeblk(file, blk, pagebuf);
 
-            if (mapped_tmp)
-                xmunmap(pagebuf, page_size(page));
+            /* relock virtmem */
+            virt_lock();
+
+            xmunmap(pagebuf, page_size(page));
 
             if (err)
                 goto out;
@@ -395,6 +397,8 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     if (flags & WRITEOUT_MARKSTORED)
         BUG_ON(!list_empty(&fileh->dirty_pages));
 
+    fileh->writeout_inprogress = 0;
+
 out:
     virt_unlock();
     sigsegv_restore(&save_sigset);
@@ -411,6 +415,8 @@ void fileh_dirty_discard(BigFileH *fileh)
     sigsegv_block(&save_sigset);
     virt_lock();
 
+    /* discard is not allowed to run in parallel to writeout */
+    BUG_ON(fileh->writeout_inprogress);
 
     list_for_each_safe(hpage, hpage_next, &fileh->dirty_pages) {
         page = list_entry(hpage, typeof(*page), in_dirty);
@@ -437,6 +443,9 @@ void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset)
 
     sigsegv_block(&save_sigset);
     virt_lock();
+
+    /* it's an error to invalidate fileh while writeout is in progress */
+    BUG_ON(fileh->writeout_inprogress);
 
     page = pagemap_get(&fileh->pagemap, pgoffset);
     if (page) {
@@ -660,7 +669,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
          * that call is potentially slow and external code can take other
          * locks. If that "other locks" are also taken before external code
          * calls e.g. fileh_invalidate_page() in different codepath a deadlock
-         * can happen. */
+         * can happen. (similar to storeblk case) */
         page->state = PAGE_LOADING;
         virt_unlock();
 
@@ -742,8 +751,12 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     }
 
     // XXX also call page->markdirty() ?
-    if (newstate == PAGE_DIRTY  &&  newstate != page->state)
+    if (newstate == PAGE_DIRTY  &&  newstate != page->state) {
+        /* it is not allowed to modify pages while writeout is in progress */
+        BUG_ON(fileh->writeout_inprogress);
+
         list_add_tail(&page->in_dirty, &fileh->dirty_pages);
+    }
     page->state = max(page->state, newstate);
 
     /* mark page as used recently */
@@ -859,6 +872,8 @@ static void page_drop_memory(Page *page)
     /* NOTE we try not to drop memory for loading-in-progress pages.
      *      so if this is called for such a page - it is a bug. */
     BUG_ON(page->state == PAGE_LOADING);
+    /* same for storing-in-progress */
+    BUG_ON(page->fileh->writeout_inprogress && page->state == PAGE_DIRTY);
 
     if (page->state == PAGE_EMPTY)
         return;
