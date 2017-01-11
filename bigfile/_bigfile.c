@@ -527,8 +527,39 @@ out:
     XPyErr_FullClear();
 
     /* verify pybuf is not held - its memory will go away right after return */
-    if (pybuf)
+    if (pybuf) {
+        /* pybuf might be held e.g. due to an exception raised & caught
+         * somewhere in loadblk implementation - so loadblk returns ok, but if
+         *
+         *   _, _, exc_traceback = sys.exc_info()
+         *
+         * was also used inside the following reference loop is created:
+         *
+         *   exc_traceback
+         *     |        ^
+         *     |        |
+         *     v     .f_localsplus
+         *    frame
+         *
+         * and some of the frames continue to hold pybuf reference.
+         *
+         * Do full GC to collect such cycles this way removing references to
+         * pybuf.
+         */
+        if (pybuf->ob_refcnt != 1) {
+            PyGC_Collect();
+
+            /* garbage collection could result in running arbitraty code
+             * because of finalizers. Print problems (if any) and make sure
+             * once again exception state is clear */
+            if (PyErr_Occurred())
+                PyErr_PrintEx(0);
+            XPyErr_FullClear();
+        }
+
+        /* now it is real bug if pybuf remains referenced from somewhere */
         BUG_ON(pybuf->ob_refcnt != 1);
+    }
 
     /* drop pybuf
      *
@@ -613,6 +644,14 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
 
     /* we need to know only whether storeret != NULL, decref it now */
     Py_XDECREF(storeret);
+
+    /* FIXME the following is not strictly correct e.g. for:
+     *   mbuf = memoryview(buf)
+     * because mbuf.ptr will be a copy of buf.ptr and clearing buf does not
+     * clear mbuf.
+     *
+     * -> TODO rework to call gc.collect() if pybuf->ob_refcnt != 1
+     * like loadblk codepath does. */
 
     /* repoint pybuf to empty region - the original memory attached to it can
      * go away right after we return (if e.g. dirty page was not mapped in any

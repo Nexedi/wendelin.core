@@ -151,14 +151,9 @@ def test_pagefault_savestate():
             #     v     .f_localsplus
             #    frame
             #
-            # Since upon returning we can't hold a reference to buf, let's
-            # break the loop explicitly.
-            #
-            # Otherwise both exc_traceback and frame will be alive until next
-            # gc.collect() which cannot be perform in pagefault handler.
-            #
-            # Not breaking this loop will BUG with `buf.refcnt != 1` on return
-            del exc_traceback
+            # which result in holding additional ref to buf, but loadblk caller
+            # will detect and handle this situation via garbage-collecting
+            # above cycle.
 
             self.loadblk_run = 1
 
