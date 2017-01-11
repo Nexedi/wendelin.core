@@ -114,6 +114,10 @@ typedef struct PyBigFile PyBigFile;
 /* like PyErr_SetFromErrno(exc), but chooses exception type automatically */
 static void XPyErr_SetFromErrno(void);
 
+/* like PyErr_Clear but clears not only ->curexc_* but also ->exc_* and
+ * everything else related to exception state */
+static void XPyErr_FullClear(void);
+
 
 /************
  *  PyVMA   *
@@ -430,9 +434,6 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
     PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
     PyObject  *save_async_exc;
-    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
-    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
-    PyObject  *x_async_exc;
     PyObject  *sys_exc_type,     *sys_exc_value,     *sys_exc_traceback;
     // XXX save/restore trash_delete_{nesting,later} ?
 
@@ -506,6 +507,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     loadret = PyObject_CallMethod(pyfile, "loadblk", "KO", blk, pybuf);
 
     /* python should return to original frame */
+    BUG_ON(ts != PyThreadState_GET());
     BUG_ON(ts->frame != ts_frame_orig);
 
     if (!loadret)
@@ -521,28 +523,8 @@ out:
 
 
     /* first clear exception states so it drop all references (and possibly in
-     * called frame) to pybuf
-     * (like PyErr_Restore(), but for both curexc_* and exc_*)  */
-    x_curexc_type       = set0(&ts->curexc_type);
-    x_curexc_value      = set0(&ts->curexc_value);
-    x_curexc_traceback  = set0(&ts->curexc_traceback);
-    x_exc_type          = set0(&ts->exc_type);
-    x_exc_value         = set0(&ts->exc_value);
-    x_exc_traceback     = set0(&ts->exc_traceback);
-    x_async_exc         = set0(&ts->async_exc);
-
-    Py_XDECREF(x_curexc_type);
-    Py_XDECREF(x_curexc_value);
-    Py_XDECREF(x_curexc_traceback);
-    Py_XDECREF(x_exc_type);
-    Py_XDECREF(x_exc_value);
-    Py_XDECREF(x_exc_traceback);
-    Py_XDECREF(x_async_exc);
-
-    PySys_SetObject("exc_type",       Py_None);
-    PySys_SetObject("exc_value",      Py_None);
-    PySys_SetObject("exc_traceback",  Py_None);
-
+     * called frame) to pybuf */
+    XPyErr_FullClear();
 
     /* verify pybuf is not held - its memory will go away right after return */
     if (pybuf)
@@ -598,7 +580,6 @@ err:
 }
 
 #undef XINC
-#undef set0
 
 
 static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
@@ -904,4 +885,36 @@ XPyErr_SetFromErrno(void)
     }
 
     PyErr_SetFromErrno(exc);
+}
+
+
+static void
+XPyErr_FullClear(void)
+{
+    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
+    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
+    PyObject  *x_async_exc;
+    PyThreadState *ts;
+
+    ts = PyThreadState_GET();
+
+    x_curexc_type       = set0(&ts->curexc_type);
+    x_curexc_value      = set0(&ts->curexc_value);
+    x_curexc_traceback  = set0(&ts->curexc_traceback);
+    x_exc_type          = set0(&ts->exc_type);
+    x_exc_value         = set0(&ts->exc_value);
+    x_exc_traceback     = set0(&ts->exc_traceback);
+    x_async_exc         = set0(&ts->async_exc);
+
+    Py_XDECREF(x_curexc_type);
+    Py_XDECREF(x_curexc_value);
+    Py_XDECREF(x_curexc_traceback);
+    Py_XDECREF(x_exc_type);
+    Py_XDECREF(x_exc_value);
+    Py_XDECREF(x_exc_traceback);
+    Py_XDECREF(x_async_exc);
+
+    PySys_SetObject("exc_type",       Py_None);
+    PySys_SetObject("exc_value",      Py_None);
+    PySys_SetObject("exc_traceback",  Py_None);
 }
