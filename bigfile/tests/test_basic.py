@@ -125,22 +125,19 @@ def test_basic():
 
 
 # test that python exception state is preserved across pagefaulting
+keepg = []
 def test_pagefault_savestate():
+    keep = []
     class BadFile(BigFile):
         def loadblk(self, blk, buf):
             # simulate some errors in-between to overwrite thread exception
             # state, and say we are done ok
             try:
                 1/0
-            except ZeroDivisionError:
-                pass
+            except:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
 
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            if PY2:
-                assert exc_type is ZeroDivisionError
-            else:
-                # on python3 exception state is cleared upon exiting from `except`
-                assert exc_type is None
+            assert exc_type is ZeroDivisionError
 
 
             # NOTE there is a loop created here:
@@ -151,16 +148,39 @@ def test_pagefault_savestate():
             #     v     .f_localsplus
             #    frame
             #
-            # Since upon returning we can't hold a reference to buf, let's
-            # break the loop explicitly.
-            #
-            # Otherwise both exc_traceback and frame will be alive until next
-            # gc.collect() which cannot be perform in pagefault handler.
-            #
-            # Not breaking this loop will BUG with `buf.refcnt != 1` on return
-            del exc_traceback
+            # which result in holding additional ref to buf, but loadblk caller
+            # will detect and handle this situation via garbage-collecting
+            # above cycle.
+
+            # and even if we keep traceback alive it will care to detach buf
+            # from frame via substituting another stub object inplace of it
+            exc_traceback.tb_frame.f_locals
+            keep.append(exc_traceback)
+
+            # check same when happenned in function one more level down
+            self.func(buf)
+
+            # a case where only f_locals dict is kept alive
+            self.keep_f_locals(buf)
 
             self.loadblk_run = 1
+
+
+        def func(self, arg):
+            try:
+                1/0
+            except:
+                _, _, exc_traceback = sys.exc_info()
+
+            assert exc_traceback is not None
+            keep.append(exc_traceback)
+
+        @staticmethod
+        def keep_f_locals(arg):
+            try:
+                1/0
+            except:
+                keepg.append(sys.exc_info()[2].tb_frame.f_locals)
 
 
     f   = BadFile(PS)
@@ -183,6 +203,9 @@ def test_pagefault_savestate():
         assert exc_type  is exc_type2
         assert exc_value is exc_value2
         assert exc_tb    is exc_tb2
+
+    assert keep[0].tb_frame.f_locals['buf'] == "<pybuf>"  # the stub object
+    assert keep[1].tb_frame.f_locals['arg'] == "<pybuf>"  # ----//----
 
 
     # TODO close f

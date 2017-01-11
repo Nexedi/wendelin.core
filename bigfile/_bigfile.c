@@ -28,13 +28,16 @@
 
 #include <Python.h>
 #include "structmember.h"
-typedef struct _frame PyFrameObject;
+#include "frameobject.h"
 
 #include <wendelin/bigfile/file.h>
 #include <wendelin/bigfile/virtmem.h>
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
 #include <wendelin/compat_py2.h>
+
+static PyObject *gcmodule;
+static PyObject *pybuf_str;
 
 /* whether to pass old buffer instead of memoryview to .loadblk() / .storeblk()
  *
@@ -113,6 +116,26 @@ typedef struct PyBigFile PyBigFile;
 
 /* like PyErr_SetFromErrno(exc), but chooses exception type automatically */
 static void XPyErr_SetFromErrno(void);
+
+/* like PyErr_Clear but clears not only ->curexc_* but also ->exc_* and
+ * everything else related to exception state */
+static void XPyErr_FullClear(void);
+
+/* get list of objects that refer to obj */
+static PyObject* /* PyListObject* */ XPyObject_GetReferrers(PyObject *obj);
+
+/* print objects that refer to obj */
+void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
+
+/* check whether frame f is a callee of top */
+static int XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top);
+
+/* buffer utilities: unpin buffer from its memory - make it zero-length
+ * pointing to NULL but staying a vailid python object */
+#if PY_MAJOR_VERSION < 3
+void XPyBufferObject_Unpin(PyBufferObject *bufo);
+#endif
+void XPyBuffer_Unpin(Py_buffer *view);
 
 
 /************
@@ -430,9 +453,6 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
     PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
     PyObject  *save_async_exc;
-    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
-    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
-    PyObject  *x_async_exc;
     PyObject  *sys_exc_type,     *sys_exc_value,     *sys_exc_traceback;
     // XXX save/restore trash_delete_{nesting,later} ?
 
@@ -506,6 +526,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     loadret = PyObject_CallMethod(pyfile, "loadblk", "KO", blk, pybuf);
 
     /* python should return to original frame */
+    BUG_ON(ts != PyThreadState_GET());
     BUG_ON(ts->frame != ts_frame_orig);
 
     if (!loadret)
@@ -521,32 +542,134 @@ out:
 
 
     /* first clear exception states so it drop all references (and possibly in
-     * called frame) to pybuf
-     * (like PyErr_Restore(), but for both curexc_* and exc_*)  */
-    x_curexc_type       = set0(&ts->curexc_type);
-    x_curexc_value      = set0(&ts->curexc_value);
-    x_curexc_traceback  = set0(&ts->curexc_traceback);
-    x_exc_type          = set0(&ts->exc_type);
-    x_exc_value         = set0(&ts->exc_value);
-    x_exc_traceback     = set0(&ts->exc_traceback);
-    x_async_exc         = set0(&ts->async_exc);
-
-    Py_XDECREF(x_curexc_type);
-    Py_XDECREF(x_curexc_value);
-    Py_XDECREF(x_curexc_traceback);
-    Py_XDECREF(x_exc_type);
-    Py_XDECREF(x_exc_value);
-    Py_XDECREF(x_exc_traceback);
-    Py_XDECREF(x_async_exc);
-
-    PySys_SetObject("exc_type",       Py_None);
-    PySys_SetObject("exc_value",      Py_None);
-    PySys_SetObject("exc_traceback",  Py_None);
-
+     * called frame) to pybuf */
+    XPyErr_FullClear();
 
     /* verify pybuf is not held - its memory will go away right after return */
-    if (pybuf)
-        BUG_ON(pybuf->ob_refcnt != 1);
+    if (pybuf) {
+        /* pybuf might be held e.g. due to an exception raised & caught
+         * somewhere in loadblk implementation - so loadblk returns ok, but if
+         *
+         *   _, _, exc_traceback = sys.exc_info()
+         *
+         * was also used inside the following reference loop is created:
+         *
+         *   exc_traceback
+         *     |        ^
+         *     |        |
+         *     v     .f_localsplus
+         *    frame
+         *
+         * and some of the frames continue to hold pybuf reference.
+         *
+         * Do full GC to collect such, and possibly other, cycles this way
+         * removing references to pybuf.
+         */
+        if (pybuf->ob_refcnt != 1) {
+            PyGC_Collect();
+
+            /* garbage collection could result in running arbitraty code
+             * because of finalizers. Print problems (if any) and make sure
+             * once again exception state is clear */
+            if (PyErr_Occurred())
+                PyErr_PrintEx(0);
+            XPyErr_FullClear();
+        }
+
+        /* the story continues here - a traceback might be also explicitly
+         * saved by code somewhere this way not going away after GC. Let's
+         * find objects that refer to pybuf, and for frames called by loadblk()
+         * change pybuf to another stub object (we know there we can do it safely) */
+        if (pybuf->ob_refcnt != 1) {
+            PyObject *pybuf_users = XPyObject_GetReferrers(pybuf);
+            int i, j;
+
+            for (i = 0; i < PyList_GET_SIZE(pybuf_users); i++) {
+                PyObject *user = PyList_GET_ITEM(pybuf_users, i);
+                PyObject **fastlocals;
+                PyFrameObject *f;
+
+                /* if it was the frame used for our calling to py loadblk() we
+                 * can replace pybuf to "<pybuf>" there in loadblk arguments */
+                if (PyFrame_Check(user)) {
+                    f = (PyFrameObject *)user;
+                    if (!XPyFrame_IsCalleeOf(f, ts->frame))
+                        continue;
+
+                    /* "fast" locals (->f_localsplus) */
+                    fastlocals = f->f_localsplus;
+                    for (j = f->f_code->co_nlocals; j >= 0; --j) {
+                        if (fastlocals[j] == pybuf) {
+                            Py_INCREF(pybuf_str);
+                            fastlocals[j] = pybuf_str;
+                            Py_DECREF(pybuf);
+                        }
+                    }
+
+                    /* ->f_locals */
+                    if (f->f_locals != NULL) {
+                        TODO(!PyDict_CheckExact(f->f_locals));
+
+                        PyObject *key, *value;
+                        Py_ssize_t pos = 0;
+
+                        while (PyDict_Next(f->f_locals, &pos, &key, &value)) {
+                            if (value == pybuf) {
+                                int err;
+                                err = PyDict_SetItem(f->f_locals, key, pybuf_str);
+                                BUG_ON(err == -1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Py_DECREF(pybuf_users);
+        }
+
+        /* above attempts were "best effort" to unreference pybuf. However we
+         * cannot completely do so. For example if
+         *  1. f_locals dict reference pybuf
+         *  2. f_locals contains only not-tracked by GC keys & values (and pybuf is not tracked)
+         *  3. frame object for which f_locals was created is already garbage-collected
+         *
+         * the f_locals dict won't be even listed in pybuf referrers (python
+         * dicts and tuples with all atomic types becomes not tracked by GC),
+         * so we cannot even inspect it.
+         *
+         * if nothing helped, as a last resort, unpin pybuf from its original
+         * memory and make it point to zero-sized NULL.
+         *
+         * In general this is not strictly correct to do as other buffers &
+         * memoryview objects created from pybuf, copy its pointer on
+         * initialization and thus pybuf unpinning won't adjust them.
+         *
+         * However we require BigFile implementations to make sure not to use
+         * such-created objects, if any, after return from loadblk().
+         */
+        if (pybuf->ob_refcnt != 1) {
+#if BIGFILE_USE_OLD_BUFFER
+            PyBufferObject *pybufo = (PyBufferObject *)pybuf;
+            XPyBufferObject_Unpin(pybufo);
+#else
+            PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
+            XPyBuffer_Unpin(&pybufm->view);
+#endif
+        }
+
+#if 0
+        /* now it is real bug if pybuf remains referenced from somewhere */
+        if (pybuf->ob_refcnt != 1) {
+            WARN("pybuf->ob_refcnt != 1 even after GC:");
+            fprintf(stderr, "pybuf (ob_refcnt=%ld):\t", (long)pybuf->ob_refcnt);
+            PyObject_Print(pybuf, stderr, 0);
+            fprintf(stderr, "\npybuf referrers:\t");
+            XPyObject_PrintReferrers(pybuf, stderr);
+            fprintf(stderr, "\n");
+            BUG();
+        }
+#endif
+    }
 
     /* drop pybuf
      *
@@ -598,7 +721,6 @@ err:
 }
 
 #undef XINC
-#undef set0
 
 
 static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
@@ -633,22 +755,26 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
     /* we need to know only whether storeret != NULL, decref it now */
     Py_XDECREF(storeret);
 
+    /* FIXME the following is not strictly correct e.g. for:
+     *   mbuf = memoryview(buf)
+     * because mbuf.ptr will be a copy of buf.ptr and clearing buf does not
+     * clear mbuf.
+     *
+     * However we require BigFile implementations to make sure not to use
+     * such-created objects, if any, after return from storeblk().
+     *
+     * See more details in loadblk() codepath */
+
     /* repoint pybuf to empty region - the original memory attached to it can
      * go away right after we return (if e.g. dirty page was not mapped in any
      * vma), but we need pybuf to stay not corrupt - for printing full
      * traceback in case of storeblk() error. */
 #if BIGFILE_USE_OLD_BUFFER
     PyBufferObject *pybufo = (PyBufferObject *)pybuf;
-    pybufo->b_ptr    = NULL;
-    pybufo->b_size   = 0;
-    pybufo->b_offset = 0;
-    pybufo->b_hash   = -1;
-    Py_CLEAR(pybufo->b_base);
+    XPyBufferObject_Unpin(pybufo);
 #else
     PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
-    pybufm->view.buf = NULL;
-    pybufm->view.len = 0;
-    Py_CLEAR(pybufm->view.obj);
+    XPyBuffer_Unpin(&pybufm->view);
 #endif
 
     /* verify that we actually tweaked pybuf ok */
@@ -875,6 +1001,15 @@ _init_bigfile(void)
     CSTi(WRITEOUT_STORE);
     CSTi(WRITEOUT_MARKSTORED);
 
+    /* import gc */
+    gcmodule = PyImport_ImportModule("gc");
+    if (!gcmodule)
+        return NULL;
+
+    pybuf_str = PyUnicode_FromString("<pybuf>");
+    if (!pybuf_str)
+        return NULL;
+
     return m;
 }
 
@@ -904,4 +1039,83 @@ XPyErr_SetFromErrno(void)
     }
 
     PyErr_SetFromErrno(exc);
+}
+
+
+static void
+XPyErr_FullClear(void)
+{
+    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
+    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
+    PyObject  *x_async_exc;
+    PyThreadState *ts;
+
+    ts = PyThreadState_GET();
+
+    x_curexc_type       = set0(&ts->curexc_type);
+    x_curexc_value      = set0(&ts->curexc_value);
+    x_curexc_traceback  = set0(&ts->curexc_traceback);
+    x_exc_type          = set0(&ts->exc_type);
+    x_exc_value         = set0(&ts->exc_value);
+    x_exc_traceback     = set0(&ts->exc_traceback);
+    x_async_exc         = set0(&ts->async_exc);
+
+    Py_XDECREF(x_curexc_type);
+    Py_XDECREF(x_curexc_value);
+    Py_XDECREF(x_curexc_traceback);
+    Py_XDECREF(x_exc_type);
+    Py_XDECREF(x_exc_value);
+    Py_XDECREF(x_exc_traceback);
+    Py_XDECREF(x_async_exc);
+
+    PySys_SetObject("exc_type",       Py_None);
+    PySys_SetObject("exc_value",      Py_None);
+    PySys_SetObject("exc_traceback",  Py_None);
+}
+
+static PyObject* /* PyListObject* */
+XPyObject_GetReferrers(PyObject *obj)
+{
+    PyObject *obj_referrers = PyObject_CallMethod(gcmodule, "get_referrers", "O", obj);
+    BUG_ON(!obj_referrers);
+    BUG_ON(!PyList_CheckExact(obj_referrers));
+    return /*(PyListObject *)*/obj_referrers;
+}
+
+void
+XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
+{
+    PyObject *obj_referrers = XPyObject_GetReferrers(obj);
+    PyObject_Print(obj_referrers, fp, 0);
+    Py_DECREF(obj_referrers);
+}
+
+static int
+XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
+{
+    for (; f; f = f->f_back)
+        if (f == top)
+            return 1;
+
+    return 0;
+}
+
+#if PY_MAJOR_VERSION < 3
+void
+XPyBufferObject_Unpin(PyBufferObject *bufo)
+{
+    bufo->b_ptr    = NULL;
+    bufo->b_size   = 0;
+    bufo->b_offset = 0;
+    bufo->b_hash   = -1;
+    Py_CLEAR(bufo->b_base);
+}
+#endif
+
+void
+XPyBuffer_Unpin(Py_buffer *view)
+{
+    view->buf = NULL;
+    view->len = 0;
+    Py_CLEAR(view->obj);
 }
