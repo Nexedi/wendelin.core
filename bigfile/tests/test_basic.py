@@ -126,6 +126,7 @@ def test_basic():
 
 # test that python exception state is preserved across pagefaulting
 def test_pagefault_savestate():
+    keep = []
     class BadFile(BigFile):
         def loadblk(self, blk, buf):
             # simulate some errors in-between to overwrite thread exception
@@ -150,7 +151,26 @@ def test_pagefault_savestate():
             # will detect and handle this situation via garbage-collecting
             # above cycle.
 
+            # and even if we keep traceback alive it will care to detach buf
+            # from frame via substituting another stub object inplace of it
+            exc_traceback.tb_frame.f_locals
+            keep.append(exc_traceback)
+
+            # check same when happenned in function one more level down
+            self.func(buf)
+
             self.loadblk_run = 1
+
+
+        def func(self, arg):
+            try:
+                1/0
+            except:
+                _, _, exc_traceback = sys.exc_info()
+
+            assert exc_traceback is not None
+            keep.append(exc_traceback)
+
 
 
     f   = BadFile(PS)
@@ -173,6 +193,9 @@ def test_pagefault_savestate():
         assert exc_type  is exc_type2
         assert exc_value is exc_value2
         assert exc_tb    is exc_tb2
+
+    assert keep[0].tb_frame.f_locals['buf'] == "<pybuf>"  # the stub object
+    assert keep[1].tb_frame.f_locals['arg'] == "<pybuf>"  # ----//----
 
 
     # TODO close f

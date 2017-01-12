@@ -28,7 +28,7 @@
 
 #include <Python.h>
 #include "structmember.h"
-typedef struct _frame PyFrameObject;
+#include "frameobject.h"
 
 #include <wendelin/bigfile/file.h>
 #include <wendelin/bigfile/virtmem.h>
@@ -37,6 +37,7 @@ typedef struct _frame PyFrameObject;
 #include <wendelin/compat_py2.h>
 
 static PyObject *gcmodule;
+static PyObject *pybuf_str;
 
 /* whether to pass old buffer instead of memoryview to .loadblk() / .storeblk()
  *
@@ -125,6 +126,9 @@ static PyObject* /* PyListObject* */ XPyObject_GetReferrers(PyObject *obj);
 
 /* print objects that refer to obj */
 static void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
+
+/* check whether frame f is a callee of top */
+static int XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top);
 
 
 /************
@@ -551,8 +555,8 @@ out:
          *
          * and some of the frames continue to hold pybuf reference.
          *
-         * Do full GC to collect such cycles this way removing references to
-         * pybuf.
+         * Do full GC to collect such, and possibly other, cycles this way
+         * removing references to pybuf.
          */
         if (pybuf->ob_refcnt != 1) {
             PyGC_Collect();
@@ -563,6 +567,57 @@ out:
             if (PyErr_Occurred())
                 PyErr_PrintEx(0);
             XPyErr_FullClear();
+        }
+
+        /* the story continues here - a traceback might be also explicitly
+         * saved by code somewhere this way not going away after GC. Let's
+         * find objects that refer to pybuf, and for frames called by loadblk()
+         * change pybuf to another stub object (we know there we can do it safely) */
+        if (pybuf->ob_refcnt != 1) {
+            PyObject *pybuf_users = XPyObject_GetReferrers(pybuf);
+            int i, j;
+
+            for (i = 0; i < PyList_GET_SIZE(pybuf_users); i++) {
+                PyObject *user = PyList_GET_ITEM(pybuf_users, i);
+                PyObject **fastlocals;
+                PyFrameObject *f;
+
+                /* if it was the frame used for our calling to py loadblk() we
+                 * can replace pybuf to "<pybuf>" there in loadblk arguments */
+                if (PyFrame_Check(user)) {
+                    f = (PyFrameObject *)user;
+                    if (!XPyFrame_IsCalleeOf(f, ts->frame))
+                        continue;
+
+                    /* "fast" locals (->f_localsplus) */
+                    fastlocals = f->f_localsplus;
+                    for (j = f->f_code->co_nlocals; j >= 0; --j) {
+                        if (fastlocals[j] == pybuf) {
+                            Py_INCREF(pybuf_str);
+                            fastlocals[j] = pybuf_str;
+                            Py_DECREF(pybuf);
+                        }
+                    }
+
+                    /* ->f_locals */
+                    if (f->f_locals != NULL) {
+                        TODO(!PyDict_CheckExact(f->f_locals));
+
+                        PyObject *key, *value;
+                        Py_ssize_t pos = 0;
+
+                        while (PyDict_Next(f->f_locals, &pos, &key, &value)) {
+                            if (value == pybuf) {
+                                int err;
+                                err = PyDict_SetItem(f->f_locals, key, pybuf_str);
+                                BUG_ON(err == -1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Py_DECREF(pybuf_users);
         }
 
         /* now it is real bug if pybuf remains referenced from somewhere */
@@ -916,6 +971,10 @@ _init_bigfile(void)
     if (!gcmodule)
         return NULL;
 
+    pybuf_str = PyUnicode_FromString("<pybuf>");
+    if (!pybuf_str)
+        return NULL;
+
     return m;
 }
 
@@ -994,4 +1053,14 @@ XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
     PyObject *obj_referrers = XPyObject_GetReferrers(obj);
     PyObject_Print(obj_referrers, fp, 0);
     Py_DECREF(obj_referrers);
+}
+
+static int
+XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
+{
+    for (; f; f = f->f_back)
+        if (f == top)
+            return 1;
+
+    return 0;
 }
