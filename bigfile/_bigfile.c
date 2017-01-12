@@ -120,6 +120,9 @@ static void XPyErr_SetFromErrno(void);
  * everything else related to exception state */
 static void XPyErr_FullClear(void);
 
+/* get list of objects that refer to obj */
+static PyObject* /* PyListObject* */ XPyObject_GetReferrers(PyObject *obj);
+
 /* print objects that refer to obj */
 static void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
 
@@ -976,11 +979,19 @@ XPyErr_FullClear(void)
     PySys_SetObject("exc_traceback",  Py_None);
 }
 
-static void
-XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
+static PyObject* /* PyListObject* */
+XPyObject_GetReferrers(PyObject *obj)
 {
     PyObject *obj_referrers = PyObject_CallMethod(gcmodule, "get_referrers", "O", obj);
     BUG_ON(!obj_referrers);
+    BUG_ON(!PyList_CheckExact(obj_referrers));
+    return /*(PyListObject *)*/obj_referrers;
+}
+
+static void
+XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
+{
+    PyObject *obj_referrers = XPyObject_GetReferrers(obj);
     PyObject_Print(obj_referrers, fp, 0);
     Py_DECREF(obj_referrers);
 }
