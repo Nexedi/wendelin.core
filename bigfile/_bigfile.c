@@ -36,6 +36,8 @@ typedef struct _frame PyFrameObject;
 #include <wendelin/bug.h>
 #include <wendelin/compat_py2.h>
 
+static PyObject *gcmodule;
+
 /* whether to pass old buffer instead of memoryview to .loadblk() / .storeblk()
  *
  * on python2 < 2.7.10 memoreview object is not accepted in a lot of
@@ -117,6 +119,9 @@ static void XPyErr_SetFromErrno(void);
 /* like PyErr_Clear but clears not only ->curexc_* but also ->exc_* and
  * everything else related to exception state */
 static void XPyErr_FullClear(void);
+
+/* print objects that refer to obj */
+static void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
 
 
 /************
@@ -558,7 +563,15 @@ out:
         }
 
         /* now it is real bug if pybuf remains referenced from somewhere */
-        BUG_ON(pybuf->ob_refcnt != 1);
+        if (pybuf->ob_refcnt != 1) {
+            WARN("pybuf->ob_refcnt != 1 even after GC:");
+            fprintf(stderr, "pybuf (ob_refcnt=%ld):\t", (long)pybuf->ob_refcnt);
+            PyObject_Print(pybuf, stderr, 0);
+            fprintf(stderr, "\npybuf referrers:\t");
+            XPyObject_PrintReferrers(pybuf, stderr);
+            fprintf(stderr, "\n");
+            BUG();
+        }
     }
 
     /* drop pybuf
@@ -895,6 +908,11 @@ _init_bigfile(void)
     CSTi(WRITEOUT_STORE);
     CSTi(WRITEOUT_MARKSTORED);
 
+    /* import gc */
+    gcmodule = PyImport_ImportModule("gc");
+    if (!gcmodule)
+        return NULL;
+
     return m;
 }
 
@@ -956,4 +974,13 @@ XPyErr_FullClear(void)
     PySys_SetObject("exc_type",       Py_None);
     PySys_SetObject("exc_value",      Py_None);
     PySys_SetObject("exc_traceback",  Py_None);
+}
+
+static void
+XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
+{
+    PyObject *obj_referrers = PyObject_CallMethod(gcmodule, "get_referrers", "O", obj);
+    BUG_ON(!obj_referrers);
+    PyObject_Print(obj_referrers, fp, 0);
+    Py_DECREF(obj_referrers);
 }
