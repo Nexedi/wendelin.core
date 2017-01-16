@@ -132,15 +132,10 @@ def test_pagefault_savestate():
             # state, and say we are done ok
             try:
                 1/0
-            except ZeroDivisionError:
-                pass
+            except:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
 
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            if PY2:
-                assert exc_type is ZeroDivisionError
-            else:
-                # on python3 exception state is cleared upon exiting from `except`
-                assert exc_type is None
+            assert exc_type is ZeroDivisionError
 
 
             # NOTE there is a loop created here:
