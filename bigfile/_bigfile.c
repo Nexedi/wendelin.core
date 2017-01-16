@@ -130,6 +130,13 @@ static void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
 /* check whether frame f is a callee of top */
 static int XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top);
 
+/* buffer utilities: unpin buffer from its memory - make it zero-length
+ * pointing to NULL but staying a vailid python object */
+#if PY_MAJOR_VERSION < 3
+void XPyBufferObject_Unpin(PyBufferObject *bufo);
+#endif
+void XPyBuffer_Unpin(Py_buffer *view);
+
 
 /************
  *  PyVMA   *
@@ -730,16 +737,10 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
      * traceback in case of storeblk() error. */
 #if BIGFILE_USE_OLD_BUFFER
     PyBufferObject *pybufo = (PyBufferObject *)pybuf;
-    pybufo->b_ptr    = NULL;
-    pybufo->b_size   = 0;
-    pybufo->b_offset = 0;
-    pybufo->b_hash   = -1;
-    Py_CLEAR(pybufo->b_base);
+    XPyBufferObject_Unpin(pybufo);
 #else
     PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
-    pybufm->view.buf = NULL;
-    pybufm->view.len = 0;
-    Py_CLEAR(pybufm->view.obj);
+    XPyBuffer_Unpin(&pybufm->view);
 #endif
 
     /* verify that we actually tweaked pybuf ok */
@@ -1063,4 +1064,24 @@ XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
             return 1;
 
     return 0;
+}
+
+#if PY_MAJOR_VERSION < 3
+void
+XPyBufferObject_Unpin(PyBufferObject *bufo)
+{
+    bufo->b_ptr    = NULL;
+    bufo->b_size   = 0;
+    bufo->b_offset = 0;
+    bufo->b_hash   = -1;
+    Py_CLEAR(bufo->b_base);
+}
+#endif
+
+void
+XPyBuffer_Unpin(Py_buffer *view)
+{
+    view->buf = NULL;
+    view->len = 0;
+    Py_CLEAR(view->obj);
 }
