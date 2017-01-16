@@ -125,6 +125,7 @@ def test_basic():
 
 
 # test that python exception state is preserved across pagefaulting
+keepg = []
 def test_pagefault_savestate():
     keep = []
     class BadFile(BigFile):
@@ -159,6 +160,9 @@ def test_pagefault_savestate():
             # check same when happenned in function one more level down
             self.func(buf)
 
+            # a case where only f_locals dict is kept alive
+            self.keep_f_locals(buf)
+
             self.loadblk_run = 1
 
 
@@ -171,6 +175,12 @@ def test_pagefault_savestate():
             assert exc_traceback is not None
             keep.append(exc_traceback)
 
+        @staticmethod
+        def keep_f_locals(arg):
+            try:
+                1/0
+            except:
+                keepg.append(sys.exc_info()[2].tb_frame.f_locals)
 
 
     f   = BadFile(PS)

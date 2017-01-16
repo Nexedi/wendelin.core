@@ -125,7 +125,7 @@ static void XPyErr_FullClear(void);
 static PyObject* /* PyListObject* */ XPyObject_GetReferrers(PyObject *obj);
 
 /* print objects that refer to obj */
-static void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
+void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
 
 /* check whether frame f is a callee of top */
 static int XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top);
@@ -627,6 +627,37 @@ out:
             Py_DECREF(pybuf_users);
         }
 
+        /* above attempts were "best effort" to unreference pybuf. However we
+         * cannot completely do so. For example if
+         *  1. f_locals dict reference pybuf
+         *  2. f_locals contains only not-tracked by GC keys & values (and pybuf is not tracked)
+         *  3. frame object for which f_locals was created is already garbage-collected
+         *
+         * the f_locals dict won't be even listed in pybuf referrers (python
+         * dicts and tuples with all atomic types becomes not tracked by GC),
+         * so we cannot even inspect it.
+         *
+         * if nothing helped, as a last resort, unpin pybuf from its original
+         * memory and make it point to zero-sized NULL.
+         *
+         * In general this is not strictly correct to do as other buffers &
+         * memoryview objects created from pybuf, copy its pointer on
+         * initialization and thus pybuf unpinning won't adjust them.
+         *
+         * However we require BigFile implementations to make sure not to use
+         * such-created objects, if any, after return from loadblk().
+         */
+        if (pybuf->ob_refcnt != 1) {
+#if BIGFILE_USE_OLD_BUFFER
+            PyBufferObject *pybufo = (PyBufferObject *)pybuf;
+            XPyBufferObject_Unpin(pybufo);
+#else
+            PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
+            XPyBuffer_Unpin(&pybufm->view);
+#endif
+        }
+
+#if 0
         /* now it is real bug if pybuf remains referenced from somewhere */
         if (pybuf->ob_refcnt != 1) {
             WARN("pybuf->ob_refcnt != 1 even after GC:");
@@ -637,6 +668,7 @@ out:
             fprintf(stderr, "\n");
             BUG();
         }
+#endif
     }
 
     /* drop pybuf
@@ -728,8 +760,10 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
      * because mbuf.ptr will be a copy of buf.ptr and clearing buf does not
      * clear mbuf.
      *
-     * -> TODO rework to call gc.collect() if pybuf->ob_refcnt != 1
-     * like loadblk codepath does. */
+     * However we require BigFile implementations to make sure not to use
+     * such-created objects, if any, after return from storeblk().
+     *
+     * See more details in loadblk() codepath */
 
     /* repoint pybuf to empty region - the original memory attached to it can
      * go away right after we return (if e.g. dirty page was not mapped in any
@@ -1048,7 +1082,7 @@ XPyObject_GetReferrers(PyObject *obj)
     return /*(PyListObject *)*/obj_referrers;
 }
 
-static void
+void
 XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
 {
     PyObject *obj_referrers = XPyObject_GetReferrers(obj);
