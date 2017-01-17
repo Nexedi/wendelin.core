@@ -216,7 +216,7 @@ def readfile(path):
 
 setup(
     name        = 'wendelin.core',
-    version     = '0.8',
+    version     = '0.9',
     description = 'Out-of-core NumPy arrays',
     long_description = '%s\n----\n\n%s' % (
                             readfile('README.rst'), readfile('CHANGELOG.rst')),

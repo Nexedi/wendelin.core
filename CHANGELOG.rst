@@ -1,6 +1,23 @@
 Wendelin.core change history
 ============================
 
+0.9 (2017-01-17)
+----------------
+
+- Avoid deadlocks via doing `storeblk()` calls with virtmem lock released
+  (`commit 1`__, 2__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/8bb7f2f2
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/fb4bfb32
+
+- Don't crash if in `loadblk()` implementation an exception is internally
+  raised & caught
+  (`commit 1`__, 2__, 3__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/9aa6a5d7
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/61b18a40
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/024c246c
+
 0.8 (2016-09-28)
 ----------------
 
