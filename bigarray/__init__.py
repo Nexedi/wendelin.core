@@ -76,7 +76,19 @@ class BigArray(object):
 
     # __init__ part without fileh
     def _init0(self, shape, dtype_, order):
-        self._dtype = dtype(dtype_)
+        _dtype = dtype(dtype_)
+        if _dtype.hasobject:
+            logging.warn("You tried to use dtype containing object (%r) with out-of-core array ..." % _dtype)
+            logging.warn("... wendelin.core does not support it, because in case of dtype=object elements are")
+            logging.warn("... really pointers and data for each object is stored in separate place in RAM")
+            logging.warn("... with different per-object size.")
+            logging.warn("... ")
+            logging.warn("... As out-of-core arrays are really memory-mapping of data in external storage")
+            logging.warn("... this won't work. It also does not essentially work with numpy.memmap() for the")
+            logging.warn("... same reason.")
+            raise TypeError("dtypes with object are not supported", _dtype)
+
+        self._dtype = _dtype
         self._shape = shape
         self._order = order
         # TODO +offset ?
