@@ -64,6 +64,19 @@ class BigFile_Data_RO(BigFile_Data):
 PS = 2*1024*1024    # FIXME hardcoded, TODO -> ram.pagesize
 
 
+# make sure we don't let dtype with object to be used with BigArray
+def test_bigarray_noobject():
+    Z  = BigFile_Zero(PS)
+    Zh = Z.fileh_open()
+
+    # NOTE str & unicode are fixed-size types - if size is not explicitly given
+    # it will become S0 or U0
+    obj_dtypev = [numpy.object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
+    for dtype_ in obj_dtypev:
+        print dtype_
+        raises(TypeError, "BigArray((1,), dtype_, Zh)")
+
+
 # basic ndarray-compatibility attributes of BigArray
 def test_bigarray_basic():
     Z  = BigFile_Zero(PS)
