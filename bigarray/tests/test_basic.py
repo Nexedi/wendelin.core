@@ -73,7 +73,6 @@ def test_bigarray_noobject():
     # it will become S0 or U0
     obj_dtypev = [numpy.object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
     for dtype_ in obj_dtypev:
-        print dtype_
         raises(TypeError, "BigArray((1,), dtype_, Zh)")
 
 
