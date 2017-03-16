@@ -1,6 +1,13 @@
 Wendelin.core change history
 ============================
 
+0.10 (2017-03-16)
+-----------------
+
+- Tell the world `dtype=object` is not supported (`commit`__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/e44bd761
+
 0.9 (2017-01-17)
 ----------------
 
