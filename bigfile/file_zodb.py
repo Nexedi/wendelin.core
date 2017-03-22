@@ -382,7 +382,7 @@ ZBlk_fmt_registry = {
 }
 
 # format for updated blocks
-ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT', 'ZBlk1')
+ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT', 'ZBlk0')
 if ZBlk_fmt_write not in ZBlk_fmt_registry:
     raise RuntimeError('E: Unknown ZBlk format %r' % ZBlk_fmt_write)
 
