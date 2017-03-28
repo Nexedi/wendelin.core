@@ -1,6 +1,13 @@
 Wendelin.core change history
 ============================
 
+0.11 (2017-03-28)
+-----------------
+
+- Switch back to using ZBlk0 format by default (`commit`__)
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/0b68f178
+
 0.10 (2017-03-16)
 -----------------
 
