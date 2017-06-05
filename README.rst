@@ -2,6 +2,8 @@
  Wendelin.core - Out-of-core NumPy arrays
 ==========================================
 
+Test
+
 Wendelin.core allows you to work with arrays bigger than RAM and local disk.
 Bigarrays are persisted to storage, and can be changed in transactional manner.
 
