@@ -397,9 +397,9 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     if (flags & WRITEOUT_MARKSTORED)
         BUG_ON(!list_empty(&fileh->dirty_pages));
 
+out:
     fileh->writeout_inprogress = 0;
 
-out:
     virt_unlock();
     sigsegv_restore(&save_sigset);
     return err;

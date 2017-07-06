@@ -17,6 +17,7 @@
 # See COPYING file for full licensing terms.
 # TODO description
 from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
+from wendelin.lib.mem import bzero
 import struct
 import weakref
 import sys
@@ -343,3 +344,35 @@ def test_gc_from_sighandler():
     assert f3.marker_list == []
     m3[0]
     assert f3.marker_list == [2]
+
+
+# test that there is no crash after first store error on writeout
+class StoreError(Exception):
+    pass
+
+class StoreErrBigFile(BigFile):
+
+    def __new__(cls, blksize):
+        return BigFile.__new__(cls, blksize)
+
+    # load: just return all zero
+    def loadblk(self, blk, buf):
+        bzero(buf)
+
+    # store: always error
+    def storeblk(self, blk, buf):
+        raise StoreError("store blk #%d: error " % blk)
+
+def test_writeout_err_notfatal():
+    f   = StoreErrBigFile(PS)
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, 1)
+
+    m = memoryview(vma)
+    m[0] = bord_py3(b'A')   # load + set dirty
+
+    # call writeout 2 times as previously upon error it was leaving internal
+    # flag set that writeout was still in progress and second call to writeout
+    # was leading to BUG and thus process crash.
+    raises(StoreError, "fh.dirty_writeout(WRITEOUT_STORE)")
+    raises(StoreError, "fh.dirty_writeout(WRITEOUT_STORE)")
