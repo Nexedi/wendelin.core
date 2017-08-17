@@ -428,19 +428,6 @@ static /*const*/ PyTypeObject PyBigFileH_Type = {
  ****************/
 
 
-/* like PySys_SetObject but
- *  1) aborts on failure and
- *  2) return set object
- */
-static PyObject *XPySys_SetObject(char *name, PyObject *v)
-{
-    int err;
-    err = PySys_SetObject(name, v);
-    BUG_ON(err);
-    return v;
-}
-
-
 static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 {
     PyBigFile *pyfile = upcast(PyBigFile *, file);
@@ -453,7 +440,6 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
     PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
     PyObject  *save_async_exc;
-    PyObject  *sys_exc_type,     *sys_exc_value,     *sys_exc_traceback;
     // XXX save/restore trash_delete_{nesting,later} ?
 
 
@@ -508,10 +494,9 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     XINC( save_async_exc          = set0(&ts->async_exc)          );
 
     /* before py3k python also stores exception in sys.exc_* variables (wrt
-     * sys.exc_info()) for "backward compatibility" */
-    sys_exc_type        = PySys_XInc_SetNone("exc_type");
-    sys_exc_value       = PySys_XInc_SetNone("exc_value");
-    sys_exc_traceback   = PySys_XInc_SetNone("exc_traceback");
+     * sys.exc_info()) for "backward compatibility", but we do not care about it
+     * as sys.exc_* variables are not thread safe and from a thread point of view
+     * can be changing at arbitrary times during while its python code runs. */
 
 #if BIGFILE_USE_OLD_BUFFER
     pybuf = PyBuffer_FromReadWriteMemory(buf, file->blksize);
@@ -679,9 +664,6 @@ out:
     BUG_ON(ts->curexc_type  || ts->curexc_value || ts->curexc_traceback);
     BUG_ON(ts->exc_type     || ts->exc_value    || ts->exc_traceback);
     BUG_ON(ts->async_exc);
-    BUG_ON(PySys_GetObject("exc_type")      != Py_None ||
-           PySys_GetObject("exc_value")     != Py_None ||
-           PySys_GetObject("exc_traceback") != Py_None);
 
     /* now restore exception state to original */
     ts->curexc_type         = save_curexc_type;
@@ -692,10 +674,6 @@ out:
     ts->exc_traceback       = save_exc_traceback;
     ts->async_exc           = save_async_exc;
 
-    XPySys_SetObject("exc_type",       sys_exc_type);
-    XPySys_SetObject("exc_value",      sys_exc_value);
-    XPySys_SetObject("exc_traceback",  sys_exc_traceback);
-
     Py_XDECREF( save_curexc_type        );
     Py_XDECREF( save_curexc_value       );
     Py_XDECREF( save_curexc_traceback   );
@@ -703,10 +681,6 @@ out:
     Py_XDECREF( save_exc_value          );
     Py_XDECREF( save_exc_traceback      );
     Py_XDECREF( save_async_exc          );
-
-    Py_XDECREF( sys_exc_type            );
-    Py_XDECREF( sys_exc_value           );
-    Py_XDECREF( sys_exc_traceback       );
 
     /* optionally release the GIL, if it was not ours initially */
     PyGILState_Release(gstate);
@@ -1067,10 +1041,6 @@ XPyErr_FullClear(void)
     Py_XDECREF(x_exc_value);
     Py_XDECREF(x_exc_traceback);
     Py_XDECREF(x_async_exc);
-
-    PySys_SetObject("exc_type",       Py_None);
-    PySys_SetObject("exc_value",      Py_None);
-    PySys_SetObject("exc_traceback",  Py_None);
 }
 
 static PyObject* /* PyListObject* */
