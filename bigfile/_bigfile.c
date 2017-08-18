@@ -551,6 +551,16 @@ out:
          * removing references to pybuf.
          */
         if (pybuf->ob_refcnt != 1) {
+            /* NOTE this could be noop if GC was already started from another
+             * thread, called some python code via decref and then while python
+             * code there was executing - python thread switch happens to us to
+             * come here with gc.collecting=1
+             *
+             * NOTE also: while collecting garbage even more garbage can be
+             * created due to arbitrary code run from undel __del__ of released
+             * objects and weakref callbacks. This way after here GC collect
+             * even a single allocation could trigger GC, and thus arbitrary
+             * python code run, again */
             PyGC_Collect();
 
             /* garbage collection could result in running arbitraty code
@@ -610,6 +620,14 @@ out:
             }
 
             Py_DECREF(pybuf_users);
+
+            /* see note ^^^ around PyGC_Collect() call that we can land here
+             * with arbitrary python code ran again (because e.g.
+             * XPyObject_GetReferrers() allocates at least a list and that
+             * might trigger automatic GC again */
+            if (PyErr_Occurred())
+                PyErr_PrintEx(0);
+            XPyErr_FullClear();
         }
 
         /* above attempts were "best effort" to unreference pybuf. However we
@@ -640,6 +658,12 @@ out:
             PyMemoryViewObject *pybufm = (PyMemoryViewObject *)pybuf;
             XPyBuffer_Unpin(&pybufm->view);
 #endif
+
+            /* we released pybuf->base object which might run some code in __del__
+             * clear exception state again */
+            if (PyErr_Occurred())
+                PyErr_PrintEx(0);
+            XPyErr_FullClear();
         }
 
 #if 0
@@ -661,7 +685,21 @@ out:
      * NOTE in theory decref could run arbitrary code, but buffer_dealloc() is
      * simply PyObject_DEL which does not lead to running python code. */
     Py_XDECREF(pybuf);
+    if (PyErr_Occurred()) {
+        WARN("python thread-state found with exception set; but should not");
+        WARN("I will dump the exception and then crash");
+        PyErr_PrintEx(0);
+    }
     BUG_ON(ts->curexc_type  || ts->curexc_value || ts->curexc_traceback);
+    if (ts->exc_type) {
+        WARN("python thread-state found with handled but not cleared exception state");
+        WARN("I will dump it and then crash");
+        fprintf(stderr, "ts->exc_type:\t");         PyObject_Print(ts->exc_type, stderr, 0);
+        fprintf(stderr, "\nts->exc_value:\t");      PyObject_Print(ts->exc_value, stderr, 0);
+        fprintf(stderr, "\nts->exc_traceback:\t");  PyObject_Print(ts->exc_traceback, stderr, 0);
+        fprintf(stderr, "\n");
+        PyErr_Display(ts->exc_type, ts->exc_value, ts->exc_traceback);
+    }
     BUG_ON(ts->exc_type     || ts->exc_value    || ts->exc_traceback);
     BUG_ON(ts->async_exc);
 

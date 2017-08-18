@@ -25,6 +25,7 @@ import gc
 
 from pytest import raises
 from six import PY2
+from six.moves import range as xrange
 
 # read-only attributes are reported differently on py2 & py3
 ROAttributeError = (PY2 and TypeError or AttributeError)
@@ -164,6 +165,28 @@ def test_pagefault_savestate():
             # a case where only f_locals dict is kept alive
             self.keep_f_locals(buf)
 
+            # arrange so that automatic GC is triggered several times from under
+            # pybigfile_loadblk() with modifying thread exception state - thus
+            # testing various codepaths that need to restore it there.
+
+            #gc.set_debug(gc.DEBUG_STATS)
+            g0 = gc.get_threshold()[0]  # N(obj) in generation 0 to trigger automatic GC
+            a = mkgarbage(g0)
+            a.buf = buf                 # cycle references buf
+            # when garbage of a will be collected new even more garbage will be created
+            # and when that garbage will be collected an exception will be raised
+            def mkraisinggarbagealot():
+                # disable automatic GC while we are generating a lot of garbage
+                # so it is not collected automatically while we prepare it.
+                gc.disable()
+                mkraisinggarbage(2*g0);
+                # enable automatic GC near end so that it will be pybigfile_loadblk()
+                # to trigger next automatic GC with e.g. allocating new list for
+                # XPyObject_GetReferrers() call
+                gc.enable()
+            a.ondel = DelCall(mkraisinggarbagealot)
+            del a
+
             self.loadblk_run = 1
 
 
@@ -182,6 +205,48 @@ def test_pagefault_savestate():
                 1/0
             except:
                 keepg.append(sys.exc_info()[2].tb_frame.f_locals)
+
+    # class without finalizer (objects with finalizers if cycled are not collected)
+    class X:
+        pass
+
+    # call f on __del__
+    class DelCall:
+        def __init__(self, f):
+            self.f = f
+
+        def __del__(self):
+            #print 'delcall', self.f
+            self.f()
+
+    # mkgarbage creates n objects of garbage kept referenced from an object cycle
+    # so that only cyclic GC can free them.
+    def mkgarbage(n):
+        #print 'mkgarbage', n
+        # cycle
+        a, b = X(), X()
+        a.b, b.a = b, a
+
+        # cycle references [n] garbage objects
+        a.objv = [X() for _ in xrange(n)]
+        return a
+
+    # mkraisinggarbage like mkgarbage creates cycle with n objects of garbage
+    # but in addition prepares things so that when the cycle is collected
+    # exceptions are raise from under finalizers in various ways
+    def mkraisinggarbage(n):
+        #print 'mkraisinggarbage', n
+        a = mkgarbage(n)
+        a.boom = DelCall(lambda: 1/0)       # raise without catch
+        a.boom2 = DelCall(raiseandcatch)    # leaves exception object in "exc_handled" state
+
+    def raiseandcatch():
+        #print 'raiseandcatch'
+        try:
+            1/0
+        except:
+            pass
+
 
 
     f   = BadFile(PS)
