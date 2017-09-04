@@ -23,6 +23,7 @@ import transaction
 from numpy import float64, dtype, cumsum, sin
 import psutil
 import sys
+import getopt
 
 KB = 1024
 MB = 1024*KB
@@ -68,14 +69,29 @@ def gen(signalv):
 
 
 def usage():
-    print("Usage: %s (gen|read) <dburi>" % sys.argv[0], file=sys.stderr)
+    print(
+"""Usage: %s [options] (gen|read) <dburi>
+
+options:
+
+    --worksize=<n>      generate array of size n*MB (default 2*RAM)
+""" % sys.argv[0], file=sys.stderr)
     sys.exit(1)
 
 
 def main():
+    worksize = None
+    optv, argv = getopt.getopt(sys.argv[1:], '', ['worksize='])
+    for opt, v in optv:
+        if opt == '--worksize':
+            worksize = int(v) * MB
+
+        else:
+            usage()
+
     try:
-        act = sys.argv[1]
-        dburi = sys.argv[2]
+        act = argv[0]
+        dburi = argv[1]
     except IndexError:
         usage()
 
@@ -83,13 +99,16 @@ def main():
         usage()
 
     ram_nbytes = psutil.virtual_memory().total
-    print('I: RAM: %.2fGB' % (float(ram_nbytes) / GB))
+    print('I: RAM:  %.2fGB' % (float(ram_nbytes) / GB))
 
     root = dbopen(dburi)
 
     if act == 'gen':
+        if worksize is None:
+            worksize = 2*ram_nbytes
+        print('I: WORK: %.2fGB' % (float(worksize) / GB))
         sig_dtype = dtype(float64)
-        sig_len   = (2*ram_nbytes) // sig_dtype.itemsize
+        sig_len   = worksize // sig_dtype.itemsize
         sig = ZBigArray((sig_len,), sig_dtype)
         root['signalv'] = sig
 
