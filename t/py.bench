@@ -75,10 +75,7 @@ class BenchPlugin:
 
     # run benchmark several times, and get best timing
     # each benchmark run is executed in separate process (if not told otherwise)
-    def pytest_runtest_call(self, item, __multicall__):
-        # tell MultiCall not to execut other runtest_calls (e.g. runner.pytest_runtest_call)
-        __multicall__.firstresult = True
-
+    def pytest_runtest_call(self, item):
         def run():
             tstart = time()
             item.runtest()
@@ -110,7 +107,10 @@ class BenchPlugin:
     def pytest_runtest_makereport(self, item, call):
         report = _pytest.runner.pytest_runtest_makereport(item, call)
         if call.when == 'call' and not call.excinfo:
-            report.bench_times = call.result
+            # in pytest3 there is no way to mark pytest_runtest_call as 'firstresult'
+            # let's emulate firstresult logic here
+            assert len(call.result) == 1
+            report.bench_times = call.result[0]
         return report
 
 
