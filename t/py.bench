@@ -134,6 +134,10 @@ def max0(seq):
     else:
         return max(seq)
 
+# benchname(nodeid) returns name of a benchmark from a function nodeid
+def benchname(nodeid):
+    return nodeid.split("::", 1)[1] # everything after fspath
+
 # Adjujsted terminal reporting to benchmarking needs
 class XTerminalReporter(_pytest_TerminalReporter):
 
@@ -141,12 +145,22 @@ class XTerminalReporter(_pytest_TerminalReporter):
     def pytest_collection_finish(self, session):
         _pytest_TerminalReporter.pytest_collection_finish(self, session)
 
-        # FIXME Item.nodeid is not strictly the same as ._locationline()
-        self.benchname_maxlen = max0(len(_.nodeid) for _ in session.items)
+        self.benchname_maxlen = max0(len(benchname(_.nodeid)) for _ in session.items)
 
 
     def pytest_runtest_logstart(self, nodeid, location):
-        return  # nothing
+        # print `pymod: ...` header for every module
+        fspath = self.config.rootdir.join(nodeid.split("::")[0])
+        if fspath == self.currentfspath:
+            return
+        first = (self.currentfspath == None)
+        self.currentfspath = fspath
+        fspath = self.startdir.bestrelpath(fspath)
+        self._tw.line()
+        # vskip in between modules
+        if not first:
+            self._tw.line()
+        self.write("pymod: %s" % fspath)
 
     def pytest_runtest_logreport(self, report):
         _ =self.config.hook.pytest_report_teststatus(report=report)
@@ -157,10 +171,8 @@ class XTerminalReporter(_pytest_TerminalReporter):
             return
 
         # TODO ralign timing
-        # TODO shorter benchname?
-        benchname = self._locationline(report.nodeid, *report.location)
         self._tw.line()
-        self._tw.write('%-*s\t' % (self.benchname_maxlen, benchname))
+        self._tw.write('%-*s\t' % (self.benchname_maxlen, benchname(report.nodeid)))
         if report.passed:
             self._tw.write('%.2f' % min(report.bench_times))
             if not self.config.option.quiet:
