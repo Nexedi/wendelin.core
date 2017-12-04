@@ -158,7 +158,7 @@ class XTerminalReporter(_pytest_TerminalReporter):
 
         # TODO ralign timing
         # TODO shorter benchname?
-        benchname = self._locationline(report.fspath, *report.location)
+        benchname = self._locationline(report.nodeid, *report.location)
         self._tw.line()
         self._tw.write('%-*s\t' % (self.benchname_maxlen, benchname))
         if report.passed:
