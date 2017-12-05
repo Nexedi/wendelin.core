@@ -2,6 +2,7 @@
 __pycache__
 build/
 .tox/
+.cache/
 
 *.o
 *.so
