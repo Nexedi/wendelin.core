@@ -21,6 +21,8 @@
 
 #include <wendelin/utils.h>
 
+#include <sys/time.h>
+
 
 static const struct ram_ops ram_limited_ops;
 static const struct ramh_ops ramh_limited_ops;
@@ -155,3 +157,17 @@ static const struct ramh_ops ramh_limited_ops = {
     .mmap_page      = ramh_limited_mmap_page,
     .close          = ramh_limited_close,
 };
+
+
+double microtime() {
+        int err;
+        struct timeval tv;
+
+        err = gettimeofday(&tv, NULL);
+        if (err == -1) {
+                perror("gettimeofday");
+                abort();
+        }
+
+        return tv.tv_sec + 1E-6 * tv.tv_usec;
+}

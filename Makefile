@@ -192,5 +192,10 @@ test.fault : $(FAULTS:%=%.tfault)
 
 
 # -*- benchmarking -*-
-bench	: bigfile/_bigfile.so
+BENCHV.C:= $(patsubst %.c,%,$(wildcard bigfile/tests/bench_*.c))
+bench	: bench.t bench.py
+
+bench.t	: $(BENCHV.C:%=%.trun)
+
+bench.py: bigfile/_bigfile.so
 	$(PYBENCH) $(PYTEST_IGNORE)

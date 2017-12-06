@@ -43,4 +43,7 @@ typedef struct RAMLimited RAMLimited;
 
 RAMLimited *ram_limited_new(RAM *backend, size_t alloc_max);
 
+/* current time as float */
+double microtime();
+
 #endif

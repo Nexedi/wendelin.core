@@ -29,6 +29,7 @@ from io import FileIO
 from wendelin.bigfile.file_file import BigFile_File
 from wendelin.bigfile import WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.lib.testing import Adler32, nulladler32_bysize, ffadler32_bysize
+from wendelin.bigarray.tests.test_basic import BigFile_Zero
 from wendelin.lib.mem import bzero, memset
 from tempfile import NamedTemporaryFile
 
@@ -67,6 +68,36 @@ def setup_module():
 
 def teardown_module():
     unlink(tmpf.name)
+
+
+# BigFile that reads as zeros and tracks last loadblk request
+class BigFile_ZeroTrack(BigFile_Zero):
+
+    def loadblk(self, blk, buf):
+        #print('zload #%d' % blk)
+        self.last_load = blk
+        super(BigFile_ZeroTrack, self).loadblk(blk, buf)
+
+# benchmark the time it takes for virtmem to handle pagefault with noop loadblk
+# implemented  in Python.
+def bench_pagefault_py(b):
+    npage = b.N
+    PS  = blksize   # XXX assumes blksize = pagesize
+
+    f   = BigFile_ZeroTrack(PS)
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, npage)
+    m   = memoryview(vma)
+
+    b.reset_timer()
+    for p in xrange(npage):
+        m[p*PS]
+        assert f.last_load == p
+
+    del m
+    del vma # vma.close()
+    del fh  # fh.close()
+    del f   # f.close()
 
 
 # compute hash via mmaping the file at OS-level
