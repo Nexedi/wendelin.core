@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # benchmarking via py.test
 # Copyright (C) 2014-2015  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
@@ -26,6 +27,7 @@ import pytest
 import _pytest.runner
 from _pytest.terminal import TerminalReporter as _pytest_TerminalReporter
 from time import time
+from math import ceil, log10
 from py.process import ForkedFunc
 
 import sys
@@ -52,6 +54,36 @@ class XForkedFunc(ForkedFunc):
 
 
 
+# benchmarking timer/request passed to benchmarks as fixture
+# similar to https://golang.org/pkg/testing/#B
+class B:
+
+    def __init__(self):
+        self.N = 1              # default when func does not accept `b` arg
+        self._t_start = None    # t of timer started; None if timer is currently stopped
+        self.reset_timer()
+
+    def reset_timer(self):
+        self._t_total = 0.
+
+    def start_timer(self):
+        if self._t_start is not None:
+            return
+
+        self._t_start = time()
+
+    def stop_timer(self):
+        if self._t_start is None:
+            return
+
+        t = time()
+        self._t_total += t - self._t_start
+        self._t_start = None
+
+    def total_time(self):
+        return self._t_total
+
+
 # plugin to collect & run benchmarks
 class BenchPlugin:
 
@@ -72,20 +104,57 @@ class BenchPlugin:
         g.addoption('--dontfork',  action='store_true',      dest='dontfork', default=False,
                     help="run all benchmarks in the same process")
 
+    # create b for every item to run and make it available to b fixture via item.request
+    def pytest_runtest_setup(self, item):
+        b = B()
+        b._used_by_func = False
+        item._request._bench_b = b
+
+    # make created b be available as `b` func arg
+    @pytest.fixture(scope="function")
+    def b(self, request):
+        """Provides access to benchmarking timer"""
+        # NOTE here request is subrequest of item._request in pytest_runtest_setup
+        b = request._parent_request._bench_b
+        b._used_by_func = True
+        return b
 
     # run benchmark several times, and get best timing
     # each benchmark run is executed in separate process (if not told otherwise)
     def pytest_runtest_call(self, item):
+        b = item._request._bench_b
         def run():
-            tstart = time()
-            item.runtest()
-            tend = time()
-            return tend-tstart
+            b.N = 0
+            t = 0.
+            ttarget = 1.
+            while t < (ttarget * 0.9):
+                if b.N == 0:
+                    b.N = 1
+                else:
+                    n = b.N * (ttarget / t)     # exact how to adjust b.N to reach ttarget
+                    order = int(log10(n))       # n = k·10^order, k ∈ [1,10)
+                    k = float(n) / (10**order)
+                    k = ceil(k)                 # lift up k to nearest int
+                    b.N = int(k * 10**order)    # b.N = int([1,10))·10^order
 
-        tv = []
+                b.reset_timer()
+                b.start_timer()
+                item.runtest()
+                b.stop_timer()
+                t = b.total_time()
+
+                #print((b.N, t))
+
+                # break if func does not accept b as arg
+                if not b._used_by_func:
+                    break
+
+            return (b.N, t)
+
+        rv = []
         for i in xrange(item.config.option.benchruns):
             if item.config.option.dontfork:
-                t = run()
+                r = run()
 
             else:
                 runf = XForkedFunc(run)
@@ -97,10 +166,11 @@ class BenchPlugin:
                     print(result.err, file=sys.stderr)  # XXX vs runf doesn't capture stderr
                     1/0 # TODO handle properly
 
-                t = result.retval
+                r = result.retval
 
-            tv.append(t)
-        return tv
+            rv.append(r)
+        #print ('RET', rv)
+        return rv
 
 
     # set benchmarking time in report, if run ok
@@ -110,7 +180,7 @@ class BenchPlugin:
             # in pytest3 there is no way to mark pytest_runtest_call as 'firstresult'
             # let's emulate firstresult logic here
             assert len(call.result) == 1
-            report.bench_times = call.result[0]
+            report.bench_resv = call.result[0]
         return report
 
 
@@ -136,7 +206,12 @@ def max0(seq):
 
 # benchname(nodeid) returns name of a benchmark from a function nodeid
 def benchname(nodeid):
-    return nodeid.split("::", 1)[1] # everything after fspath
+    pyname = nodeid.split("::", 1)[1] # everything after fspath
+    # replace 'bench_' with 'Benchmark' prefix so that benchmark output matches
+    # golang format
+    if pyname.startswith('bench_'):
+        pyname = pyname[len('bench_'):]
+    return 'Benchmark' + pyname
 
 # Adjujsted terminal reporting to benchmarking needs
 class XTerminalReporter(_pytest_TerminalReporter):
@@ -170,16 +245,19 @@ class XTerminalReporter(_pytest_TerminalReporter):
             # passed setup/teardown
             return
 
-        # TODO ralign timing
-        self._tw.line()
-        self._tw.write('%-*s\t' % (self.benchname_maxlen, benchname(report.nodeid)))
-        if report.passed:
-            self._tw.write('%.2f' % min(report.bench_times))
-            if not self.config.option.quiet:
-                self._tw.write('  (%s)' %
-                        ' '.join('%.2f' % _ for _ in report.bench_times))
-        else:
+        def printname():
+            self._tw.line()
+            self._tw.write('%-*s\t' % (self.benchname_maxlen, benchname(report.nodeid)))
+
+        if not report.passed:
+            printname()
             self._tw.write('[%s]' % word, **report_markup(report))
+            return
+
+        # TODO ralign timing
+        for niter, t in report.bench_resv:
+            printname()
+            self._tw.write('%d\t%.3f µs/op' % (niter, t * 1E6 / niter))
 
 
 # there is no way to override it otherwise - it is hardcoded in
