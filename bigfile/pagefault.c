@@ -33,6 +33,7 @@
 #include <wendelin/bug.h>
 
 #include <signal.h>
+#include <ucontext.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <stdint.h>
@@ -42,13 +43,13 @@
 static struct sigaction prev_segv_act;
 static int    segv_act_installed;
 
-static int faulted_by(const struct ucontext *uc);
+static int faulted_by(const ucontext_t *uc);
 
 
 /* SIGSEGV handler */
 static void on_pagefault(int sig, siginfo_t *si, void *_uc)
 {
-    struct ucontext *uc = _uc;
+    ucontext_t *uc = _uc;
     unsigned write;
     VMA *vma;
 
@@ -205,7 +206,7 @@ done:
  *
  * @return  0 - read        !0 - write
  */
-static int faulted_by(const struct ucontext *uc)
+static int faulted_by(const ucontext_t *uc)
 {
     int write;
 
