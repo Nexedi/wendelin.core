@@ -26,9 +26,19 @@ import gc
 
 # open db storage by uri
 def dbstoropen(uri):
-    # TODO better use repoze.zodbconn or zodburi
-    #      ( but they require ZODB, instead of ZODB3, and thus we cannot use
-    #        them together with ZODB 3.10 which we still support )
+    # if we can - use zodbtools to open via zodburi
+    try:
+        import zodbtools.util
+    except ImportError:
+        return _dbstoropen(uri)
+
+    return zodbtools.util.storageFromURL(uri)
+
+
+# simplified fallback to open a storage by URI when zodbtools/zodburi are not available.
+# ( they require ZODB, instead of ZODB3, and thus we cannot use
+#   them together with ZODB 3.10 which we still support )
+def _dbstoropen(uri):
     if uri.startswith('neo://'):
         # XXX hacky, only 1 master supported
         from neo.client.Storage import Storage
