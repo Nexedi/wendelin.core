@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 # Wendeling.core.bigarray | Basic tests
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2018  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -18,12 +19,13 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 
-from wendelin.bigarray import BigArray
+from wendelin.bigarray import BigArray, ArrayRef, _flatbytev
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, int64, int32, uint32, uint8, all, zeros, arange, \
-        array_equal, asarray
+from numpy import ndarray, dtype, int64, int32, uint32, int16, uint8, all, zeros, arange, \
+        array_equal, asarray, newaxis, swapaxes
+from numpy.lib.stride_tricks import as_strided
 import numpy
 
 from pytest import raises
@@ -588,3 +590,227 @@ def test_bigarray_to_ndarray():
     for i in range(48,65):
         C = BigArray(((1<<i)-1,), uint8, Zh)
         raises(MemoryError, 'asarray(C)')
+
+
+
+
+def test_arrayref():
+    # test data - all items are unique - so we can check array by content
+    data = zeros(PS, dtype=uint8)
+    data32 = data.view(uint32)
+    data32[:] = arange(len(data32), dtype=uint32)
+    data[:256] = arange(256, dtype=uint8)   # first starting bytes are all unique
+
+    # regular ndarray without parent at all
+    ref = ArrayRef(data)
+    assert ref.root is data
+    assert ref.lo == 0
+    assert ref.hi == len(data)
+    assert ref.z0 == 0
+    assert ref.shape == data.shape
+    assert ref.stridev == data.strides
+    assert ref.dtype == data.dtype
+    assert array_equal(ref.deref(), data)
+
+    # regular ndarrays with parent
+    ref = ArrayRef(data32)
+    assert ref.root is data
+    assert ref.lo == 0
+    assert ref.hi == len(data)
+    assert ref.z0 == 0
+    assert ref.shape == data32.shape
+    assert ref.stridev == data32.strides
+    assert ref.dtype == data32.dtype
+    assert array_equal(ref.deref(), data32)
+
+    a = data[100:140]
+    ref = ArrayRef(a)
+    assert ref.root is data
+    assert ref.lo == 100
+    assert ref.hi == 140
+    assert ref.z0 == 0
+    assert ref.shape == (40,)
+    assert ref.stridev == (1,)
+    assert ref.dtype == data.dtype
+    assert array_equal(ref.deref(), a)
+
+    a = data[140:100:-1]
+    ref = ArrayRef(a)
+    assert ref.root is data
+    assert ref.lo == 101
+    assert ref.hi == 141
+    assert ref.z0 == 39
+    assert ref.shape == (40,)
+    assert ref.stridev == (-1,)
+    assert ref.dtype == data.dtype
+    assert array_equal(ref.deref(), a)
+
+    a = data[100:140:-1]   # empty
+    ref = ArrayRef(a)
+    assert ref.root is data
+    assert ref.lo == 0
+    assert ref.hi == 1
+    assert ref.z0 == 0
+    assert ref.shape == (0,)
+    assert ref.stridev == (1,)
+    assert ref.dtype == data.dtype
+    assert array_equal(ref.deref(), a)
+
+    # rdata is the same as data[::-1] but without base - i.e. it is toplevel
+    m = memoryview(data[::-1])
+    rdata = asarray(m)
+    assert array_equal(rdata[::-1], data)
+    assert rdata.strides == (-1,)
+    m_ = rdata.base
+    assert isinstance(m_, memoryview)
+    #assert m_ is m  XXX strangely it is another object, not exactly m
+    # XXX however rdata.strides<0 and no rdata.base.base is enough for us here.
+    raises(AttributeError, 'm_.base')
+
+    a = rdata[100:140]
+    ref = ArrayRef(a)
+    assert ref.root is rdata
+    assert ref.lo == PS - 140
+    assert ref.hi == PS - 100
+    assert ref.z0 == 39
+    assert ref.shape == (40,)
+    assert ref.stridev == (-1,)
+    assert ref.dtype == data.dtype
+    assert array_equal(ref.deref(), a)
+
+
+    for root in (data, rdata):
+        # refok verifies whether ArrayRef(x) works ok
+        def refok(x):
+            ref = ArrayRef(x)
+            assert ref.root is root
+            x_ = ref.deref()
+            assert array_equal(x_, x)
+            assert x_.dtype == x.dtype
+            assert type(x_) == type(x)
+
+            # check that deref won't access range outside lo:hi - by copying
+            # root, setting bytes in adjusted root outside lo:hi to either 0x00
+            # or 0xff and tweaking ref.root = root_.
+            root_ = numpy.copy(_flatbytev(root[:]))
+            root_[:ref.lo] = 0
+            root_[ref.hi:] = 0
+            ref.root = root_
+            assert array_equal(ref.deref(), x)
+            root_[:ref.lo] = 0xff
+            root_[ref.hi:] = 0xff
+            assert array_equal(ref.deref(), x)
+
+
+        if root is rdata:
+            a = root[::-1]              # rdata
+        else:
+            a = root[:]                 # data
+        assert array_equal(a, data)
+
+        # subslices that is possible to get by just indexing
+        refok( a[:]         )
+        refok( a[1:2]       )
+        refok( a[1:10]      )
+        refok( a[1:10:2]    )
+        refok( a[1:10:3]    )
+        refok( a[1:10:-1]   )   # empty (.size = 0)
+        refok( a[10:1:-1]   )
+        refok( a[10:1:-2]   )
+        refok( a[10:1:-3]   )
+
+        # long chain root -> a -> a[...] -> a[...] -> leaf
+        l = a[2:118]
+        l = l.view(uint32)[3:20]
+        l = l[1:9]
+        refok(l)
+
+        # not aligned - it is not possible to get to resulting slice just by indexing A
+        refok( a.view(uint8)[2:-2].view(uint32)         )
+        refok( a.view(uint8)[2:-2].view(uint32)[::-1]   )
+
+        refok( a.view(int64)        )   # change of type ↑ in size
+        refok( a.view(int64)[::-1]  )
+        refok( a.view(int16)        )   # change of type ↓ in size
+        refok( a.view(int16)[::-1]  )
+
+        # change of type to size not multiple of original
+        refok( a[1:1+5*10].view('V5')       )   # 4 -> 5
+        refok( a[1:1+5*10].view('V5')[::-1] )
+        refok( a[1:1+3*10].view('V3')       )   # 4 -> 3
+        refok( a[1:1+3*10].view('V3')[::-1] )
+
+        # intermediate parent with <0 stride
+        r = a[1:1+3*10].view('V3')[::-1]
+        refok( r[-2:2:-1]   )
+
+        # 2d array
+        x = a.view(uint32).reshape((8, -1))
+        y = swapaxes(x, 0,1)
+        assert x.shape   == (8, PS//(4*8))
+        assert x.strides == (PS//8, 4)
+        assert y.shape   == (PS//(4*8), 8)
+        assert y.strides == (4, PS//8)
+
+        refok( x )
+        refok( y )
+
+        # array with both >0 and <0 strides
+        x_ = x[:,::-1]
+        y_ = y[:,::-1]
+        assert x_.shape   == x.shape
+        assert x_.strides == (PS//8, -4)
+        assert y_.shape   == y.shape
+        assert y_.strides == (4, -PS//8)
+
+        refok( x_ )
+        refok( y_ )
+
+        # array with [1] dimension
+        z1 = x[:, newaxis, :]
+        assert z1.shape   == (8, 1, PS//(4*8))
+        assert z1.strides == (PS//8, 0, 4)
+
+        refok(z1)
+
+        # array with [0] dimension
+        z0 = z1[:, 0:0, :]
+        assert z0.shape   == (8, 0, PS//(4*8))
+        assert z0.strides == (PS//8, 0, 4)
+
+        refok(z0)
+
+        # tricky array overlapping itself
+        t = a.view(uint32)
+        assert t.shape    == (PS//4,)
+        assert t.strides  == (4,)
+        assert t.itemsize == 4
+        t = as_strided(t, strides=(1,))
+        assert t.shape    == (PS//4,)
+        assert t.strides  == (1,)
+        assert t.itemsize == 4
+
+        refok(t)
+
+        # structured dtype
+        s = a.view(dtype=[('width', '<i2'), ('length', '<i2')])
+        assert s.shape    == (PS//4,)
+        assert s.strides  == (4,)
+        assert s.itemsize == 4
+        refok(s)
+
+        s_ = s['length']
+        assert s_.shape    == (PS//4,)
+        assert s_.strides  == (4,)
+        assert s_.itemsize == 2
+        refok(s_)
+
+
+        # ndarray subclass, e.g. np.recarray
+        r = s.view(type=numpy.recarray)
+        assert isinstance(r, numpy.recarray)
+        assert r.shape    == (PS//4,)
+        assert r.strides  == (4,)
+        assert r.itemsize == 4
+        assert array_equal(r.length, s['length'])
+        refok(r)

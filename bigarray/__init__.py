@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # BigArray submodule for Wendelin
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2018  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -38,7 +38,8 @@ of physical RAM.
 
 from __future__ import print_function
 from wendelin.lib.calc import mul
-from numpy import ndarray, dtype, sign, newaxis, asarray, argmax
+from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
+from numpy.lib.stride_tricks import DummyArray
 import logging
 
 
@@ -473,3 +474,247 @@ class BigArray(object):
             logging.warn('... address space can not be mapped at once and have to be')
             logging.warn('... processed in chunks.')
             raise
+
+
+# ----------------------------------------
+
+# InvalidArrayRef is the exception raised when ArrayRef was tried to be
+# dereferenced but found invalid.
+class InvalidArrayRef(Exception):
+    pass
+
+# _flatbytev returns []byte view of array a with index ↑ along with memory
+def _flatbytev(a):
+    b = a[:].view(uint8)
+    # XXX vvv strictly speaking this might raise internally if numpy sees
+    # it cannot reshape without copy.
+    b.shape = -1  # flatten without copy
+    assert len(b.strides) == 1
+    if b.strides[0] < 0:
+        b = b[::-1]
+    assert b.strides[0] == +1
+    return b
+
+# ArrayRef is a reference to NumPy array.
+#
+# The reference is represented by root array object and instructions how to
+# create original array as some view of the root.
+#
+# Use ArrayRef(array) to create reference to an ndarray.
+#
+# Use .deref() to convert ArrayRef to pointed array object.
+class ArrayRef(object):
+    # .root         top-level array object
+    #
+    #   below broot is []byte view of .root array with index ↑ along with memory
+    #
+    # .lo, .hi      raw array data is broot[lo:hi]
+    # .z0           array[0,0,...,0] is pointing ->z0 in broot[lo:hi]
+    #
+    # .shape        shape and strides of the array with data taken from
+    # .stridev      broot[lo:hi] with .z0 as zero offset.
+    #
+    # .dtype        dtype of the array
+    # .atype        type of the array  (e.g. np.ndarray, np.recarray, etc...)
+
+
+    # deref returns ndarray represented by this reference.
+    #
+    # if the reference was found invalid - e.g. it had nonsensical data or
+    # shape/stride out of range - InvalidArrayRef is raised.
+    def deref(self):
+        # broot is []byte view of root array with index ↑ along with memory
+        broot = _flatbytev(self.root)
+
+        # check lo:hi is in within correct range.
+        if not (0 <= self.lo <= self.hi <= len(broot)):
+            raise InvalidArrayRef("lo:hi ([%d, %d]) out of correct [0, %d] range" %
+                    (self.lo, self.hi, len(broot)))
+
+        # bchild is raw []byte underling data for recreated array
+        bchild  = broot[self.lo:self.hi]
+        if not (0 <= self.z0 < len(bchild)):
+            raise InvalidArrayRef("z0 (%d) out of correct [0, %d) range" %
+                    (self.z0, len(bchild)))
+
+        # check .shape and .stridev are within correct range, before
+        # applying unsafe stride tricks.
+        if len(self.shape) != len(self.stridev):
+            raise InvalidArrayRef("shape/stridev len mismatch  (#shape: %d;  #stridev: %d)" %
+                    (len(self.shape), len(self.stridev)))
+
+        # [boffmin:boffmax) is recreated array's byte range rooted at its zero point
+        boffmin = 0
+        boffmax = 0
+        for n, s in zip(self.shape, self.stridev):
+            if n < 0 or int(n) != n:
+                raise InvalidArrayRef("shape (%s) has invalid element: %s" % (self.shape, n))
+            if int(s) != s:
+                raise InvalidArrayRef("stridev %s has invalid element: %s" % (self.stridev, s))
+            if n == 0:
+                continue    # [0] dimension - does not affect anything
+
+            if s > 0:
+                boffmax += s*(n-1)
+            else:
+                boffmin += s*(n-1)
+
+        # when element is read - memory is accessed ↑ for itemsize bytes.
+        # we need to adjust only boffmax because for boffmin it grows ↑ too.
+        boffmax += self.dtype.itemsize
+
+        # [xlo,xhi) is the bchild's range accessed with .shape and .stridev
+        xlo = self.z0 + boffmin
+        xhi = self.z0 + boffmax
+
+        if not (0 <= xlo <= xhi <= len(bchild)):
+            raise InvalidArrayRef(
+                    "shape/stride invalid: cover [%d, %d) while raw data range is [%d, %d)" %
+                    (self.lo + xlo, self.lo + xhi, self.lo, self.hi))
+
+
+        # bchild_z0 points to the same underlying data buffer as bchild, but
+        # zero offset corresponds to zero offset of original array.
+        #
+        # len(bchild_z0) == 1, so that we can be sure bchild_z0 -> bchild
+        # memory pinning always works, not only for positive offsets(*).
+        #
+        # (*) we cannot make len(bchild_z0) == 0 since then, when creating
+        #     empty slice, numpy won't adjust the array pointer at all.
+        #
+        #     it could be also possible to adjust 'data' in __array_interface__
+        #     for += z0, but going explicitly via slicing is more safe.
+        bchild_z0 = bchild[self.z0: self.z0 + 1]
+
+        # restore original array shape/strides/dtype via unsafe trick.
+        #
+        # it should be safe to cover memory corresponding to both negative and
+        # positive offsets to bchild_z0, because bchild_z0 holds reference to
+        # bchild and bchild covers whole raw data range.
+        #
+        # it is also safe because we checked .shape and .stridev not to escape
+        # from bchild data buffer.
+        #
+        # the code below is very close to
+        #
+        #   a = stride_tricks.as_strided(bchild_z0, shape=self.shape, strides=self.stridev)
+        #
+        # but we don't use as_strided() because we also have to change dtype
+        # with shape and strides in one go - else changing dtype after either
+        # via a.dtype = ..., or via a.view(dtype=...) can raise errors like
+        #
+        #   "When changing to a larger dtype, its size must be a
+        #    divisor of the total size in bytes of the last axis
+        #    of the array."
+        aiface = dict(bchild_z0.__array_interface__)
+        aiface['shape']   = tuple(self.shape)
+        aiface['strides'] = tuple(self.stridev)
+        # type: for now we only care that itemsize is the same
+        aiface['typestr'] = '|V%d' % self.dtype.itemsize
+        aiface['descr']   = [('', aiface['typestr'])]
+
+        a = asarray(DummyArray(aiface, base=bchild_z0))
+
+        # restore full dtype - it should not raise here, since itemsize is the same
+        a.dtype = self.dtype
+
+        # restore full array type
+        a = a.view(type=self.atype)
+
+        # we are done
+        return a
+
+
+    # ArrayRef(a) creates reference to ndarray a.
+    def __init__(aref, a):
+        # find root
+        root = a            # top-level ndarray
+        while 1:
+            base = root.base
+
+            # top-level ndarray
+            if base is None:
+                break
+
+            # it was an ndarray (sub)view.
+            if isinstance(base, ndarray):
+                root = base
+                continue
+
+            # it might be also ndarray proxy - e.g. np.lib.stride_tricks.DummyArray
+            # with holding valid .base but not being ndarray.
+            basebase = getattr(base, 'base', None)
+            if isinstance(basebase, ndarray):
+                root = basebase
+                continue
+
+            # base is neither ndarray (sub)class nor ndarray proxy.
+            #
+            # it is top-level ndarray with base taken from an object
+            # with buffer interface, e.g. as here:
+            #
+            #   In [1]: s = '123'
+            #   In [2]: x = ndarray(shape=(1,), buffer=s, dtype='|S3')
+            #   In [3]: x
+            #   Out[3]: array(['123'], dtype='|S3')
+            #   In [4]: x.base
+            #   Out[4]: '123'
+            #
+            # and so it should be treated as top-level ndarray.
+            break
+
+
+        # broot is []byte view of root with idx ↑ along memory
+        broot = _flatbytev(root)
+
+        # [boffmin:boffmax) is a's byte range rooted at its zero point
+        boffmin = 0
+        boffmax = 0
+        assert len(a.shape) == len(a.strides)
+        for n, s in zip(a.shape, a.strides):
+            assert n >= 0
+            if n == 0:
+                continue    # [0] dimension - does not affect anything
+            assert n >= 1
+
+            if s > 0:
+                boffmax += s*(n-1)
+            else:
+                boffmin += s*(n-1)
+
+        # when element is read - memory is accessed ↑ for itemsize bytes.
+        # we need to adjust only boffmax because for boffmin it grows ↑ too.
+        boffmax += a.itemsize
+
+
+        # compute bytes δz in between broot's and a's zero points.
+        # δz should  be >= 0, since broot ↑ along memory.
+        adata = a.__array_interface__.get('data')
+        rdata = broot.__array_interface__.get('data')
+        assert adata is not None, "TODO __array_interface__.data = None"
+        assert rdata is not None, "TODO __array_interface__.data = None"
+        assert isinstance(adata, tuple), "TODO __array_interface__.data is %r" % (adata,)
+        assert isinstance(rdata, tuple), "TODO __array_interface__.data is %r" % (rdata,)
+        # {a,r}data is (data, readonly)
+        zdelta = adata[0] - rdata[0]
+        assert zdelta >= 0
+
+        # broot[lo:hi] is raw []byte underlying data for a, with z0 pointing
+        # to a's zero point.
+        lo = zdelta + boffmin
+        hi = zdelta + boffmax
+        assert 0 <= lo <= hi <= len(broot)
+        z0 = zdelta - lo
+
+        # reference is ready for ndarray root
+        aref.root    = root
+        aref.lo      = lo
+        aref.hi      = hi
+        aref.z0      = z0
+        aref.shape   = a.shape
+        aref.stridev = a.strides
+        aref.dtype   = a.dtype
+        aref.atype   = type(a)
+
+        # we are done
+        return
