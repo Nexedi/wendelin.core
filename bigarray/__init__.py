@@ -410,6 +410,10 @@ class BigArray(object):
             # ~~~ mmap file part corresponding to full major slice into memory
             vmaM = self._fileh.mmap(pageM_min, pageM_max-pageM_min+1)
 
+            # remember to which BigArray this vma belongs.
+            # this is needed for ArrayRef to be able to find root array object.
+            vmaM.pyuser = self
+
 
             # first get ndarray view with only major slice specified and rest indices being ":"
             viewM_shape   = Mreplace(self._shape, nitemsM)
@@ -500,9 +504,29 @@ def _flatbytev(a):
 # The reference is represented by root array object and instructions how to
 # create original array as some view of the root.
 #
+# Such reference could be useful in situations where one needs to pass arrays
+# between processes and instead of copying array data, leverage the fact that
+# top-level array, for example ZBigArray, is already persisted separately, and
+# only send small amount of information referencing data in question.
+#
 # Use ArrayRef(array) to create reference to an ndarray.
 #
 # Use .deref() to convert ArrayRef to pointed array object.
+#
+# NOTE
+#
+# don't send ArrayRef unconditionally - for example when array object is
+# small regular ndarray with also regular, but big, root ndarray, sending
+# ArrayRef will send whole data for root object, not for small leaf.
+#
+# Sending ArrayRef only makes sense when root object is known to be already
+# persisted by other means, for example something like below in ZODB context:
+#
+#   aref = ArrayRef(a)
+#   if isinstance(aref.root, Persistent):
+#       send aref
+#   else:
+#       send a
 class ArrayRef(object):
     # .root         top-level array object
     #
@@ -629,6 +653,7 @@ class ArrayRef(object):
     def __init__(aref, a):
         # find root
         root = a            # top-level ndarray
+        bigvma = None       # VMA, that is root.base, if there is one
         while 1:
             base = root.base
 
@@ -650,7 +675,9 @@ class ArrayRef(object):
 
             # base is neither ndarray (sub)class nor ndarray proxy.
             #
-            # it is top-level ndarray with base taken from an object
+            # either it is
+            #
+            # 1) top-level ndarray with base taken from an object
             # with buffer interface, e.g. as here:
             #
             #   In [1]: s = '123'
@@ -660,7 +687,14 @@ class ArrayRef(object):
             #   In [4]: x.base
             #   Out[4]: '123'
             #
-            # and so it should be treated as top-level ndarray.
+            # and so it should be treated as top-level ndarray,
+            #
+            # 2) or it is a VMA created from under BigArray which will be
+            # treated as top-level too, and corrected for in the end.
+            basetype = type(base)
+            if basetype.__module__ + "." + basetype.__name__ == "_bigfile.VMA":
+            #if isinstance(base, _bigfile.VMA):  XXX _bigfile does not expose VMA
+                bigvma = base
             break
 
 
@@ -715,6 +749,23 @@ class ArrayRef(object):
         aref.stridev = a.strides
         aref.dtype   = a.dtype
         aref.atype   = type(a)
+
+        # correct it, if the root is actually BigArray
+        if bigvma is not None:
+            assert bigvma.addr_start <= rdata[0]
+            assert rdata[0] + len(broot) <= bigvma.addr_stop
+
+            bigroot = bigvma.pyuser
+            assert isinstance(bigroot, BigArray)
+
+            # bigoff is broot position in bbigroot (both raw flat []byte ↑ along memory)
+            pgoff, _ = bigvma.filerange()
+            bigoff = pgoff * bigvma.pagesize()          # vma start offset
+            bigoff += rdata[0] - bigvma.addr_start      # broot offset from vma start
+
+            aref.root  = bigroot
+            aref.lo   += bigoff
+            aref.hi   += bigoff
 
         # we are done
         return

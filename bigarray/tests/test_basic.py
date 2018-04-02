@@ -679,7 +679,17 @@ def test_arrayref():
     assert array_equal(ref.deref(), a)
 
 
-    for root in (data, rdata):
+    # BigArray with data backend.
+    # data_ is the same as data but shifted to exercise vma and vma->broot offsets calculation.
+    data_ = zeros(8*PS, dtype=uint8)
+    data_[2*PS-1:][:PS] = data
+    f  = BigFile_Data_RO(data_, PS)
+    fh = f.fileh_open()
+    A  = BigArray(data_.shape, data_.dtype, fh)
+    assert array_equal(A[2*PS-1:][:PS], data)
+
+
+    for root in (data, rdata, A):  # both ndarray and BigArray roots
         # refok verifies whether ArrayRef(x) works ok
         def refok(x):
             ref = ArrayRef(x)
@@ -702,7 +712,10 @@ def test_arrayref():
             assert array_equal(ref.deref(), x)
 
 
-        if root is rdata:
+        if isinstance(root, BigArray):
+            a = root[2*PS-1:][:PS]      # get to `data` range
+        # typeof(root) = ndarray
+        elif root is rdata:
             a = root[::-1]              # rdata
         else:
             a = root[:]                 # data
