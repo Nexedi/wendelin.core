@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2018  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -59,12 +59,36 @@ static PyObject *pybuf_str;
 
 /*
  * python representation of VMA - exposes vma memory as python buffer
+ *
+ * also exposes:
+ *
+ *      .filerange()            to know which range in mmaped file this vma covers.
+ *      .pagesize()             to know page size of underlying RAM.
+ *
+ * and:
+ *
+ *      .addr_start, .addr_stop to know offset of ndarray in VMA.
+ *      .pyuser                 generic python-level attribute (see below).
  */
 struct PyVMA {
     PyObject;
     PyObject *in_weakreflist;
 
     VMA;
+
+    /* python-level user of this VMA.
+     *
+     * for example for ArrayRef to work, BigArray needs to find out VMA ->
+     * top-level BigArray object for which this VMA was created.
+     *
+     * There is vma -> fileh -> file chain, but e.g. for a given ZBigFile there
+     * can be several ZBigArrays created on top of it to view its data (e.g. via
+     * BigArray.view()). So even if it can go from vma to -> zfile it does not
+     * help to find out the top-level ZBigArray object itself.
+     *
+     * This way we allow BigArray python code to set vma.pyuser attribute
+     * pointing to original BigArray object for which this VMA was created. */
+    PyObject *pyuser;
 };
 typedef struct PyVMA PyVMA;
 
@@ -140,6 +164,11 @@ void XPyBufferObject_Unpin(PyBufferObject *bufo);
 void XPyBuffer_Unpin(Py_buffer *view);
 
 
+#define PyFunc(FUNC, DOC)               \
+static const char FUNC ##_doc[] = DOC;  \
+static PyObject *FUNC
+
+
 /************
  *  PyVMA   *
  ************/
@@ -193,6 +222,50 @@ pyvma_len(PyObject *pyvma0)
 }
 
 
+/* pyvma vs cyclic GC */
+static int
+pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
+{
+    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+
+    Py_VISIT(pyvma->pyuser);
+    return 0;
+}
+
+static int
+pyvma_clear(PyObject *pyvma0)
+{
+    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+
+    Py_CLEAR(pyvma->pyuser);
+    return 0;
+}
+
+
+PyFunc(pyvma_filerange, "filerange() -> (pgoffset, pglen) -- file range this vma covers")
+    (PyObject *pyvma0, PyObject *args)
+{
+    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    Py_ssize_t pgoffset, pglen;     // XXX Py_ssize_t vs pgoff_t
+
+    pgoffset = pyvma->f_pgoffset;
+    pglen    = (pyvma->addr_stop - pyvma->addr_start) / pyvma->fileh->ramh->ram->pagesize;
+    /* NOTE ^^^ addr_stop and addr_start must be page-aligned */
+
+    return Py_BuildValue("(nn)", pgoffset, pglen);
+}
+
+
+PyFunc(pyvma_pagesize, "pagesize() -> pagesize -- page size of RAM underlying this VMA")
+    (PyObject *pyvma0, PyObject *args)
+{
+    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    Py_ssize_t pagesize = pyvma->fileh->ramh->ram->pagesize;
+
+    return Py_BuildValue("n", pagesize);
+}
+
+
 static void
 pyvma_dealloc(PyObject *pyvma0)
 {
@@ -210,6 +283,7 @@ pyvma_dealloc(PyObject *pyvma0)
         Py_DECREF(pyfileh);
     }
 
+    pyvma_clear(pyvma);
     pyvma->ob_type->tp_free(pyvma);
 }
 
@@ -247,12 +321,35 @@ static /*const*/ PySequenceMethods pyvma_as_seq = {
 };
 
 
+static /*const*/ PyMethodDef pyvma_methods[] = {
+    {"filerange",   pyvma_filerange,    METH_VARARGS,   pyvma_filerange_doc},
+    {"pagesize",    pyvma_pagesize,     METH_VARARGS,   pyvma_pagesize_doc},
+    {NULL}
+};
+
+// XXX vvv better switch on various possibilities and find approptiate type
+// (e.g. on X32 uintptr_t will be 4 while long will be 8)
+const int _ =
+    BUILD_ASSERT_OR_ZERO(sizeof(uintptr_t) == sizeof(unsigned long));
+#define T_UINTPTR   T_ULONG
+
+static /*const*/ PyMemberDef pyvma_members[] = {
+    {"addr_start",  T_UINTPTR,      offsetof(PyVMA, addr_start),  READONLY, "vma's start addr"},
+    {"addr_stop",   T_UINTPTR,      offsetof(PyVMA, addr_stop),   READONLY, "vma's start addr"},
+    // XXX pyuser: restrict to read-only access?
+    {"pyuser",      T_OBJECT_EX,    offsetof(PyVMA, pyuser),      0,        "user of this vma"},
+    {NULL}
+};
+
 static PyTypeObject PyVMA_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name            = "_bigfile.VMA",
     .tp_basicsize       = sizeof(PyVMA),
-    .tp_flags           = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_NEWBUFFER,
-    .tp_methods         = NULL, // TODO ?
+    .tp_flags           = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_NEWBUFFER | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse        = pyvma_traverse,
+    .tp_clear           = pyvma_clear,
+    .tp_methods         = pyvma_methods,
+    .tp_members         = pyvma_members,
     .tp_as_sequence     = &pyvma_as_seq,
     .tp_as_buffer       = &pyvma_as_buffer,
     .tp_dealloc         = pyvma_dealloc,
@@ -267,10 +364,6 @@ static PyTypeObject PyVMA_Type = {
  *  PyBigFileH  *
  ****************/
 
-
-#define PyFunc(FUNC, DOC)               \
-static const char FUNC ##_doc[] = DOC;  \
-static PyObject *FUNC
 
 PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
     (PyObject *pyfileh0, PyObject *args)
