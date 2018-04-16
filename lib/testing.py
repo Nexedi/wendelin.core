@@ -27,6 +27,7 @@ from ZODB import DB
 import codecs
 import math
 import os
+import pkg_resources
 
 # hashlib-like interface to adler32
 class Adler32:
@@ -211,15 +212,34 @@ class TestDB_ZEO(TestDB_Base):
         from ZEO.tests import forker
         self.zeo_forker = forker
 
+        # .z5 represents whether we are running with ZEO5 or earlier
+        dzodb3  = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZODB3'))
+        dzeo    = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZEO'))
+        v5      = pkg_resources.parse_version('5.0dev')
+        v311    = pkg_resources.parse_version('3.11dev')
+
+        if dzodb3 is not None and dzodb3.parsed_version < v311:
+            self.z5 = False # ZODB 3.11 just requires latest ZODB & ZEO
+        else:
+            assert dzeo is not None
+            self.z5 = (dzeo.parsed_version >= v5)
+
+
     def setup(self):
         port  = self.zeo_forker.get_port()
         zconf = self.zeo_forker.ZEOConfig(('', port))
-        self.addr, self.adminaddr, self.pid, self.path = \
-                self.zeo_forker.start_zeo_server(zeo_conf=zconf, port=port)
+        _ = self.zeo_forker.start_zeo_server(zeo_conf=zconf, port=port)
+        if self.z5:
+            self.addr, self.stop = _
+        else:
+            self.addr, self.adminaddr, self.pid, self.path = _
 
     def teardown(self):
-        self.zeo_forker.shutdown_zeo_server(self.adminaddr)
-        os.waitpid(self.pid, 0)
+        if self.z5:
+            self.stop()
+        else:
+            self.zeo_forker.shutdown_zeo_server(self.adminaddr)
+            os.waitpid(self.pid, 0)
 
     def getZODBStorage(self):
         from ZEO.ClientStorage import ClientStorage
