@@ -1,6 +1,61 @@
 Wendelin.core change history
 ============================
 
+0.12 (2018-04-16)
+-----------------
+
+- Update licensing to be in line with whole Nexedi stack (`commit`__). Please
+  see https://www.nexedi.com/licensing for details, rationale and options.
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/f11386a4
+
+- Add `ArrayRef` utility to find out for a NumPy array its top-level root
+  parent and how to recreate the array as some view of the root;
+  this builds the foundation for e.g. sending arrays as references without copy
+  in CMFActivity joblib backend
+  (`commit 1`__, 2__, 3__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/e9d61a89
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/d53371b6
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/450ad804
+
+
+- Don't crash if during `loadblk()` garbage collection was run twice at tricky
+  times (`commit 1`__, 2__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/4228d8b6
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/3804cc39
+
+- Don't crash on writeout if previously `storeblk()` resulted in error
+  (`commit`__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/87bf4908
+
+
+
+- Fix `py.bench` and rework it to produce output in Go benchmarking format
+  (`commit 1`__, 2__, 3__, 4__, 5__); add benchmarks for handling pagefaults
+  (`commit`__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/51f252d4
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/074ce24d
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/ed13c3f9
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/fc08766d
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/5a1ed45a
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/3cfc2728
+
+- Use zodbtools/zodburi, if available, to open database by URL
+  (`commit`__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/f785ac07
+
+- Start to make sure it works with ZODB5 too (`commit 1`__, 2__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/808b59b7
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/0dbf3c44
+
+- Various bugfixes.
+
 0.11 (2017-03-28)
 -----------------
 
