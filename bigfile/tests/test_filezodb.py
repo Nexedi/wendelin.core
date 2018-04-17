@@ -790,3 +790,5 @@ def _test_bigfile_zblk1_zdata_reuse():
     assert len(zdata_v1) == len(zdata_v2)
     for i in range(len(zdata_v1)):
         assert zdata_v1[i] is zdata_v2[i]
+
+    dbclose(root)

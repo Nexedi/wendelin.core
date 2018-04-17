@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import deactivate_btree
+from wendelin.lib.zodb import deactivate_btree, dbclose
 from wendelin.lib.testing import getTestDB
 from persistent import Persistent, UPTODATE, GHOST
 from BTrees.IOBTree import IOBTree
@@ -81,3 +81,5 @@ def test_deactivate_btree():
         for obj in [B] + leafv:
             assert obj._p_state == GHOST
             assert obj not in cached
+
+    dbclose(root)
