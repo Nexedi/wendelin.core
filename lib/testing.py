@@ -18,15 +18,18 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 
+from __future__ import print_function
+
 from wendelin.lib.zodb import dbstoropen
 from zlib import adler32
 from struct import pack
 from tempfile import mkdtemp
 from shutil import rmtree
 from ZODB import DB
+import weakref, traceback
 import codecs
 import math
-import os
+import os, sys
 import pkg_resources
 
 # hashlib-like interface to adler32
@@ -171,7 +174,7 @@ def ffadler32_bysize(size):     return _ffadler32_byorder   [ilog2_exact(size)]
 class TestDB_Base(object):
     def setup(self):
         raise NotImplementedError()
-    def teardown(self):
+    def _teardown(self):
         raise NotImplementedError()
     def getZODBStorage(self):
         raise NotImplementedError()
@@ -182,12 +185,42 @@ class TestDB_Base(object):
         stor = self.getZODBStorage()
         db   = DB(stor)
         conn = db.open()
+        self.connv.append( (weakref.ref(conn), ''.join(traceback.format_stack())) )
         root = conn.root()
         return root
 
     # by default how db was specified is stored for reuse
     def __init__(self, dburi):
         self.dburi = dburi
+
+        # remember all database connections that were born via dbopen.
+        #
+        # if test code is not careful enough to close them - we'll close in
+        # teardown to separate failures in between modules.
+        #
+        # we don't use strong references, because part of transaction/ZODB
+        # keeps weak references to connections.
+        self.connv = []  # [] of (weakref(conn), traceback)
+
+    def teardown(self):
+        # close connections that test code forgot to close
+        for connref, tb in self.connv:
+            conn = connref()
+            if conn is None:
+                continue
+            if not conn.opened:
+                continue    # still alive, but closed
+            print("W: testdb: teardown: %s left not closed by test code"
+                  "; opened by:\n%s" % (conn, tb), file=sys.stderr)
+
+            db = conn.db()
+            stor = db.storage
+            conn.close()
+            # DB.close() should close underlying storage and is noop when
+            # called the second time.
+            db.close()
+
+        self._teardown()
 
 
 
@@ -197,7 +230,7 @@ class TestDB_FileStorage(TestDB_Base):
     def setup(self):
         self.tmpd = mkdtemp('', 'testdb_fs.')
 
-    def teardown(self):
+    def _teardown(self):
         rmtree(self.tmpd)
 
     def getZODBStorage(self):
@@ -234,7 +267,7 @@ class TestDB_ZEO(TestDB_Base):
         else:
             self.addr, self.adminaddr, self.pid, self.path = _
 
-    def teardown(self):
+    def _teardown(self):
         if self.z5:
             self.stop()
         else:
@@ -258,7 +291,7 @@ class TestDB_NEO(TestDB_Base):
         self.cluster.start()
         self.cluster.expectClusterRunning()
 
-    def teardown(self):
+    def _teardown(self):
         self.cluster.stop()
 
     def getZODBStorage(self):
@@ -270,8 +303,8 @@ class TestDB_NEO(TestDB_Base):
 class TestDB_External(TestDB_Base):
 
     # we do not create/destroy it - the database managed not by us
-    def setup(self):    pass
-    def teardown(self): pass
+    def setup(self):     pass
+    def _teardown(self): pass
 
     def getZODBStorage(self):
         return dbstoropen(self.dburi)
