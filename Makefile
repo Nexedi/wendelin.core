@@ -21,7 +21,7 @@ all	:
 
 PYTHON	?= python
 PYTEST	?= $(PYTHON) -m pytest
-PYBENCH ?= $(PYTHON) t/py.bench
+PYBENCH ?= $(PYTHON) -m golang.cmd.pybench
 VALGRIND?= valgrind
 
 # use the same C compiler as python
@@ -198,4 +198,4 @@ bench	: bench.t bench.py
 bench.t	: $(BENCHV.C:%=%.trun)
 
 bench.py: bigfile/_bigfile.so
-	$(PYBENCH) $(PYTEST_IGNORE)
+	$(PYBENCH) --count=3 --forked $(PYTEST_IGNORE)

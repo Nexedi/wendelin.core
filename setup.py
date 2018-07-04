@@ -249,7 +249,7 @@ setup(
                   ],
 
     extras_require = {
-                   'test': ['pytest'],
+                   'test': ['pytest', 'pygolang >= 0.0.0.dev4'],
     },
 
     cmdclass    = {'build_ext':     build_ext,
