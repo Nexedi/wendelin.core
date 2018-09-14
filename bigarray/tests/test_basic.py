@@ -20,15 +20,23 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 from wendelin.bigarray import BigArray, ArrayRef, _flatbytev
+from wendelin.bigarray.array_ram import RAMArray
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
 from numpy import ndarray, dtype, int64, int32, uint32, int16, uint8, all, zeros, arange, \
-        array_equal, asarray, newaxis, swapaxes
+        array_equal, asarray, newaxis, swapaxes, array
 from numpy.lib.stride_tricks import as_strided
 import numpy
 
 from pytest import raises
+
+# Overloading RAMArray __init__ to match BigArray syntax
+# so that existing tests can be reused
+class DummyRAMArray(RAMArray):
+  
+    def __init__(self, shape, dtype_, bigfileh, order='C'):
+        RAMArray.__init__(self, shape, dtype_, order)
 
 
 # Synthetic bigfile that just loads zeros, and ignores writes (= a-la /dev/zero)
@@ -69,7 +77,7 @@ PS = 2*1024*1024    # FIXME hardcoded, TODO -> ram.pagesize
 
 
 # make sure we don't let dtype with object to be used with BigArray
-def test_bigarray_noobject():
+def _test_bigarray_noobject(ArrayClass):
     Z  = BigFile_Zero(PS)
     Zh = Z.fileh_open()
 
@@ -77,15 +85,21 @@ def test_bigarray_noobject():
     # it will become S0 or U0
     obj_dtypev = [numpy.object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
     for dtype_ in obj_dtypev:
-        raises(TypeError, "BigArray((1,), dtype_, Zh)")
+        raises(TypeError, "%s((1,), dtype_, Zh)" %ArrayClass)
+
+def test_bigarray_noobject():
+    _test_bigarray_noobject("BigArray")
+
+def test_ramarray_noobject():
+    _test_bigarray_noobject("DummyRAMArray")
 
 
 # basic ndarray-compatibility attributes of BigArray
-def test_bigarray_basic():
+def _test_bigarray_basic(ArrayClass):
     Z  = BigFile_Zero(PS)
     Zh = Z.fileh_open()
 
-    A = BigArray((10,3), int32, Zh)
+    A = ArrayClass((10,3), int32, Zh)
 
     raises(TypeError, "A.data")
     assert A.strides    == (12, 4)
@@ -104,7 +118,7 @@ def test_bigarray_basic():
     # TODO .base
 
 
-    B = BigArray((10,3), int32, Zh, order='F')
+    B = ArrayClass((10,3), int32, Zh, order='F')
 
     raises(TypeError, "B.data")
     assert B.strides    == (4, 40)
@@ -122,6 +136,12 @@ def test_bigarray_basic():
     # XXX .ctypes   (non-basic)
     # TODO .base
 
+
+def test_bigarray_basict():
+    _test_bigarray_basic(BigArray)
+
+def test_ramarray_basic():
+    _test_bigarray_basic(DummyRAMArray)
 
 
 # DoubleGet(obj1, obj2)[key] -> obj1[key], obj2[key]
@@ -143,11 +163,11 @@ class DoubleCheck(DoubleGet):
 
 
 # getitem/setitem (1d case)
-def test_bigarray_indexing_1d():
+def _test_bigarray_indexing_1d(ArrayClass):
     Z  = BigFile_Zero(PS)
     Zh = Z.fileh_open()
 
-    A = BigArray((10*PS,), uint8, Zh)
+    A = ArrayClass((10*PS,), uint8, Zh)
 
     # ndarray of the same shape - we'll use it to get slices and compare result
     # shape/stride against BigArray.__getitem__
@@ -301,6 +321,12 @@ def test_bigarray_indexing_1d():
 
     assert raises(ValueError, 'A[:4] = range(5)')
 
+def test_bigarray_indexing_1d():
+    _test_bigarray_indexing_1d(BigArray)
+
+def test_ramarray_indexing_1d():
+    _test_bigarray_indexing_1d(DummyRAMArray)
+
 
 # indexing where accessed element overlaps edge between pages
 def test_bigarray_indexing_pageedge():
@@ -371,7 +397,7 @@ def idx_to_test(shape, idx_prefix=()):
 
 
 # getitem/setitem (Nd case)
-def test_bigarray_indexing_Nd():
+def _test_bigarray_indexing_Nd(ArrayClass):
     # shape of tested array - all primes, total size for uint32 ~ 7 2M pages
     # XXX even less dimensions (to speed up tests)?
     shape = tuple(reversed( (17,23,101,103) ))
@@ -385,8 +411,12 @@ def test_bigarray_indexing_Nd():
     fh = f.fileh_open()
 
     for order in ('C', 'F'):
-        A  = BigArray(shape, uint32, fh, order=order)       # bigarray with test data and shape
         A_ = data[:mul(shape)].reshape(shape, order=order)  # ndarray  ----//----
+        if ArrayClass == BigArray:
+            A  = ArrayClass(shape, uint32, fh, order=order)       # bigarray with test data and shape
+        elif ArrayClass == RAMArray:
+            A = ArrayClass(shape, uint32, order=order)
+            A[:] = A_[:] # for RAMArray we must set test data after initialization
 
         # AA[key] -> A[key], A_[key]
         AA = DoubleGet(A, A_)
@@ -439,14 +469,19 @@ def test_bigarray_indexing_Nd():
             for newaxis in range(3):    # 0 - no newaxis
         """
 
+def test_bigarray_indexing_Nd():
+    _test_bigarray_indexing_Nd(BigArray)
 
-def test_bigarray_resize():
+def test_ramarray_indexing_Nd():
+    _test_bigarray_indexing_Nd(RAMArray)
+
+def _test_bigarray_resize(ArrayClass):
     data = zeros(8*PS, dtype=uint32)
     f   = BigFile_Data(data, PS)
     fh  = f.fileh_open()
 
     # set first part & ensure it is set correctly
-    A   = BigArray((10,3), uint32, fh)
+    A   = ArrayClass((10,3), uint32, fh)
     A[:,:] = arange(10*3, dtype=uint32).reshape((10,3))
 
     a = A[:]
@@ -470,24 +505,45 @@ def test_bigarray_resize():
     # tail is zeros
     assert array_equal(b[10,:], zeros(3, dtype=uint32))
 
-    # old mapping stays valid and changes propageate to/from it
+    # old mapping stays valid
+    # For BigArray: changes propageate to/from it
+    # For Ram Array: changes do not propage after
+    # resize because resize copies data internally
     assert a[0,0] == 0
     assert b[0,0] == 0
     a[0,0] = 1
-    assert b[0,0] == 1
+    if ArrayClass == BigArray:
+        assert b[0,0] == 1
+    elif ArrayClass == DummyRAMArray:
+        assert b[0,0] == 0
     b[0,0] = 2
-    assert a[0,0] == 2
+    if ArrayClass == BigArray:
+        assert a[0,0] == 2
+    elif ArrayClass == DummyRAMArray:
+        assert a[0,0] == 1
     a[0,0] = 0
-    assert b[0,0] == 0
+    if ArrayClass == BigArray:
+        assert b[0,0] == 0    
+    elif ArrayClass == DummyRAMArray:
+        assert b[0,0] == 2
 
     assert a[  -1,-1] == 10*3-1
     assert b[10-1,-1] == 10*3-1
     a[  -1,-1] = 1
-    assert b[10-1,-1] == 1
+    if ArrayClass == BigArray:
+        assert b[10-1,-1] == 1
+    elif ArrayClass == DummyRAMArray:
+        assert b[10-1,-1] == 10*3-1
     b[10-1,-1] = 2
-    assert a[  -1,-1] == 2
+    if ArrayClass == BigArray:
+        assert a[  -1,-1] == 2
+    elif ArrayClass == DummyRAMArray:
+        assert a[  -1,-1] == 1
     a[  -1,-1] = 10*3-1
-    assert b[10-1,-1] == 10*3-1
+    if ArrayClass == BigArray:
+        assert b[10-1,-1] == 10*3-1
+    elif ArrayClass == DummyRAMArray:
+        assert b[10-1,-1] == 2
 
     # we cannot access old mapping beyond it's end
     assert raises(IndexError, 'a[10,:]')
@@ -497,8 +553,19 @@ def test_bigarray_resize():
 
     # map it whole again and ensure we have correct data
     c = A[:]
-    assert array_equal(c.ravel(), arange(11*3, dtype=uint32))
+    if ArrayClass == BigArray:
+        assert array_equal(c.ravel(), arange(11*3, dtype=uint32))
+    elif ArrayClass == DummyRAMArray:
+        assert array_equal(c.ravel(), 
+                           array([2,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                                    17,18,19,20,21,22,23,24,25,26,27,28,2,30,
+                                    31,32], dtype=uint32))
 
+def test_bigarray_resize():
+    _test_bigarray_resize(BigArray)
+
+def test_ramarray_resize():
+    _test_bigarray_resize(DummyRAMArray)
 
 # ~ arange(n*3*2).reshape(n,3,2)
 def arange32_c(start, stop, dtype=None):
@@ -507,7 +574,7 @@ def arange32_f(start, stop, dtype=None):
     return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start), order='F')
     #return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start))
 
-def test_bigarray_append():
+def _test_bigarray_append(ArrayClass):
     for order in ('C', 'F'):
         data = zeros(8*PS, dtype=uint32)
         f   = BigFile_Data(data, PS)
@@ -523,7 +590,7 @@ def test_bigarray_append():
         assert array_equal(x.ravel(order), arange(7*3*2))
 
         # init empty BigArray of shape (x,3,2)
-        A   = BigArray({'C': (0,3,2), 'F': (2,3,0)} [order], int64, fh, order=order)
+        A   = ArrayClass({'C': (0,3,2), 'F': (2,3,0)} [order], int64, fh, order=order)
         assert array_equal(A[:], arange32(0,0))
 
         # append initial data
@@ -550,7 +617,34 @@ def test_bigarray_append():
         assert array_equal(A[:], arange32(0,4))
 
 
+def test_bigarray_append():
+    _test_bigarray_append(BigArray)
 
+def test_ramarray_append():
+    _test_bigarray_append(DummyRAMArray)
+    
+    # storage is initialize with 2**x >= nbytes
+    A = RAMArray((3,3), dtype='float64')
+    assert A.nbytes == 72
+    assert A.storage.nbytes == 128
+
+    # if we append more than storage size, storage
+    # is extended with 2**x+1 >= nbytes
+    A.append(numpy.ones((3,3), dtype='float64'))
+    assert A.nbytes == 144
+    assert A.storage.nbytes == 256
+
+    # if we append less than storage size, storage
+    # size does not change
+    A.append(numpy.ones((3,3), dtype='float64'))
+    assert A.nbytes == 216
+    assert A.storage.nbytes == 256
+
+    # if we append more than 2**x+1
+    # we get storage size of 2**x >= nbytes of new size
+    A.append(numpy.ones((100,3), dtype='float64'))
+    assert A.nbytes == 2616
+    assert A.storage.nbytes == 4096
 
 def test_bigarray_list():
     Z  = BigFile_Zero(PS)
