@@ -692,8 +692,9 @@ class ArrayRef(object):
             # 2) or it is a VMA created from under BigArray which will be
             # treated as top-level too, and corrected for in the end.
             basetype = type(base)
-            if basetype.__module__ + "." + basetype.__name__ == "_bigfile.VMA":
-            #if isinstance(base, _bigfile.VMA):  XXX _bigfile does not expose VMA
+            basepath = basetype.__module__ + "." + basetype.__name__
+            if basepath in ("_bigfile.VMA", "wendelin.bigarray.array_ram._VMA"):
+            #if isinstance(base, (_bigfile.VMA, array_ram._VMA)):  XXX _bigfile does not expose VMA
                 bigvma = base
             break
 
