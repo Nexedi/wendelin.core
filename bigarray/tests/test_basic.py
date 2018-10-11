@@ -20,6 +20,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 from wendelin.bigarray import BigArray, ArrayRef, _flatbytev
+from wendelin.bigarray.array_ram import _RAMFileH
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
@@ -28,6 +29,7 @@ from numpy import ndarray, dtype, int64, int32, uint32, int16, uint8, all, zeros
 from numpy.lib.stride_tricks import as_strided
 import numpy
 
+import os, mmap
 from pytest import raises, fixture
 
 
@@ -76,9 +78,23 @@ class tBigFile:
 
         return bigf.fileh_open()
 
+# tRAM provides .fopen() to open a file handle via _RAMFileH.
+class tRAM:
+    def fopen(self, data=None, readonly=False):
+        fh = _RAMFileH()
+        if data is not None:
+            fh2 = os.dup(fh._fh)    # fdopen takes ownershipf of fd and closes it
+            with os.fdopen(fh2, 'wb') as f:
+                f.write(data)
+
+        if readonly:
+            fh._prot = mmap.PROT_READ
+
+        return fh
+
 # testbig is fixture that provides .fopen(...) to open a big file handle from
-# ^^^ BigFile_*.
-@fixture(scope="module", params=[tBigFile])
+# ^^^ BigFile_* or correspondingly from RAM.
+@fixture(scope="module", params=[tBigFile, tRAM])
 def testbig(request):
     cls = request.param
     yield cls()
