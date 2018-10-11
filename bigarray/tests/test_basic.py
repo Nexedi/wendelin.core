@@ -20,6 +20,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 from wendelin.bigarray import BigArray, ArrayRef, _flatbytev
+from wendelin.bigarray.array_ram import _RAMFileH
 from wendelin.bigfile import BigFile
 from wendelin.lib.mem import memcpy
 from wendelin.lib.calc import mul
@@ -28,7 +29,8 @@ from numpy import ndarray, dtype, int64, int32, uint32, int16, uint8, all, zeros
 from numpy.lib.stride_tricks import as_strided
 import numpy
 
-from pytest import raises
+import os, mmap
+from pytest import raises, fixture
 
 
 # Synthetic bigfile that just loads zeros, and ignores writes (= a-la /dev/zero)
@@ -59,19 +61,49 @@ class BigFile_Data(BigFile):
         memcpy(self.datab[self.blksize * blk : self.blksize * (blk+1)], buf)
 
 
-# synthetic bigfile that only loads data from numpy array
-class BigFile_Data_RO(BigFile_Data):
-    def storeblk(self, blk, buf):
-        raise RuntimeError('tests should not try to change test data')
-
-
 PS = 2*1024*1024    # FIXME hardcoded, TODO -> ram.pagesize
+
+# tBigFile provides .fopen() to fileh_open a big file handle via ^^^ BigFile_*
+class tBigFile:
+    def fopen(self, data=None, readonly=False):
+        if data is None:
+            bigf = BigFile_Zero(PS)
+        else:
+            bigf = BigFile_Data(data, PS)
+
+        if readonly:
+            def _(self, blk, buf):
+                raise RuntimeError('tests should not try to change test data')
+            bigf.storeblk = _
+
+        return bigf.fileh_open()
+
+# tRAM provides .fopen() to open a file handle via _RAMFileH.
+class tRAM:
+    def fopen(self, data=None, readonly=False):
+        fh = _RAMFileH()
+        if data is not None:
+            fh2 = os.dup(fh._fh)    # fdopen takes ownershipf of fd and closes it
+            with os.fdopen(fh2, 'wb') as f:
+                f.write(data)
+
+        if readonly:
+            fh._prot = mmap.PROT_READ
+
+        return fh
+
+# testbig is fixture that provides .fopen(...) to open a big file handle from
+# ^^^ BigFile_* or correspondingly from RAM.
+@fixture(scope="module", params=[tBigFile, tRAM])
+def testbig(request):
+    cls = request.param
+    yield cls()
+
 
 
 # make sure we don't let dtype with object to be used with BigArray
-def test_bigarray_noobject():
-    Z  = BigFile_Zero(PS)
-    Zh = Z.fileh_open()
+def test_bigarray_noobject(testbig):
+    Zh = testbig.fopen()
 
     # NOTE str & unicode are fixed-size types - if size is not explicitly given
     # it will become S0 or U0
@@ -81,9 +113,8 @@ def test_bigarray_noobject():
 
 
 # basic ndarray-compatibility attributes of BigArray
-def test_bigarray_basic():
-    Z  = BigFile_Zero(PS)
-    Zh = Z.fileh_open()
+def test_bigarray_basic(testbig):
+    Zh = testbig.fopen()
 
     A = BigArray((10,3), int32, Zh)
 
@@ -143,9 +174,8 @@ class DoubleCheck(DoubleGet):
 
 
 # getitem/setitem (1d case)
-def test_bigarray_indexing_1d():
-    Z  = BigFile_Zero(PS)
-    Zh = Z.fileh_open()
+def test_bigarray_indexing_1d(testbig):
+    Zh = testbig.fopen()
 
     A = BigArray((10*PS,), uint8, Zh)
 
@@ -303,12 +333,11 @@ def test_bigarray_indexing_1d():
 
 
 # indexing where accessed element overlaps edge between pages
-def test_bigarray_indexing_pageedge():
+def test_bigarray_indexing_pageedge(testbig):
     shape = (10, PS-1)
     data  = arange(mul(shape), dtype=uint32).view(uint8)    # NOTE 4 times bigger than uint8
 
-    f  = BigFile_Data_RO(data, PS)
-    fh = f.fileh_open()
+    fh = testbig.fopen(data, readonly=True)
 
     A  = BigArray(shape, uint8, fh)                     # bigarray with test data and shape
     A_ = data[:mul(shape)].reshape(shape)               # ndarray  ----//----
@@ -325,8 +354,7 @@ def test_bigarray_indexing_pageedge():
 
 
     shape = (10, PS+1)
-    f  = BigFile_Data_RO(data, PS)
-    fh = f.fileh_open()
+    fh = testbig.fopen(data, readonly=True)
 
     A  = BigArray(shape, uint8, fh)
     A_ = data[:mul(shape)].reshape(shape)
@@ -371,7 +399,7 @@ def idx_to_test(shape, idx_prefix=()):
 
 
 # getitem/setitem (Nd case)
-def test_bigarray_indexing_Nd():
+def test_bigarray_indexing_Nd(testbig):
     # shape of tested array - all primes, total size for uint32 ~ 7 2M pages
     # XXX even less dimensions (to speed up tests)?
     shape = tuple(reversed( (17,23,101,103) ))
@@ -381,8 +409,7 @@ def test_bigarray_indexing_Nd():
     #      (else data slice will be smaller than buf)
     data  = arange(mul(shape) + PS, dtype=uint32)
 
-    f  = BigFile_Data_RO(data, PS)
-    fh = f.fileh_open()
+    fh = testbig.fopen(data, readonly=True)
 
     for order in ('C', 'F'):
         A  = BigArray(shape, uint32, fh, order=order)       # bigarray with test data and shape
@@ -440,10 +467,9 @@ def test_bigarray_indexing_Nd():
         """
 
 
-def test_bigarray_resize():
+def test_bigarray_resize(testbig):
     data = zeros(8*PS, dtype=uint32)
-    f   = BigFile_Data(data, PS)
-    fh  = f.fileh_open()
+    fh  = testbig.fopen(data)
 
     # set first part & ensure it is set correctly
     A   = BigArray((10,3), uint32, fh)
@@ -507,11 +533,10 @@ def arange32_f(start, stop, dtype=None):
     return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start), order='F')
     #return arange(start*3*2, stop*3*2, dtype=dtype).reshape(2,3,(stop-start))
 
-def test_bigarray_append():
+def test_bigarray_append(testbig):
     for order in ('C', 'F'):
         data = zeros(8*PS, dtype=uint32)
-        f   = BigFile_Data(data, PS)
-        fh  = f.fileh_open()
+        fh  = testbig.fopen(data)
 
         arange32 = {'C': arange32_c, 'F': arange32_f} [order]
 
@@ -552,9 +577,8 @@ def test_bigarray_append():
 
 
 
-def test_bigarray_list():
-    Z  = BigFile_Zero(PS)
-    Zh = Z.fileh_open()
+def test_bigarray_list(testbig):
+    Zh = testbig.fopen()
     A = BigArray((10,), uint8, Zh)
 
     # the IndexError for out-of-bound scalar access should allow, though
@@ -564,9 +588,8 @@ def test_bigarray_list():
     assert l == [0]*10
 
 
-def test_bigarray_to_ndarray():
-    Z  = BigFile_Zero(PS)
-    Zh = Z.fileh_open()
+def test_bigarray_to_ndarray(testbig):
+    Zh = testbig.fopen()
     A = BigArray((10,), uint8, Zh)
 
     # without IndexError on out-of-bound scalar access, the following
@@ -594,7 +617,7 @@ def test_bigarray_to_ndarray():
 
 
 
-def test_arrayref():
+def test_arrayref(testbig):
     # test data - all items are unique - so we can check array by content
     data = zeros(PS, dtype=uint8)
     data32 = data.view(uint32)
@@ -683,8 +706,7 @@ def test_arrayref():
     # data_ is the same as data but shifted to exercise vma and vma->broot offsets calculation.
     data_ = zeros(8*PS, dtype=uint8)
     data_[2*PS-1:][:PS] = data
-    f  = BigFile_Data_RO(data_, PS)
-    fh = f.fileh_open()
+    fh = testbig.fopen(data_, readonly=True)
     A  = BigArray(data_.shape, data_.dtype, fh)
     assert array_equal(A[2*PS-1:][:PS], data)
 
