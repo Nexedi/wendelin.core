@@ -57,3 +57,70 @@ def _as_strided(arr, shape, stridev, dtype):
 
     # we are done
     return a
+
+
+# structured creates view of the array interpreting its minor axis as fully covered by dtype.
+#
+# The minor axis of the array must be C-contiguous and be of dtype.itemsize in size.
+#
+# Structured is similar to arr.view(dtype) + corresponding reshape, but does
+# not have limitations of ndarray.view(). For example:
+#
+#   In [1]: a = np.arange(3*3, dtype=np.int32).reshape((3,3))
+#
+#   In [2]: a
+#   Out[2]:
+#   array([[0, 1, 2],
+#          [3, 4, 5],
+#          [6, 7, 8]], dtype=int32)
+#
+#   In [3]: b = a[:2,:2]
+#
+#   In [4]: b
+#   Out[4]:
+#   array([[0, 1],
+#          [3, 4]], dtype=int32)
+#
+#   In [5]: dtxy = np.dtype([('x', np.int32), ('y', np.int32)])
+#
+#   In [6]: dtxy
+#   Out[6]: dtype([('x', '<i4'), ('y', '<i4')])
+#
+#   In [7]: b.view(dtxy)
+#   ---------------------------------------------------------------------------
+#   ValueError                                Traceback (most recent call last)
+#   <ipython-input-66-af98529aa150> in <module>()
+#   ----> 1 b.view(dtxy)
+#
+#   ValueError: To change to a dtype of a different size, the array must be C-contiguous
+#
+#   In [8]: structured(b, dtxy)
+#   Out[8]: array([(0, 1), (3, 4)], dtype=[('x', '<i4'), ('y', '<i4')])
+#
+# Structured always creates view and never copies data.
+def structured(arr, dtype):
+    dtype = np.dtype(dtype) # convenience
+
+    atype = arr.dtype
+    # m* denotes minor *
+    maxis   = np.argmin(np.abs(arr.strides))
+    mstride = arr.strides[maxis]
+    if mstride < 0:
+        raise ValueError("minor-axis is not C-contiguous: stride (%d) < 0" % mstride)
+    if mstride != atype.itemsize:
+        raise ValueError("minor-axis is not C-contiguous: stride (%d) != itemsize (%d)" % (mstride, atype.itemsize))
+
+    # verify dtype fully covers whole minor axis
+    mnelem = arr.shape[maxis]
+    msize  = mnelem * atype.itemsize
+    if dtype.itemsize != msize:
+        raise ValueError("dtype.itemsize (%d) != sizeof(minor-axis) (%d)" % (dtype.itemsize, msize))
+
+    # ok to go
+    shape   = arr.shape[:maxis] + arr.shape[maxis+1:]
+    stridev = arr.strides[:maxis] + arr.strides[maxis+1:]
+
+    # NOTE we cannot use just np.ndarray because if arr is a slice it can give:
+    #   TypeError: expected a single-segment buffer object
+    #return np.ndarray.__new__(type(arr), shape, dtype, buffer(arr), 0, stridev)
+    return _as_strided(arr, shape, stridev, dtype)
