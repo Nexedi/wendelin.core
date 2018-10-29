@@ -38,8 +38,8 @@ of physical RAM.
 
 from __future__ import print_function
 from wendelin.lib.calc import mul
+from wendelin.lib.xnumpy import _as_strided
 from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
-from numpy.lib.stride_tricks import DummyArray
 import logging
 
 
@@ -618,29 +618,7 @@ class ArrayRef(object):
         #
         # it is also safe because we checked .shape and .stridev not to escape
         # from bchild data buffer.
-        #
-        # the code below is very close to
-        #
-        #   a = stride_tricks.as_strided(bchild_z0, shape=self.shape, strides=self.stridev)
-        #
-        # but we don't use as_strided() because we also have to change dtype
-        # with shape and strides in one go - else changing dtype after either
-        # via a.dtype = ..., or via a.view(dtype=...) can raise errors like
-        #
-        #   "When changing to a larger dtype, its size must be a
-        #    divisor of the total size in bytes of the last axis
-        #    of the array."
-        aiface = dict(bchild_z0.__array_interface__)
-        aiface['shape']   = tuple(self.shape)
-        aiface['strides'] = tuple(self.stridev)
-        # type: for now we only care that itemsize is the same
-        aiface['typestr'] = '|V%d' % self.dtype.itemsize
-        aiface['descr']   = [('', aiface['typestr'])]
-
-        a = asarray(DummyArray(aiface, base=bchild_z0))
-
-        # restore full dtype - it should not raise here, since itemsize is the same
-        a.dtype = self.dtype
+        a = _as_strided(bchild_z0, tuple(self.shape), tuple(self.stridev), self.dtype)
 
         # restore full array type
         a = a.view(type=self.atype)
