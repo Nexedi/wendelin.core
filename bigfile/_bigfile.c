@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2018  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -26,6 +26,13 @@
  *   VMA with a buffer/memoryview interface
  *   BigFileH  with mmap (-> vma) and writeout control
  *   BigFile   base class (to allow implementing BigFile backends in python)
+ *
+ * NOTE virtmem/bigfile functions release/reacquire GIL (see virt_lock()) -
+ * thus functions that use them cannot assume they run mutually exclusive to
+ * other Python threads. See Py_CLEAR documentation which explain what could go
+ * wrong if code is not careful to protect itself against concurrent GC:
+ *
+ * https://github.com/python/cpython/blob/v2.7.15-310-g112e4afd582/Include/object.h#L790-L798
  */
 
 #include <Python.h>
@@ -269,6 +276,13 @@ PyFunc(pyvma_pagesize, "pagesize() -> pagesize -- page size of RAM underlying th
 static void
 pyvma_dealloc(PyObject *pyvma0)
 {
+    /* PyVMA supports cyclic GC - first, before destructing, remove it from GC
+     * list to avoid segfaulting on double entry here - e.g. if GC is triggered
+     * from a weakref callback, or concurrently from another thread.
+     *
+     * See https://bugs.python.org/issue31095 for details */
+    PyObject_GC_UnTrack(pyvma0);
+
     PyVMA       *pyvma = upcast(PyVMA *, pyvma0);
     BigFileH    *fileh = pyvma->fileh;
 
@@ -460,6 +474,8 @@ PyFunc(pyfileh_invalidate_page, "invalidate_page(pgoffset) - invalidate fileh pa
 static void
 pyfileh_dealloc(PyObject *pyfileh0)
 {
+    /* PyBigFileH does not support cyclic GC - no need to PyObject_GC_UnTrack it */
+
     PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
     BigFile     *file = pyfileh->file;
     PyBigFile   *pyfile;
