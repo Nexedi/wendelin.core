@@ -413,6 +413,17 @@ def test_gc_from_sighandler():
     assert f3.marker_list == [2]
 
 
+# test that vma dealloc is safe wrt concurrent GC.
+def test_vma_del_vs_gc():
+    f   = XBigFile(b'abcd', PS)
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, 1)
+
+    # del vma, but make sure vma.dealloc calls another code, which eventually calls GC.
+    # this will segfault, if vma.dealloc does not properly untrack vma from GC first.
+    wvma = weakref.ref(vma, lambda _: gc.collect())
+    del vma
+
 # test that there is no crash after first store error on writeout
 class StoreError(Exception):
     pass
