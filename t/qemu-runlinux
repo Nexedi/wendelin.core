@@ -1,14 +1,137 @@
 #!/bin/sh -e
-# qemu-runlinux <kernel>
-# run kernel in QEMU with root fs taken from host
+# qemu-runlinux [options] <kernel> <program> ...
+# run kernel/program in QEMU with root fs taken from host
 #
-# Useful to test/debug just compiled kernel via running programs
-# edited/compiled on host.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+#                          Kirill Smelkov <kirr@nexedi.com>
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# You can also Link and Combine this program with other software covered by
+# the terms of any of the Free Software licenses or any of the Open Source
+# Initiative approved licenses and Convey the resulting work. Corresponding
+# source of such a combination shall include the source code for all other
+# software used.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+# See https://www.nexedi.com/licensing for rationale and options.
+
+# qemu-runlinux spawns linux kernel under qemu, setups rootfs to be taken from
+# / of host, and runs specified program inside.
+#
+# It might be useful, for example, to test/debug just compiled kernel via
+# running programs edited/compiled on host.
+
+# ---- init under spawned kernel ----
+
+# pid=1: we are running inside booted kernel as init.
+# mount /sys /proc etc and tail to the program.
+if [ $$ == 1 ]; then
+	echo "qinit ..."
+
+	qshutdown() {
+		echo 1 >/proc/sys/kernel/sysrq
+		echo o >/proc/sysrq-trigger	# shutdown
+
+	}
+
+	qdie() {
+		echo "E: $*" 1>&2
+		qshutdown
+		sleep 1d # give time for shutdown to happen
+		exit 1	 # just in case
+	}
+
+	mount -t sysfs      none /sys
+	mount -t debugfs    none /sys/kernel/debug
+	#mount -t bpf        none /sys/fs/bpf
+	mount -t proc       none /proc
+
+	mount -t devtmpfs   none /dev
+	mkdir /dev/{pts,mqueue,hugepages,shm}
+	mount -t devpts     none /dev/pts
+	mount -t mqueue     none /dev/mqueue
+	mount -t hugetlbfs  none /dev/hugepages
+	mount -t tmpfs      none /dev/shm
+	# XXX securityfs
+
+	mount -t tmpfs	none /run
+	mkdir /run/lock
+	mount -t tmpfs	none /run/lock
+	mount -t tmpfs	none /tmp
+
+	# run program in cwd in new terminal session attached to console
+	# (if we don't establish a session accessing /dev/tty will give "No such device or address")
+	test -n "$CWD" || qdie "CWD=?"
+	cd "$CWD"
+
+	test $# != 0 || qdie "no program to run"
+	#cat /proc/cmdline
+	#env
+	#set -x
+	set +e
+	setsid "$@" <>/dev/ttyS0 >&0 2>&1	# run argv[1:] passed to init
+	echo "exit code: $?"
+
+	qshutdown
+	sleep 1d # give time to shutdown
+	qdie "unreachable"
+fi
+
+
+# ---- qemu setup ----
+
+die() {
+	echo "$*" 1>&2
+	exit 1
+}
+
+usage() {
+	cat <<EOF
+Usage: qemu-runlinux [options] <kernel> <program> ...
+Run linux/program under QEMU with rootfs taken from host.
+
+<kernel>	is path vmlinuz-like kernel image
+<program> ...	is program to run and arguments to it.
+
+Options:
+
+	-g	run with graphics
+EOF
+}
+
+# by default output goes to stdout with both /dev/console and /dev/ttyS0 (where
+# program is run) attached there.
+nographic=y
+
+while test $# != 0
+do
+	case "$1" in
+	-g)	# run with graphics UI, /dev/console goes to VGA; program to /dev/ttyS0
+		nographic=;;
+	-h)
+		usage
+		exit 0
+		;;
+	*)
+		break;;
+	esac
+	shift
+done
 
 kernel=$1
-arch=`uname -m`
-test -z "$kernel" && kernel=arch/$arch/boot/bzImage
+test -n "$kernel" || die "kernel not specified"
 
+shift
+prog="$@"
+test -n "$prog" || die "program not specified"
+
+dir=`pwd`
 
 # may be also useful:
 #   -serial  stdio
@@ -28,13 +151,19 @@ test -z "$kernel" && kernel=arch/$arch/boot/bzImage
 # References
 #   http://unix.stackexchange.com/questions/90423/can-virtfs-9p-be-used-as-root-file-system
 #   http://stackoverflow.com/questions/11408041/kernel-debugging-with-gdb-and-qemu
+arch=`uname -m`
 qemu-system-$arch   \
     -enable-kvm \
+    ${nographic:+-nographic}	\
  \
-    -nographic  \
+    -m 512M `# default 128M is too limiting` \
  \
     -fsdev  local,id=R,path=/,security_model=none,readonly  \
     -device virtio-9p-pci,fsdev=R,mount_tag=/dev/root   \
  \
     -kernel $kernel \
-    -append "ro rootfstype=9p rootflags=trans=virtio  console=ttyS0 init=/bin/sh"
+    -append "ro rootfstype=9p rootflags=trans=virtio \
+${nographic:+console=ttyS0} init="$(realpath $0)" \
+CWD="$dir" HOME="$HOME" LANG="$LANG" TERM="$TERM" PATH="$PATH" \
+-- $prog \
+"
