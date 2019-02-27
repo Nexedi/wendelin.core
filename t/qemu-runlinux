@@ -164,6 +164,6 @@ qemu-system-$arch   \
     -kernel $kernel \
     -append "ro rootfstype=9p rootflags=trans=virtio \
 ${nographic:+console=ttyS0} init="$(realpath $0)" \
-CWD="$dir" HOME="$HOME" LANG="$LANG" TERM="$TERM" PATH="$PATH" \
+CWD="$dir" HOME="$HOME" LANG="$LANG" ${nographic:+TERM="$TERM"} PATH="$PATH" \
 -- $prog \
 "
