@@ -75,12 +75,23 @@ if [ $$ == 1 ]; then
 	#env
 	#set -x
 	set +e
-	setsid "$@" <>/dev/ttyS0 >&0 2>&1	# run argv[1:] passed to init
+	setsid "$0" .qinit2 "$@" <>/dev/ttyS0 >&0 2>&1	# run qinit2 with argv[1:] passed to init
 	echo "exit code: $?"
 
 	qshutdown
 	sleep 1d # give time to shutdown
 	qdie "unreachable"
+fi
+
+# init part spawned from under setsid.
+# $0 .qinit2 <command> ...
+if [ "$1" == .qinit2 ]; then
+	# resize terminal to current host's xterm
+	command -v resize >/dev/null && eval `resize`
+
+	# tail to argv[1:] passed to init
+	shift
+	exec "$@"
 fi
 
 
