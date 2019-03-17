@@ -32,7 +32,12 @@
 # pid=1: we are running inside booted kernel as init.
 # mount /sys /proc etc and tail to the program.
 if [ $$ == 1 ]; then
-	echo "qinit ..."
+	qinfo() {
+		test "$qrun_loglevel" -le 6 && return	# <= KERN_INFO
+		echo "$*"
+	}
+
+	qinfo "qinit ..."
 
 	qshutdown() {
 		echo 1 >/proc/sys/kernel/sysrq
@@ -47,11 +52,14 @@ if [ $$ == 1 ]; then
 		exit 1	 # just in case
 	}
 
+	# mount proc early & set loglevel for run phase
+	mount -t proc       none /proc
+	echo "$qrun_loglevel" >/proc/sys/kernel/printk
+
 	mount -t sysfs      none /sys
 	mount -t debugfs    none /sys/kernel/debug
 	mount -t bpf        none /sys/fs/bpf
 	mount -t fusectl    none /sys/fs/fuse/connections
-	mount -t proc       none /proc
 
 	mount -t devtmpfs   none /dev
 	mkdir /dev/{pts,mqueue,hugepages,shm}
@@ -77,7 +85,7 @@ if [ $$ == 1 ]; then
 	#set -x
 	set +e
 	setsid "$0" .qinit2 "$@" <>/dev/ttyS0 >&0 2>&1	# run qinit2 with argv[1:] passed to init
-	echo "exit code: $?"
+	qinfo "exit code: $?"
 
 	qshutdown
 	sleep 1d # give time to shutdown
@@ -113,17 +121,32 @@ Run linux/program under QEMU with rootfs taken from host.
 
 Options:
 
+	-v	increase verbosity
+
+			0: ERROR+ on boot/run
+			1: INFO+  on      run
+			2: INFO+  on boot/run
+			3: DEBUG+ on boot/run
+
 	-g	run with graphics
 EOF
 }
 
 # by default output goes to stdout with both /dev/console and /dev/ttyS0 (where
 # program is run) attached there.
+verbose=0
 nographic=y
 
 while test $# != 0
 do
 	case "$1" in
+	-v)
+		verbose=$(($verbose + 1));;
+	-vv)
+		verbose=$(($verbose + 2));;
+	-vvv)
+		verbose=$(($verbose + 3));;
+
 	-g)	# run with graphics UI, /dev/console goes to VGA; program to /dev/ttyS0
 		nographic=;;
 	-h)
@@ -144,6 +167,14 @@ prog="$@"
 test -n "$prog" || die "program not specified"
 
 dir=`pwd`
+
+# loglevel: default ERROR+ on boot/run
+loglevel=4
+qrun_loglevel=4
+test $verbose -ge 1 && qrun_loglevel=7	# INFO+ on run
+test $verbose -ge 2 && loglevel=7	# INFO+  on boot/run
+test $verbose -ge 3 && loglevel=8	# DEBUG+ on boot/run
+test $loglevel -gt 4 && qrun_loglevel=$loglevel
 
 # may be also useful:
 #   -serial  stdio
@@ -175,7 +206,8 @@ qemu-system-$arch   \
  \
     -kernel $kernel \
     -append "ro rootfstype=9p rootflags=trans=virtio \
-${nographic:+console=ttyS0} init="$(realpath $0)" \
+${nographic:+console=ttyS0} loglevel=$loglevel qrun_loglevel=$qrun_loglevel \
+init="$(realpath $0)" \
 CWD="$dir" HOME="$HOME" LANG="$LANG" ${nographic:+TERM="$TERM"} PATH="$PATH" \
 -- $prog \
 "
