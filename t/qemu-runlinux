@@ -95,6 +95,10 @@ fi
 # init part spawned from under setsid.
 # $0 .qinit2 <command> ...
 if [ "$1" == .qinit2 ]; then
+	# initialize terminal. In particular this has the effect to restore
+	# line wrapping for xterm, as kernel, initially assuming it has "linux"
+	# type terminal, somehow messes xterm settings.
+	command -v tput >/dev/null && tput init
 	# resize terminal to current host's xterm
 	command -v resize >/dev/null && eval `resize`
 
