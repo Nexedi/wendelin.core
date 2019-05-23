@@ -596,9 +596,6 @@ class _ZBigFileH(object):
         # FIXME zfile._p_jar could be None (ex. ZBigFile is newly created
         #       before first commit)
 
-        # IDataManager requires .transaction_manager
-        self.transaction_manager = zfile._p_jar.transaction_manager
-
         # when connection will be reopened -> txn_manager.registerSynch(self)
         zfile._p_jar.onOpenCallback(self)   # -> self.on_connection_open()
 
@@ -608,21 +605,41 @@ class _ZBigFileH(object):
 
 
     def on_connection_open(self):
+        # IDataManager requires .transaction_manager
+        #
+        # resync txn manager every time a connection is (re)opened as even for
+        # the same connection, the data manager can be different for each reopen.
+        self.transaction_manager = self.zfile._p_jar.transaction_manager
+
         # when connection is closed -> txn_manager.unregisterSynch(self)
         # NOTE close callbacks are fired once, and thus we have to re-register
         #      it on every open.
         self.zfile._p_jar.onCloseCallback(self.on_connection_close)
 
-        # attach us to _current_ _thread_ TM (staying in sync with Connection):
+        # attach us to Connection's transaction manager:
         #
         # Hook into txn_manager so that we get a chance to run before
         # transaction.commit().   (see .beforeCompletion() with more details)
+        #
+        # NOTE before ZODB < 5.5.0 Connection.transaction_manager is
+        # ThreadTransactionManager which implicitly uses separate
+        # TransactionManager for each thread. We are thus attaching to
+        # _current_ _thread_ TM and correctness depends on the fact that
+        # .transaction_manager is further used from the same thread only.
+        #
+        # Starting from ZODB >= 5.5.0 this issue has been fixed:
+        #   https://github.com/zopefoundation/ZODB/commit/b6ac40f153
+        #   https://github.com/zopefoundation/ZODB/issues/208
         self.transaction_manager.registerSynch(self)
 
 
     def on_connection_close(self):
-        # detach us from _current_ _thread_ TM (staying in sync with Connection)
+        # detach us from connection's transaction manager.
+        # (NOTE it is _current_ _thread_ TM for ZODB < 5.5.0: see notes ^^^)
+        #
+        # make sure we stay unlinked from txn manager until the connection is reopened.
         self.transaction_manager.unregisterSynch(self)
+        self.transaction_manager = None
 
         # NOTE open callbacks are setup once and fire on every open - we don't
         #      need to resetup them here.
