@@ -1,6 +1,60 @@
 Wendelin.core change history
 ============================
 
+0.13 (2019-06-18)
+-----------------
+
+- Add support for Python 3.7 (commit__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/bca5f79e6f
+
+- Add `RAMArray` class which is compatible to `ZBigArray` in API and semantic,
+  but stores its data in RAM only (`commit 1`__, 2__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/7365979b9d
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/fc9b69d8e1
+
+- Add `lib.xnumpy.structured` - utility to create structured view of an array (`commit 1`__, 2__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/6a5dfefaf8
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/32ca80e2d5
+
+- Fix logic to keep `ZBigFileH` in sync with ZODB connection (commit__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/d9d6adec1b
+
+- Fix crash on PyVMA deallocation (commit__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/d97641d2ba
+
+- Move `py.bench` to pygolang__ so that it can be used not only in
+  Wendelin.core (commit__).
+
+  __ https://pypi.org/project/pygolang/
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/318efce0bf
+
+- Enhance `t/qemu-runlinux` - utility that is used to work on combined
+  kernel/user-space workloads (`commit 1`__, 2__, 3__, 4__, 5__, 6__).
+  This was in particular useful to develop Linux kernel fixes that are needed
+  for Wendelin.core 2.0 (`kernel commit 1`__, 2__, 3__, 4__, 5__, 6__, 7__).
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/fe541453f8
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/ccca055cfe
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/6ab952207e
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/a568d6d999
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/208aca62ae
+  __ https://lab.nexedi.com/nexedi/wendelin.core/commit/89fb89929a
+
+  __ https://git.kernel.org/linus/ad2ba64dd489
+  __ https://git.kernel.org/linus/10dce8af3422
+  __ https://git.kernel.org/linus/bbd84f33652f
+  __ https://git.kernel.org/linus/c5bf68fe0c86
+  __ https://git.kernel.org/linus/438ab720c675
+  __ https://git.kernel.org/linus/7640682e67b3
+  __ https://git.kernel.org/linus/d4b13963f217
+
+- Various bugfixes.
+
 0.12 (2018-04-16)
 -----------------
 
