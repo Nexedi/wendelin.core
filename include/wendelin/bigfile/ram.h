@@ -94,6 +94,7 @@ RAMH *ramh_open(RAM *ram);
 
 /* ram_close releases resources associated with RAM.
  *
+ * All RAM handles opened on this RAM must be closed.
  * NOTE struct RAM itself is not released - it has to be explicitly freed by user.
  */
 void ram_close(RAM *ram);

@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Interfaces to work with RAM
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -87,8 +87,10 @@ RAMH *ramh_open(RAM *ram)
 
 void ram_close(RAM *ram)
 {
-    WARN("TODO ram_close()");   // XXX
-    //return ram->ram_ops->close(ram);
+    // TODO assert that
+    // - there are no ramh open left
+    // - there are no pages on ram->lru_list
+    return ram->ram_ops->close(ram);
 }
 
 

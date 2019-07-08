@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | shmfs (aka tmpfs) ram backend
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -243,11 +243,12 @@ out:
     return NULL;
 }
 
+static void shmfs_ram_close(RAM *ram0);
 
 static const struct ram_ops shmfs_ram_ops = {
     .get_current_maxsize    = shmfs_get_current_maxsize,
     .ramh_open              = shmfs_ramh_open,
-    //.close    = shmfs_ram_dtor
+    .close                  = shmfs_ram_close,
 };
 
 
@@ -266,8 +267,11 @@ static RAM *shmfs_ram_new(const char *arg)
     return ram;
 };
 
-
-// TODO shmfs_ram_dtor
+static void shmfs_ram_close(RAM *ram0)
+{
+    SHMFS_RAM *ram = upcast(SHMFS_RAM *, ram0);
+    free((void*)ram->prefix); ram->prefix = NULL;
+}
 
 
 static const struct ram_type shmfs_ram_type = {
