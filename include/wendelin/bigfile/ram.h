@@ -145,7 +145,10 @@ struct ramh_ops {
  *
  * XXX write on how to free pages (= drop & free(struct Page) ?)
  *
- * NOTE after allocation, page->fileh & page->f_pgoffset are unset
+ * NOTE after allocation:
+ *
+ * - page->fileh & page->f_pgoffset are unset;
+ * - page is not added to ram->lru_list and fileh->dirty_pages lists.
  */
 Page *ramh_alloc_page(RAMH *ramh, pgoff_t pgoffset_hint);
 
