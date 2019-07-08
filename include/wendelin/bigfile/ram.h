@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_RAM_H_
 
 /* Wendelin.bigfile | Interfaces to work with RAM
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -92,9 +92,9 @@ size_t ram_get_current_maxsize(RAM *ram);
 RAMH *ramh_open(RAM *ram);
 
 
-/* close RAM
+/* ram_close releases resources associated with RAM.
  *
- * TODO text
+ * NOTE struct RAM itself is not released - it has to be explicitly freed by user.
  */
 void ram_close(RAM *ram);
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2015  Nexedi SA and Contributors.
+/* Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -95,8 +95,6 @@ void ram_limited_close(RAM *ram0)
 
     // XXX close if owning?
     // ram_close(ram->backend);
-
-    // TODO free(self) ?
 }
 
 

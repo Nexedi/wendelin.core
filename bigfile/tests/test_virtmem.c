@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | virtual memory tests
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -907,8 +907,8 @@ void test_file_access_synthetic(void)
 
 
     /* free resources & restore SIGSEGV handler */
-    ram_close(ram);
-    ram_close(ram0);
+    ram_close(ram);  free(ram);
+    ram_close(ram0); free(ram0);
 
     ok1(!sigaction(SIGSEGV, &saveact, NULL));
 
@@ -1034,6 +1034,7 @@ void test_file_access_pagefault()
     fileh_close(fh);
     // ok1(list_empty(&ram->lru_list));
     ram_close(ram);
+    free(ram);
 }
 
 
@@ -1104,6 +1105,7 @@ void test_pagefault_savestate()
     vma_unmap(vma);
     fileh_close(fh);
     ram_close(ram);
+    free(ram);
 
 #undef  CHECK_PAGE
 #undef  CHECK_NOPAGE

@@ -148,6 +148,7 @@ int main()
 
     ramh_close(ramh);
     ram_close(ram);
+    free(ram);
 
     return 0;
 }
