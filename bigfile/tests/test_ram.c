@@ -116,6 +116,10 @@ int main()
     xmunmap(p01, ps);
     xmunmap(p02, ps);
     xmunmap(p03, ps);
+    free(page0);
+    // page1: was not yet allocated
+    free(page2);
+    // page3: was not yet allocated
 
 
     /* ensure we get "no memory" when overallocating (not doing so would lead
@@ -145,6 +149,13 @@ int main()
     // TODO allocate memory amount = 2*ram_maxsize and touch it linearly
 
 
+    xmunmap(p0, ps);
+    xmunmap(p1, ps);
+    xmunmap(p2, ps);
+    free(page0);
+    free(page1);
+    free(page2);
+    ok1(!page3);
 
     ramh_close(ramh);
     ram_close(ram);
