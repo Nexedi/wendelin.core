@@ -1035,6 +1035,9 @@ void test_file_access_pagefault()
     // ok1(list_empty(&ram->lru_list));
     ram_close(ram);
     free(ram);
+
+#undef  CHECK_PAGE
+#undef  CHECK_NOPAGE
 }
 
 
@@ -1106,9 +1109,6 @@ void test_pagefault_savestate()
     fileh_close(fh);
     ram_close(ram);
     free(ram);
-
-#undef  CHECK_PAGE
-#undef  CHECK_NOPAGE
 }
 
 
