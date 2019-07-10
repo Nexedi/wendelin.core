@@ -193,7 +193,7 @@ const char *__asan_default_options()
     return "allow_user_segv_handler=1";
 }
 
-/* tell TSAN we are OK with calling async-sig-unsafe fucnctions from sync SIGSEGV */
+/* tell TSAN we are OK with calling async-sig-unsafe functions from sync SIGSEGV */
 const char *__tsan_default_options()
 {
     return "report_signal_unsafe=0";
@@ -217,7 +217,7 @@ int M(VMA *vma, pgoff_t idx) {  return bitmap_test_bit(vma->page_ismappedv, idx)
     ok1((page)->refcnt == (pgrefcnt));                              \
 } while (0)
 
-/* check that fileh->pagemap[pgfosset] is empty */
+/* check that fileh->pagemap[pgoffset] is empty */
 #define __CHECK_NOPAGE(fileh, pgoffset) do {            \
     ok1(!pagemap_get(&(fileh)->pagemap, (pgoffset)));   \
 } while (0)
@@ -1063,7 +1063,7 @@ void test_pagefault_savestate()
     {
         /* we are bad file - just say everything is ok... */
 
-        /* and before that corrup thread state - to verify that pagefault handler
+        /* and before that corrupt thread state - to verify that pagefault handler
          * will restore it. */
         errno = 98;
         /* Also tell we were here via, so that the test can be sure we actually

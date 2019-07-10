@@ -1,5 +1,5 @@
-# Wendeling.core.bigfile | Tests for BigFile_File
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Wendelin.core.bigfile | Tests for BigFile_File
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute

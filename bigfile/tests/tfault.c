@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | tests for real faults leading to crash
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -144,7 +144,7 @@ void fault_in_storeblk()
     {   return 0;   }
 
     /* storeblk "incorrectly" accesses other protected memory which should be
-     * catched and SIGSEGV */
+     * caught and SIGSEGV */
     int faulty_storeblk(BigFile *file, blk_t blk, const void *buf)
     {
         /* read page[1] - should crash here */

@@ -1,5 +1,5 @@
-# Wendeling.core.bigfile | Basic tests
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Wendelin.core.bigfile | Basic tests
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -370,7 +370,7 @@ class GCBigFile(DelBigFile):
         self.obj_4del = None
         assert w() is not None
 
-        # del a=b cycle - it should stay alice, while gc is disabled
+        # del a=b cycle - it should stay alive, while gc is disabled
         gc_save = gc.isenabled()
         gc.disable()
 

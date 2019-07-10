@@ -1,5 +1,5 @@
-# Wendeling.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Wendelin.core.bigfile | Tests for ZODB BigFile backend
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -396,7 +396,7 @@ def test_bigfile_filezodb_vs_conn_migration():
 
         wait('T2-zfile2-modified')
 
-        # XXX do we want to also modify some other objesct?
+        # XXX do we want to also modify some other objects?
         # (but this have side effect for joining conn11_2 to txn)
         transaction.commit()    # should be nothing
         tell('T1-txn12-committed')
@@ -450,7 +450,7 @@ def test_bigfile_filezodb_vs_conn_migration():
 
     # now verify that zfile2 stays at 11 state, i.e. T21 was really aborted
     conn02 = db.open()
-    # NOTE top of connection stack is conn21(=conn01), becase conn11_2 has 0
+    # NOTE top of connection stack is conn21(=conn01), because conn11_2 has 0
     # active objects
     assert conn02 is conn01
     root02 = conn02.root()
@@ -533,8 +533,8 @@ def test_bigfile_filezodb_vs_conn_migration():
 
     # now verify that zfile2 changed to 22 state, i.e. T22 was really committed
     conn03 = db.open()
-    # NOTE top of connection stack is conn22(=conn01), becase it has most # of
-    # active objectd
+    # NOTE top of connection stack is conn22(=conn01), because it has most # of
+    # active objects
     assert conn03 is conn01
     root03 = conn03.root()
 
