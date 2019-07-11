@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -57,7 +57,7 @@ static int      __ram_reclaim(RAM *ram);
 /* global lock which protects manipulating virtmem data structures
  *
  * NOTE not scalable, but this is temporary solution - as we are going to move
- * memory managment back into the kernel, where it is done properly. */
+ * memory management back into the kernel, where it is done properly. */
 static pthread_mutex_t virtmem_lock = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 static const VirtGilHooks *virtmem_gilhooks;
 
@@ -711,7 +711,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 
     /* (5b) page is currently being loaded by another thread - wait for load to complete
      *
-     * NOTE a page is protected from being concurently loaded by two threads at
+     * NOTE a page is protected from being concurrently loaded by two threads at
      * the same time via:
      *
      *   - virtmem lock - we get/put pages from fileh->pagemap only under it
@@ -726,7 +726,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         void *gilstate;
         virt_unlock();
         gilstate = virt_gil_ensure_unlocked();
-        usleep(10000);  // XXX with 1000 uslepp still busywaits
+        usleep(10000);  // XXX with 1000 usleep still busywaits
         virt_gil_retake_if_waslocked(gilstate);
         virt_lock();
         return VM_RETRY;
@@ -861,7 +861,7 @@ void page_decref(Page *page)
 void *page_mmap(Page *page, void *addr, int prot)
 {
     RAMH *ramh = page->ramh;
-    // XXX better call ramh_mmap_page() without tinkering wih ramh_ops?
+    // XXX better call ramh_mmap_page() without tinkering with ramh_ops?
     return ramh->ramh_ops->mmap_page(ramh, page->ramh_pgoffset, addr, prot);
 }
 

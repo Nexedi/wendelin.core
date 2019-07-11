@@ -50,7 +50,7 @@ static PyObject *pybuf_str;
 
 /* whether to pass old buffer instead of memoryview to .loadblk() / .storeblk()
  *
- * on python2 < 2.7.10 memoreview object is not accepted in a lot of
+ * on python2 < 2.7.10 memoryview object is not accepted in a lot of
  * places, see e.g. http://bugs.python.org/issue22113 for struct.pack_into()
  *
  * also on python 2.7.10, even latest numpy does not accept memoryview as
@@ -171,7 +171,7 @@ void XPyObject_PrintReferrers(PyObject *obj, FILE *fp);
 static int XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top);
 
 /* buffer utilities: unpin buffer from its memory - make it zero-length
- * pointing to NULL but staying a vailid python object */
+ * pointing to NULL but staying a valid python object */
 #if PY_MAJOR_VERSION < 3
 void XPyBufferObject_Unpin(PyBufferObject *bufo);
 #endif
@@ -348,7 +348,7 @@ static /*const*/ PyMethodDef pyvma_methods[] = {
     {NULL}
 };
 
-// XXX vvv better switch on various possibilities and find approptiate type
+// XXX vvv better switch on various possibilities and find appropriate type
 // (e.g. on X32 uintptr_t will be 4 while long will be 8)
 const int _ =
     BUILD_ASSERT_OR_ZERO(sizeof(uintptr_t) == sizeof(unsigned long));
@@ -458,7 +458,7 @@ PyFunc(pyfileh_isdirty, "isdirty() - are there any changes to fileh memory at al
     if (!PyArg_ParseTuple(args, ""))
         return NULL;
 
-    /* NOTE not strictly neccessary to virt_lock() for checking ->dirty_pages not empty */
+    /* NOTE not strictly necessary to virt_lock() for checking ->dirty_pages not empty */
     return PyBool_FromLong(!list_empty(&pyfileh->dirty_pages));
 }
 
@@ -570,14 +570,14 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
      * as the result - _we_ are the thread which holds the GIL and can call
      * python capi. */
     // XXX assert PyGILState_GetThisThreadState() != NULL
-    //      (i.e. pyton already knows this thread?)
+    //      (i.e. python already knows this thread?)
     gstate = PyGILState_Ensure();
 
-    /* TODO write why we setup completly new thread state which looks like
+    /* TODO write why we setup completely new thread state which looks like
      * switching threads for python but stays at the same OS thread
      *
      * a) do not change current thread state in any way;
-     * b) to completly clear ts after loadblk (ex. for pybuf->refcnf to go to exactly 1)
+     * b) to completely clear ts after loadblk (ex. for pybuf->refcnf to go to exactly 1)
      */
 
     /* in python thread state - save what we'll possibly override
@@ -690,13 +690,13 @@ out:
              * come here with gc.collecting=1
              *
              * NOTE also: while collecting garbage even more garbage can be
-             * created due to arbitrary code run from undel __del__ of released
+             * created due to arbitrary code run from under __del__ of released
              * objects and weakref callbacks. This way after here GC collect
              * even a single allocation could trigger GC, and thus arbitrary
              * python code run, again */
             PyGC_Collect();
 
-            /* garbage collection could result in running arbitraty code
+            /* garbage collection could result in running arbitrary code
              * because of finalizers. Print problems (if any) and make sure
              * once again exception state is clear */
             if (PyErr_Occurred())

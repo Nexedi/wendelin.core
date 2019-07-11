@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Low-level pagefault handler
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -89,7 +89,7 @@ static void on_pagefault(int sig, siginfo_t *si, void *_uc)
      * block is allocated dynamically at runtime, we can overlap with such
      * allocation only if SIGSEGV happens in that original TLS allocation,
      * which should not happen, and thus it is already a bug somewhere in
-     * thread datatructures. */
+     * thread data structures. */
     static __thread int in_on_pagefault;
     BUG_ON(in_on_pagefault);
     ++in_on_pagefault;

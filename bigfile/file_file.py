@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigfile | BigFile file backend
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -25,7 +25,7 @@ from io import FileIO, SEEK_SET
 
 # XXX naming
 class BigFile_File(BigFile):
-    # .f        - io.FileIo to file
+    # .f        - io.FileIO to file
 
     def __new__(cls, path_or_fd, blksize):
         # XXX pass flags/mode as args to ctor ?
@@ -41,7 +41,7 @@ class BigFile_File(BigFile):
         f.seek(blk * blksize, SEEK_SET)
 
         # XXX unfortunately buffer(buf, pos) creates readonly buffer, so we
-        # have to use memoryviews
+        # have to use memoryview
         # XXX not needed after BIGFILE_USE_OLD_BUFFER support is dropped
         bufmem = memoryview(buf)
 
