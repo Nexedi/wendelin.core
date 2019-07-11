@@ -2,7 +2,7 @@
 #define _WENDELIN_BUG_H_
 
 /* Wendelin. Utilities for handling assertions and bugs
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -46,7 +46,7 @@
     __bug_errno(__FILE__, __LINE__, __func__);      \
 } while (0)
 
-/* like assert(expr) but works indepenently of NDEBUG */
+/* like assert(expr) but works independently of NDEBUG */
 // TODO unlikely
 #define ASSERT(expr)    do {                                \
     if (!(expr))                                            \

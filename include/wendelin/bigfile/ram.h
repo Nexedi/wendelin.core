@@ -30,7 +30,7 @@
  * - need to "unload" non-dirty pages to free place for requested new data (reclaim)
  *
  * - need to be able to map a page into several places (to support
- *   overlapping-in-file mappings done not neccessarily adjacent-in-time to
+ *   overlapping-in-file mappings done not necessarily adjacent-in-time to
  *   each other - there is no guarantee mapping them adjacent in address space
  *   is possible)
  *
