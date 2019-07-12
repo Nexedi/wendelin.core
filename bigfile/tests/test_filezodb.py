@@ -659,7 +659,8 @@ def test_bigfile_filezodb_vs_conflicts():
     tm1.commit()
 
     # txn2 should raise ConflictError and stay at 11 state
-    raises(ConflictError, 'tm2.commit()')
+    with raises(ConflictError):
+        tm2.commit()
     tm2.abort()
 
     assert Blk(vma2, 0)[0] == 11    # re-read in conn2

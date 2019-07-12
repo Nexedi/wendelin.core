@@ -1,5 +1,5 @@
 # Wendeling.core.bigarray | Tests for ZBigArray
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -512,7 +512,8 @@ def test_zbigarray_vs_conflicts():
     tm1.commit()
 
     # txn2 should raise ConflictError and stay at 11 state
-    raises(ConflictError, 'tm2.commit()')
+    with raises(ConflictError):
+        tm2.commit()
     tm2.abort()
 
     assert a2[0:1] == [11]  # re-read in conn2  XXX -> [0] == 11 after BigArray can
@@ -570,7 +571,8 @@ def test_zbigarray_vs_conflicts_metadata():
     tm1.commit()
 
     # txn2 should raise ConflictError and stay at 11 state
-    raises(ConflictError, 'tm2.commit()')
+    with raises(ConflictError):
+        tm2.commit()
     tm2.abort()
 
     assert len(a2) == 11    # re-read in conn2

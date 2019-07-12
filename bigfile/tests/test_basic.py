@@ -76,7 +76,7 @@ def test_basic():
     f = XBigFile(b'abcd', PS)
 
     assert f.blksize == PS
-    raises(ROAttributeError, "f.blksize = 1") # RO attribute
+    with raises(ROAttributeError): f.blksize = 1 # RO attribute
     assert f.head == b'abcd'
 
     fh  = f.fileh_open()    # TODO + ram
@@ -452,5 +452,5 @@ def test_writeout_err_notfatal():
     # call writeout 2 times as previously upon error it was leaving internal
     # flag set that writeout was still in progress and second call to writeout
     # was leading to BUG and thus process crash.
-    raises(StoreError, "fh.dirty_writeout(WRITEOUT_STORE)")
-    raises(StoreError, "fh.dirty_writeout(WRITEOUT_STORE)")
+    with raises(StoreError): fh.dirty_writeout(WRITEOUT_STORE)
+    with raises(StoreError): fh.dirty_writeout(WRITEOUT_STORE)

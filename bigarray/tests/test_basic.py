@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendeling.core.bigarray | Basic tests
-# Copyright (C) 2014-2018  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -109,7 +109,8 @@ def test_bigarray_noobject(testbig):
     # it will become S0 or U0
     obj_dtypev = [numpy.object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
     for dtype_ in obj_dtypev:
-        raises(TypeError, "BigArray((1,), dtype_, Zh)")
+        with raises(TypeError):
+            BigArray((1,), dtype_, Zh)
 
 
 # basic ndarray-compatibility attributes of BigArray
@@ -118,7 +119,7 @@ def test_bigarray_basic(testbig):
 
     A = BigArray((10,3), int32, Zh)
 
-    raises(TypeError, "A.data")
+    with raises(TypeError): A.data
     assert A.strides    == (12, 4)
     assert A.dtype      == dtype(int32)
     # XXX .flags?
@@ -137,7 +138,7 @@ def test_bigarray_basic(testbig):
 
     B = BigArray((10,3), int32, Zh, order='F')
 
-    raises(TypeError, "B.data")
+    with raises(TypeError): B.data
     assert B.strides    == (4, 40)
     assert B.dtype      == dtype(int32)
     # XXX .flags?
@@ -191,15 +192,15 @@ def test_bigarray_indexing_1d(testbig):
     # (in numpy they create _copy_ picking up elements)
     A_[0:5] = range(0,10,2)
     assert array_equal(A_[[0,1,2,3,4]], [0,2,4,6,8])
-    raises (TypeError, 'A[[0,1,2,3,4]]')
+    with raises(TypeError): A[[0,1,2,3,4]]
 
     # index out of range
     # - element access  -> raises IndexError
     # - slice access    -> empty
     A_[-1] = 0
     assert AA[10*PS-1] == (0,0)
-    raises(IndexError, 'A_[10*PS]')
-    raises(IndexError, 'A [10*PS]')
+    with raises(IndexError): A_[10*PS]
+    with raises(IndexError): A [10*PS]
     a, _ = AA[10*PS:10*PS+1]
     assert isinstance(a, ndarray)
     assert array_equal(a, _)
@@ -329,7 +330,8 @@ def test_bigarray_indexing_1d(testbig):
     assert a[2*PS+5] == 5
     assert a[2*PS+6] == 5
 
-    assert raises(ValueError, 'A[:4] = range(5)')
+    with raises(ValueError):
+        A[:4] = range(5)
 
 
 # indexing where accessed element overlaps edge between pages
@@ -442,8 +444,8 @@ def test_bigarray_indexing_Nd(testbig):
 
             # out-of-range element access
             idx[idxpos] = shape[idxpos]         # 0, 0, 0,  Ni  , 0 ,0, 0
-            raises(IndexError, 'A [idxt()]')
-            raises(IndexError, 'A_[idxt()]')
+            with raises(IndexError): A [idxt()]
+            with raises(IndexError): A_[idxt()]
 
             # out-of-range slice access
             idx[idxpos] = slice(shape[idxpos],  # 0, 0, 0,  Ni:Ni+1  , 0 ,0, 0
@@ -516,7 +518,7 @@ def test_bigarray_resize(testbig):
     assert b[10-1,-1] == 10*3-1
 
     # we cannot access old mapping beyond it's end
-    assert raises(IndexError, 'a[10,:]')
+    with raises(IndexError): a[10,:]
 
     # we can change tail
     b[10,:] = arange(10*3, (10+1)*3)
@@ -563,15 +565,15 @@ def test_bigarray_append(testbig):
         assert array_equal(A[:], arange32(0,4))
 
         # append with incorrect shape - rejected, original stays the same
-        assert raises(ValueError, 'A.append(arange(3))')
+        with raises(ValueError): A.append(arange(3))
         assert array_equal(A[:], arange32(0,4))
-        assert raises(ValueError, 'A.append(arange(3*2).reshape(3,2))')
+        with raises(ValueError): A.append(arange(3*2).reshape(3,2))
         assert array_equal(A[:], arange32(0,4))
 
         # append with correct shape, but incompatible dtype - rejected, original stays the same
-        assert raises(ValueError,
-                {'C': 'A.append(asarray([[[0,1], [2,3], [4,"abc"]]], dtype=object))',
-                 'F': 'A.append(asarray([[[0],[1],[2]], [[3],[4],["abc"]]], dtype=object))'} [order] )
+        with raises(ValueError):
+            if order == 'C':    A.append(asarray([[[0,1], [2,3], [4,"abc"]]], dtype=object))
+            if order == 'F':    A.append(asarray([[[0],[1],[2]], [[3],[4],["abc"]]], dtype=object))
         assert array_equal(A[:], arange32(0,4))
 
 
@@ -612,8 +614,8 @@ def test_bigarray_to_ndarray(testbig):
     # converting it to ndarray is should be not possible
     for i in range(48,65):
         C = BigArray(((1<<i)-1,), uint8, Zh)
-        raises(MemoryError, 'asarray(C)')
-
+        with raises(MemoryError):
+            asarray(C)
 
 
 
@@ -688,7 +690,7 @@ def test_arrayref(testbig):
     assert isinstance(m_, memoryview)
     #assert m_ is m  XXX strangely it is another object, not exactly m
     # XXX however rdata.strides<0 and no rdata.base.base is enough for us here.
-    raises(AttributeError, 'm_.base')
+    with raises(AttributeError): m_.base
 
     a = rdata[100:140]
     ref = ArrayRef(a)
