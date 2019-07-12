@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# Copyright (C) 2014-2017  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -37,6 +37,7 @@ from __future__ import print_function
 from wendelin.bigarray.array_zodb import ZBigArray
 from wendelin.lib.zodb import dbopen, dbclose
 import transaction
+from golang import defer, func
 
 from numpy import float64, dtype, cumsum, sin
 import psutil
@@ -96,7 +97,7 @@ options:
 """ % sys.argv[0], file=sys.stderr)
     sys.exit(1)
 
-
+@func
 def main():
     worksize = None
     optv, argv = getopt.getopt(sys.argv[1:], '', ['worksize='])
@@ -120,6 +121,7 @@ def main():
     print('I: RAM:  %.2fGB' % (float(ram_nbytes) / GB))
 
     root = dbopen(dburi)
+    defer(lambda: dbclose(root))
 
     if act == 'gen':
         if worksize is None:
@@ -144,8 +146,6 @@ def main():
     p = psutil.Process(os.getpid())
     m = p.memory_info()
     print('VIRT: %i MB\tRSS: %iMB' % (m.vms//MB, m.rss//MB))
-
-    dbclose(root)
 
 
 if __name__ == '__main__':

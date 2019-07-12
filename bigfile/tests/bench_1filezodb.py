@@ -1,5 +1,5 @@
 # Wendelin.bigfile | benchmarks for zodb backend
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -24,6 +24,7 @@ from wendelin.lib.mem import memset
 from wendelin.lib.testing import getTestDB, Adler32, nulladler32_bysize, ffadler32_bysize
 from wendelin.lib.zodb import dbclose
 import transaction
+from pygolang import defer, func
 
 testdb = None
 from wendelin.bigfile.tests.bench_0virtmem import filesize, blksize # to get comparable timings
@@ -51,8 +52,10 @@ def teardown_module():
 # NOTE runs before _writeff
 def bench_bigz_readhole():  _bench_bigz_hash(Adler32,   nulladler32)
 
+@func
 def bench_bigz_writeff():
     root = testdb.dbopen()
+    defer(lambda: dbclose(root))
     f   = root['zfile']
     fh  = f.fileh_open()    # TODO + ram
     vma = fh.mmap(0, blen)  # XXX assumes blksize == pagesize
@@ -63,11 +66,12 @@ def bench_bigz_writeff():
     del vma # TODO vma.close()
     del fh  # TODO fh.close()
     del f   # XXX  f.close() ?
-    dbclose(root)
 
 
+@func
 def _bench_bigz_hash(hasher, expect):
     root = testdb.dbopen()
+    defer(lambda: dbclose(root))
     f   = root['zfile']
     fh  = f.fileh_open()    # TODO + ram
     vma = fh.mmap(0, blen)  # XXX assumes blksize == pagesize
@@ -78,7 +82,6 @@ def _bench_bigz_hash(hasher, expect):
     del vma # vma.close()
     del fh  # fh.close()
     del f   # f.close()
-    dbclose(root)
     assert h.digest() == expect
 
 

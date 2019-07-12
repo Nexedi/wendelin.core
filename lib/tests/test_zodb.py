@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB utilities
-# Copyright (C) 2014-2016  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,6 +22,7 @@ from wendelin.lib.testing import getTestDB
 from persistent import Persistent, UPTODATE, GHOST
 from BTrees.IOBTree import IOBTree
 import transaction
+from golang import defer, func
 import gc
 
 testdb = None
@@ -45,8 +46,11 @@ class XInt(Persistent):
 def objscachedv(jar):
     return [obj for oid, obj in jar._cache.lru_items()]
 
+@func
 def test_deactivate_btree():
     root = dbopen()
+    defer(lambda: dbclose(root))
+
     # init btree with many leaf nodes
     leafv = []
     root['btree'] = B = IOBTree()
@@ -81,5 +85,3 @@ def test_deactivate_btree():
         for obj in [B] + leafv:
             assert obj._p_state == GHOST
             assert obj not in cached
-
-    dbclose(root)

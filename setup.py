@@ -1,5 +1,5 @@
 # Wendelin.core | pythonic package setup
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -243,13 +243,15 @@ setup(
                    #   specify either to use e.g. ZODB3.10 or ZODB4 )
                    'ZODB3 >= 3.10',
 
+                   'pygolang >= 0.0.2', # defer, sync.WaitGroup, ...
+
                    'six',       # compat py2/py3
 
                    'psutil',    # demo_zbigarray
                   ],
 
     extras_require = {
-                   'test': ['pytest', 'pygolang >= 0.0.0.dev4'],
+                   'test': ['pytest'],
     },
 
     cmdclass    = {'build_ext':     build_ext,

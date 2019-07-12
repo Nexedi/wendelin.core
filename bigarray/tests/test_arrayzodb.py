@@ -27,6 +27,7 @@ import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError
 from numpy import dtype, uint8, all, array_equal, arange
+from golang import defer, func
 from threading import Thread
 from six.moves import _thread
 
@@ -240,12 +241,14 @@ def test_zbigarray_order():
 
 # the same as test_bigfile_filezodb_vs_conn_migration but explicitly for ZBigArray
 # ( NOTE this test is almost dup of test_zbigarray_vs_conn_migration() )
+@func
 def test_zbigarray_vs_conn_migration():
     root01 = testdb.dbopen()
     conn01 = root01._p_jar
     db     = conn01.db()
     conn01.close()
     del root01
+    defer(db.close)
 
     c12_1 = NotifyChannel()   # T11 -> T21
     c21_1 = NotifyChannel()   # T21 -> T11
@@ -342,12 +345,14 @@ def test_zbigarray_vs_conn_migration():
     c21_2 = NotifyChannel()   # T22 -> T12
 
     # open, abort
+    @func
     def T12():
         tell, wait = c12_2.tell, c21_2.wait
 
         wait('T2-conn22-opened')
 
         conn12 = db.open()
+        defer(conn12.close)
 
         tell('T1-conn12-opened')
         wait('T2-zarray2-modified')
@@ -357,10 +362,9 @@ def test_zbigarray_vs_conn_migration():
         tell('T1-txn-aborted')
         wait('T2-txn-committed')
 
-        conn12.close()
-
 
     # open, modify, commit
+    @func
     def T22():
         tell, wait = c21_2.tell, c12_2.wait
 
@@ -369,6 +373,7 @@ def test_zbigarray_vs_conn_migration():
         assert _thread.get_ident() != t11_ident
 
         conn22 = db.open()
+        defer(conn22.close)
         assert conn22 is conn01
         tell('T2-conn22-opened')
 
@@ -388,8 +393,6 @@ def test_zbigarray_vs_conn_migration():
 
         tell('T2-txn-committed')
 
-        conn22.close()
-
 
     t12, t22 = Thread(target=T12), Thread(target=T22)
     t12.start(); t22.start()
@@ -401,6 +404,7 @@ def test_zbigarray_vs_conn_migration():
 
     # now verify that zarray2 changed to 22 state, i.e. T22 was really committed
     conn03 = db.open()
+    defer(conn03.close)
     # NOTE top of connection stack is conn22(=conn01), becase it has most # of
     # active objectd
     assert conn03 is conn01
@@ -410,23 +414,25 @@ def test_zbigarray_vs_conn_migration():
     assert a03[0] == 22
 
     del a03
-    dbclose(root03)
 
 
 # underlying ZBigFile/ZBigFileH should properly handle 'invalidate' messages from DB
 # ( NOTE this test is almost dup of test_zbigarray_vs_cache_invalidation() )
+@func
 def test_zbigarray_vs_cache_invalidation():
     root = testdb.dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     tm1 = TransactionManager()
     tm2 = TransactionManager()
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zarray
     root1['zarray3'] = a1 = ZBigArray((10,), uint8)
@@ -440,6 +446,7 @@ def test_zbigarray_vs_cache_invalidation():
     # read zarray in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     a2 = root2['zarray3']
     assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
@@ -465,25 +472,26 @@ def test_zbigarray_vs_cache_invalidation():
     # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
     assert a2[0] == 2
 
-    conn2.close()
     del conn2, root2
-    dbclose(root1)
 
 
 # verify that conflicts on array content are handled properly
 # ( NOTE this test is almost dup of test_bigfile_filezodb_vs_conflicts() )
+@func
 def test_zbigarray_vs_conflicts():
     root = testdb.dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     tm1 = TransactionManager()
     tm2 = TransactionManager()
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zarray
     root1['zarray3a'] = a1 = ZBigArray((10,), uint8)
@@ -496,6 +504,7 @@ def test_zbigarray_vs_conflicts():
     # read zarray in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     a2 = root2['zarray3a']
     assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
@@ -525,24 +534,24 @@ def test_zbigarray_vs_conflicts():
 
     assert a1[0:1] == [13]  # re-read in conn1  XXX -> [0] == 13
 
-    conn2.close()
-    dbclose(root1)
-
 
 # verify that conflicts on array metadata are handled properly
 # ( NOTE this test is close to test_zbigarray_vs_conflicts() )
+@func
 def test_zbigarray_vs_conflicts_metadata():
     root = testdb.dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     tm1 = TransactionManager()
     tm2 = TransactionManager()
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zarray
     root1['zarray3b'] = a1 = ZBigArray((10,), uint8)
@@ -555,6 +564,7 @@ def test_zbigarray_vs_conflicts_metadata():
     # read zarray in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     a2 = root2['zarray3b']
     assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
@@ -584,17 +594,16 @@ def test_zbigarray_vs_conflicts_metadata():
 
     assert len(a1) == 13    # re-read in conn1
 
-    conn2.close()
-    dbclose(root1)
-
 
 # verify how ZBigArray behaves when plain properties are changed / invalidated
+@func
 def test_zbigarray_invalidate_shape():
     root = testdb.dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     print
     tm1 = TransactionManager()
@@ -602,6 +611,7 @@ def test_zbigarray_invalidate_shape():
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zarray
     root1['zarray4'] = a1 = ZBigArray((10,), uint8)
@@ -614,6 +624,7 @@ def test_zbigarray_invalidate_shape():
     # read zarray in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     a2 = root2['zarray4']
     assert a2[0:1] == [1]   # read data in conn2 + make sure read correctly
@@ -632,6 +643,4 @@ def test_zbigarray_invalidate_shape():
     assert a2[10:11] == [123]   # XXX -> [10] = 123  after BigArray can
 
 
-    conn2.close()
     del conn2, root2, a2
-    dbclose(root1)

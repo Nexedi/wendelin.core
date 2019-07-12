@@ -27,6 +27,7 @@ import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError
 from numpy import ndarray, array_equal, uint32, zeros, arange
+from golang import defer, func
 from threading import Thread
 from six.moves import _thread
 from six import b
@@ -74,6 +75,7 @@ def cacheInfo(db):
 def kkey(klass):
     return '%s.%s' % (klass.__module__, klass.__name__)
 
+@func
 def test_livepersistent():
     root = dbopen()
     transaction.commit()    # set root._p_jar
@@ -152,10 +154,12 @@ def test_livepersistent():
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(lambda: dbclose(root1))
     lp1 = root1['live']
 
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
     lp2 = root2['live']
 
     # 2 connections are setup running in parallel with initial obj state as ghost
@@ -202,9 +206,7 @@ def test_livepersistent():
     assert a == 1
 
 
-    conn2.close()
     del conn2, root2
-    dbclose(root1)
 
 
 
@@ -349,12 +351,14 @@ def test_bigfile_filezodb():
 # connection can migrate between threads handling requests.
 # verify _ZBigFileH properly adjusts.
 # ( NOTE this test is almost dupped at test_zbigarray_vs_conn_migration() )
+@func
 def test_bigfile_filezodb_vs_conn_migration():
     root01 = dbopen()
     conn01 = root01._p_jar
     db     = conn01.db()
     conn01.close()
     del root01
+    defer(db.close)
 
     c12_1 = NotifyChannel()   # T11 -> T21
     c21_1 = NotifyChannel()   # T21 -> T11
@@ -533,6 +537,7 @@ def test_bigfile_filezodb_vs_conn_migration():
 
     # now verify that zfile2 changed to 22 state, i.e. T22 was really committed
     conn03 = db.open()
+    defer(conn03.close)
     # NOTE top of connection stack is conn22(=conn01), because it has most # of
     # active objects
     assert conn03 is conn01
@@ -545,23 +550,25 @@ def test_bigfile_filezodb_vs_conn_migration():
     assert Blk(vma03, 0)[0] == 22
 
     del vma03, fh03, f03
-    dbclose(root03)
 
 
 # ZBlk should properly handle 'invalidate' messages from DB
 # ( NOTE this test is almost dupped at test_zbigarray_vs_cache_invalidation() )
+@func
 def test_bigfile_filezodb_vs_cache_invalidation():
     root = dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     tm1 = TransactionManager()
     tm2 = TransactionManager()
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zfile with fileh view to it
     root1['zfile3'] = f1 = ZBigFile(blksize)
@@ -579,6 +586,7 @@ def test_bigfile_filezodb_vs_cache_invalidation():
     # read zfile and setup fileh for it in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     f2 = root2['zfile3']
     fh2 = f2.fileh_open()
@@ -606,25 +614,26 @@ def test_bigfile_filezodb_vs_cache_invalidation():
     # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
     assert Blk(vma2, 0)[0] == 2
 
-    conn2.close()
     del conn2, root2
-    dbclose(root1)
 
 
 # verify that conflicts on ZBlk are handled properly
 # ( NOTE this test is almost dupped at test_zbigarray_vs_conflicts() )
+@func
 def test_bigfile_filezodb_vs_conflicts():
     root = dbopen()
     conn = root._p_jar
     db   = conn.db()
     conn.close()
     del root, conn
+    defer(db.close)
 
     tm1 = TransactionManager()
     tm2 = TransactionManager()
 
     conn1 = db.open(transaction_manager=tm1)
     root1 = conn1.root()
+    defer(conn1.close)
 
     # setup zfile with fileh view to it
     root1['zfile3a'] = f1 = ZBigFile(blksize)
@@ -641,6 +650,7 @@ def test_bigfile_filezodb_vs_conflicts():
     # read zfile and setup fileh for it in conn2
     conn2 = db.open(transaction_manager=tm2)
     root2 = conn2.root()
+    defer(conn2.close)
 
     f2 = root2['zfile3a']
     fh2 = f2.fileh_open()
@@ -672,16 +682,15 @@ def test_bigfile_filezodb_vs_conflicts():
 
     assert Blk(vma1, 0)[0] == 13    # re-read in conn1
 
-    conn2.close()
-    dbclose(root1)
-
 
 
 # verify that fileh are garbage-collected after user free them
+@func
 def test_bigfile_filezodb_fileh_gc():
     root1= dbopen()
     conn1= root1._p_jar
     db   = conn1.db()
+    defer(db.close)
     root1['zfile4'] = f1 = ZBigFile(blksize)
     transaction.commit()
 
@@ -696,6 +705,7 @@ def test_bigfile_filezodb_fileh_gc():
 
     conn2 = db.open()
     root2 = conn2.root()
+    defer(conn2.close)
     f2 = root2['zfile4']
 
     fh2  = f2.fileh_open()
@@ -705,12 +715,13 @@ def test_bigfile_filezodb_fileh_gc():
     assert wfh1() is None   # fh1 should be gone
 
     del vma2, fh2, f2
-    dbclose(root2)
 
 
 # verify how zblk format change works
+@func
 def test_bigfile_filezodb_fmt_change():
     root = dbopen()
+    defer(lambda: dbclose(root))
     root['zfile5'] = f = ZBigFile(blksize)
     transaction.commit()
 
@@ -743,8 +754,6 @@ def test_bigfile_filezodb_fmt_change():
     finally:
         file_zodb.ZBlk_fmt_write = fmt_write_save
 
-    dbclose(root)
-
 
 # test that ZData are reused for changed chunks in ZBlk1 format
 def test_bigfile_zblk1_zdata_reuse():
@@ -756,8 +765,10 @@ def test_bigfile_zblk1_zdata_reuse():
     finally:
         file_zodb.ZBlk_fmt_write = fmt_write_save
 
+@func
 def _test_bigfile_zblk1_zdata_reuse():
     root = dbopen()
+    defer(lambda: dbclose(root))
     root['zfile6'] = f = ZBigFile(blksize)
     transaction.commit()
 
@@ -791,5 +802,3 @@ def _test_bigfile_zblk1_zdata_reuse():
     assert len(zdata_v1) == len(zdata_v2)
     for i in range(len(zdata_v1)):
         assert zdata_v1[i] is zdata_v2[i]
-
-    dbclose(root)
