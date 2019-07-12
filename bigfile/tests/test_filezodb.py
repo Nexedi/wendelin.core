@@ -730,43 +730,40 @@ def test_bigfile_filezodb_fmt_change():
 
     # save/restore original ZBlk_fmt_write
     fmt_write_save = file_zodb.ZBlk_fmt_write
-
-    try:
-        # check all combinations of format pairs via working with blk #0 and
-        # checking internal f structure
-        for src_fmt, src_type in ZBlk_fmt_registry.items():
-            for dst_fmt, dst_type in ZBlk_fmt_registry.items():
-                if src_fmt == dst_fmt:
-                    continue    # skip checking e.g. ZBlk0 -> ZBlk0
-
-                file_zodb.ZBlk_fmt_write = src_fmt
-                struct.pack_into('p', vma, 0, b(src_fmt))
-                transaction.commit()
-
-                assert type(f.blktab[0]) is src_type
-
-                file_zodb.ZBlk_fmt_write = dst_fmt
-                struct.pack_into('p', vma, 0, b(dst_fmt))
-                transaction.commit()
-
-                assert type(f.blktab[0]) is dst_type
-
-    finally:
+    def _():
         file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
+
+    # check all combinations of format pairs via working with blk #0 and
+    # checking internal f structure
+    for src_fmt, src_type in ZBlk_fmt_registry.items():
+        for dst_fmt, dst_type in ZBlk_fmt_registry.items():
+            if src_fmt == dst_fmt:
+                continue    # skip checking e.g. ZBlk0 -> ZBlk0
+
+            file_zodb.ZBlk_fmt_write = src_fmt
+            struct.pack_into('p', vma, 0, b(src_fmt))
+            transaction.commit()
+
+            assert type(f.blktab[0]) is src_type
+
+            file_zodb.ZBlk_fmt_write = dst_fmt
+            struct.pack_into('p', vma, 0, b(dst_fmt))
+            transaction.commit()
+
+            assert type(f.blktab[0]) is dst_type
 
 
 # test that ZData are reused for changed chunks in ZBlk1 format
+@func
 def test_bigfile_zblk1_zdata_reuse():
     # set ZBlk_fmt_write to ZBlk1 for this test
     fmt_write_save = file_zodb.ZBlk_fmt_write
     file_zodb.ZBlk_fmt_write = 'ZBlk1'
-    try:
-        _test_bigfile_zblk1_zdata_reuse()
-    finally:
+    def _():
         file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
 
-@func
-def _test_bigfile_zblk1_zdata_reuse():
     root = dbopen()
     defer(lambda: dbclose(root))
     root['zfile6'] = f = ZBigFile(blksize)
