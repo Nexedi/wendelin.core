@@ -128,7 +128,7 @@ typedef struct PyBigFileH PyBigFileH;
  * BigFile that can be implemented in python
  *
  * Allows subclasses to implement .loadblk() (& friends) in python.
- * For users .fileh_open() is exposed to get to file handles.   XXX <- should be not in this class?
+ * For users .fileh_open() is exposed to get to file handles.
  */
 struct PyBigFile {
     PyObject;
@@ -1030,7 +1030,6 @@ static PyMemberDef pyfile_members[] = {
 };
 
 static /*const*/ PyMethodDef pyfile_methods[] = {
-    // XXX should be separate BigFileH ctor or fileh_open function?
     {"fileh_open",  pyfileh_open,   METH_VARARGS,   "fileh_open(ram=None) -> new file handle"},
     {NULL}
 };
