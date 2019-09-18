@@ -105,8 +105,8 @@ Additional materials
 - Slides__ (pdf__) from presentation about wendelin.core in PyData Paris 2015
 
 __  https://www.nexedi.com/wendelin-Core.Tutorial.2016
-__  http://www.wendelin.io/NXD-Wendelin.Core.Non.Secret/asEntireHTML
-__  http://www.wendelin.io/NXD-Wendelin.Core.Non.Secret?format=pdf
+__  https://wendelin.nexedi.com/NXD-Wendelin.Core.Non.Secret/asEntireHTML
+__  https://wendelin.nexedi.com/NXD-Wendelin.Core.Non.Secret?format=pdf
 
 
 .. _NumPy:          http://www.numpy.org/
