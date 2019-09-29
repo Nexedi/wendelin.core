@@ -12,3 +12,13 @@ build/
 
 perf.data*
 core
+
+# vim temps
+.*.sw?
+.sw?
+
+# backups
+*~
+\#*
+
+tags
