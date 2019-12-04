@@ -40,6 +40,10 @@
 #include <wendelin/list.h>
 #include <wendelin/bigfile/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 typedef struct RAMH RAMH;
 typedef struct Page Page;
@@ -194,5 +198,9 @@ struct ram_type {
 
 void ram_register_type(const struct ram_type *ram_type);
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

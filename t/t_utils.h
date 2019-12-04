@@ -2,7 +2,7 @@
 #define _WENDELIN_TESTING_UTILS_H_
 
 /* Wendelin.bigfile | various testing utilities
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -23,6 +23,11 @@
  */
 
 #include <wendelin/bigfile/ram.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 /* access to vma memory as byte[] and blk_t[] */
 #define b(vma, idx) ( ((volatile uint8_t *)vma->addr_start) [ idx ] )
@@ -45,5 +50,10 @@ RAMLimited *ram_limited_new(RAM *backend, size_t alloc_max);
 
 /* current time as float */
 double microtime();
+
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

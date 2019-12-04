@@ -26,6 +26,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* compile-time exact ilog2(x); x must be 2^k */
 #define BUILD_ILOG2_EXACT(x) (  \
@@ -84,5 +87,9 @@ void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 
 void xpthread_mutex_lock(pthread_mutex_t *);
 void xpthread_mutex_unlock(pthread_mutex_t *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

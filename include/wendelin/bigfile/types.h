@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_TYPES_H_
 
 /* Wendelin.bigfile | Basic types definition
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -24,7 +24,15 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef uint64_t pgoff_t;       /* page # in file */
 typedef uint64_t blk_t;         /* block # in file */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

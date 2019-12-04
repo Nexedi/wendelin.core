@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_VIRTMEM_H_
 
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -36,6 +36,10 @@
 #include <wendelin/bigfile/types.h>
 #include <wendelin/bigfile/pagemap.h>
 #include <ccan/bitmap/bitmap.h> // XXX can't forward-decl for bitmap
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct RAM RAM;
 typedef struct RAMH RAMH;
@@ -332,5 +336,8 @@ void virt_lock_hookgil(const VirtGilHooks *gilhooks);
 /* what happens on out-of-memory */
 void OOM(void);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif

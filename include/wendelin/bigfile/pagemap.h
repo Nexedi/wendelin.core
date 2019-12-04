@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_PAGEMAP_H_
 
 /* Wendelin.bigfile | Pgoffset -> page mapping
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2019  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -54,6 +54,10 @@
 #endif
 
 #include <wendelin/bigfile/types.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct Page Page;
 
@@ -246,6 +250,10 @@ void  pagemap_clear(PageMap *pmap);
                     /* - any C statement allowed - with or without {}       */  \
                     /* - also it can say break and break the whole pagemap  */  \
                     /*   iteration                                          */
+
+#ifdef __cplusplus
+}
+#endif
 
 
 #endif

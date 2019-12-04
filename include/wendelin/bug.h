@@ -22,6 +22,10 @@
  * See https://www.nexedi.com/licensing for rationale and options.
  */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 // XXX maybe not needed - just go with std assert()
 
@@ -70,5 +74,9 @@ void __bug_errno(const char *, unsigned, const char *)
 void __bug_fail(const char *, const char *, unsigned, const char *)
     __attribute__((noreturn));
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
