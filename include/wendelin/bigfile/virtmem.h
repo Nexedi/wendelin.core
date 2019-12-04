@@ -35,11 +35,12 @@
 #include <wendelin/list.h>
 #include <wendelin/bigfile/types.h>
 #include <wendelin/bigfile/pagemap.h>
-#include <ccan/bitmap/bitmap.h> // XXX can't forward-decl for bitmap
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct bitmap bitmap;
 
 typedef struct RAM RAM;
 typedef struct RAMH RAMH;

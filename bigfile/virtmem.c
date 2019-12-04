@@ -30,6 +30,7 @@
 #include <wendelin/bug.h>
 
 #include <ccan/minmax/minmax.h>
+#include <ccan/bitmap/bitmap.h>
 
 #include <sys/mman.h>
 #include <errno.h>
