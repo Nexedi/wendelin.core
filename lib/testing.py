@@ -1,5 +1,5 @@
 # Wendelin. Testing utilities
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -259,9 +259,11 @@ class TestDB_ZEO(TestDB_Base):
 
 
     def setup(self):
+        self.tmpd = mkdtemp('', 'testdb_zeo.')
+
         port  = self.zeo_forker.get_port()
         zconf = self.zeo_forker.ZEOConfig(('', port))
-        _ = self.zeo_forker.start_zeo_server(zeo_conf=zconf, port=port)
+        _ = self.zeo_forker.start_zeo_server(path='%s/1.fs' % self.tmpd, zeo_conf=zconf, port=port)
         if self.z5:
             self.addr, self.stop = _
         else:
@@ -273,6 +275,8 @@ class TestDB_ZEO(TestDB_Base):
         else:
             self.zeo_forker.shutdown_zeo_server(self.adminaddr)
             os.waitpid(self.pid, 0)
+
+        rmtree(self.tmpd)
 
     def getZODBStorage(self):
         from ZEO.ClientStorage import ClientStorage
