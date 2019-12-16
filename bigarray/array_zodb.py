@@ -29,7 +29,8 @@ inherits most of the properties and specifics from its parents.
 """
 
 from wendelin.bigarray import BigArray
-from wendelin.bigfile.file_zodb import ZBigFile, LivePersistent
+from wendelin.bigfile.file_zodb import ZBigFile
+from wendelin.lib.zodb import LivePersistent
 import inspect
 
 

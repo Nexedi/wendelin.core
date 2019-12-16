@@ -18,9 +18,10 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 from wendelin.bigarray.array_zodb import ZBigArray
-from wendelin.bigfile.tests.test_filezodb import kkey, cacheInfo, ram_reclaim_all
+from wendelin.bigfile.tests.test_filezodb import ram_reclaim_all
 from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import dbclose
+from wendelin.lib.tests.test_zodb import cacheInfo, kkey
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction

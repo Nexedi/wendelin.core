@@ -133,7 +133,7 @@ will be our future approach after we teach NEO about object deduplication.
 
 from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.lib.mem import bzero, memcpy
-from wendelin.lib.zodb import deactivate_btree
+from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
 from persistent import Persistent, PickleCache, GHOST
@@ -480,33 +480,6 @@ class _ZBigFile(BigFile):
     def loadblk(self, blk, buf):    return self.zself.loadblk(blk, buf)
     def storeblk(self, blk, buf):   return self.zself.storeblk(blk, buf)
 
-
-
-# Persistent that never goes to ghost state, if it was ever uptodate.
-#
-# NOTE
-#
-# On invalidation LivePersistent still goes to ghost state, because
-# invalidation cannot be ignored, i.e. they indicate the object has been
-# changed externally.
-#
-# Invalidation can happen only at transaction boundary, so during the course of
-# transaction LivePersistent is guaranteed to stay uptodate.
-#
-# XXX move to common place?
-class LivePersistent(Persistent):
-    # don't allow us to go to ghost
-    #
-    # NOTE we can't use STICKY as that state is assumed as
-    # short-lived-temporary by ZODB and is changed back to UPTODATE by
-    # persistent code. In fact ZODB says: STICKY is UPTODATE+keep in memory.
-    def _p_deactivate(self):
-        # just returning here won't allow Persistent._p_deactivate() run and
-        # thus we'll stay in non-ghost state.
-        return
-
-
-    # NOTE _p_invalidate() is triggered on invalidations. We do not override it.
 
 
 # ZBigFile implements BigFile backend with data stored in ZODB.
