@@ -36,6 +36,7 @@ import weakref
 import gc
 
 from pytest import raises
+import pytest; xfail = pytest.mark.xfail
 from six.moves import range as xrange
 
 
@@ -555,7 +556,7 @@ def test_bigfile_filezodb_vs_conn_migration():
 # ZBlk should properly handle 'invalidate' messages from DB
 # ( NOTE this test is almost dupped at test_zbigarray_vs_cache_invalidation() )
 @func
-def test_bigfile_filezodb_vs_cache_invalidation():
+def _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache):
     root = dbopen()
     conn = root._p_jar
     db   = conn.db()
@@ -609,12 +610,27 @@ def test_bigfile_filezodb_vs_cache_invalidation():
     ram_reclaim_all()
     assert Blk(vma2, 0)[0] == 1
 
+    # FIXME: this simulates ZODB Connection cache pressure and currently
+    # removes ZBlk corresponding to blk #0 from conn2 cache.
+    # In turn this leads to conn2 missing that block invalidation on follow-up
+    # transaction boundary.
+    #
+    # See FIXME notes on ZBlkBase._p_invalidate() for detailed description.
+    #conn2._cache.minimize()
+    _drop_cache(conn2)  # TODO change to just conn2._cache.minimize after issue is fixed
+
     tm2.commit()                # transaction boundary for t2
 
     # data from tm1 should propagate -> ZODB -> ram pages for _ZBigFileH in conn2
     assert Blk(vma2, 0)[0] == 2
 
     del conn2, root2
+
+def test_bigfile_filezodb_vs_cache_invalidation():
+    _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache=lambda conn: None)
+@xfail
+def test_bigfile_filezodb_vs_cache_invalidation_with_cache_pressure():
+    _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache=lambda conn: conn._cache.minimize())
 
 
 # verify that conflicts on ZBlk are handled properly

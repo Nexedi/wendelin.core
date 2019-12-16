@@ -196,6 +196,26 @@ class ZBlkBase(Persistent):
 
     # DB notifies this object has to be invalidated
     # (DB -> invalidate .blkdata -> invalidate memory-page)
+    #
+    # FIXME this assumes that ZBlk always stays associated with #blk, not moved
+    #       and never e.g. deleted from bigfile. However it is NOT correct: e.g
+    #       ZBigFile.storeblk() can change type of stored zblk - i.e. it rewrites
+    #       ZBigFile.blktab[blk] with another ZBlk created anew.
+    #
+    #       another example: a block may initially have no ZBlk attached (and
+    #       thus it reads as 0). However when data in that block is changed - a
+    #       new ZBlk is created, but information that block data has to be
+    #       invalidated is NOT correctly received by peers.
+    #
+    # FIXME this assumes that ghostified ZBlk will never be removed from live
+    #       objects cache (cPickleCache). However, since ZBlk is not doing
+    #       anything special, and it actually becomes a ghost all the time (e.g.
+    #       ZBlk0.loadblkdata() ghostifies itself not to waste memory), this
+    #       assumption is NOT correct. Thus, if a ghost ZBlk will be removed from
+    #       live cache, corresponding block will MISS to invalidate its data.
+    #       This practically can happen if LOBucket, that is part of
+    #       ZBigFile.blktab and that was holding reference to this ZBlk, gets
+    #       ghostified under live cache pressure.
     def _p_invalidate(self):
         # do real invalidation only once - else we already lost ._v_zfile last time
         if self._p_state is GHOST:
