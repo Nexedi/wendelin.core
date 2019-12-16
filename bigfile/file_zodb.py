@@ -552,7 +552,16 @@ class ZBigFile(LivePersistent):
 
         blkchanged = zblk.setblkdata(buf)
         if blkchanged:
-            zblk._p_changed = True      # if zblk was already in DB: _p_state -> CHANGED
+            # if zblk was already in DB: _p_state -> CHANGED.
+            # do this unconditionally even e.g. for ZBlk1 for which only ZData inside changed:
+            #
+            # We cannot avoid committing ZBlk in all cases, because it is used to signal
+            # other DB clients that a ZBlk needs to be invalidated and this way associated
+            # fileh pages are invalidated too.
+            #
+            # This cannot work via ZData, because ZData don't have back-pointer to
+            # ZBlk1 or to corresponding zfile.
+            zblk._p_changed = True
         zblk.bindzfile(self, blk)
 
 
