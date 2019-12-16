@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigarray | ZODB-Persistent BigArray
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -19,9 +19,13 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 
-"""BigArray that can be persisted ZODB-way
+"""Package array_zodb provides BigArray backed by ZODB.
 
-TODO text
+ZBigArray provides BigArray with data stored in ZODB.
+
+Please see documentation for BigArray (bigarray/__init__.py) and ZBigFile
+(bigfile/file_zodb.py) as ZBigArray is just a minimal glue for those two and
+inherits most of the properties and specifics from its parents.
 """
 
 from wendelin.bigarray import BigArray

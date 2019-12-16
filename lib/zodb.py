@@ -1,5 +1,5 @@
 # Wendelin.bigfile | common ZODB-related helpers
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -17,6 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
+"""Package wendelin.lib.zodb provides ZODB-related utilities."""
 
 from ZODB.FileStorage import FileStorage
 from ZODB import DB

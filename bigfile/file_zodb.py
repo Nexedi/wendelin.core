@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigfile | BigFile ZODB backend
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2019  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -18,7 +18,56 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-""" BigFile backed by ZODB objects
+"""Package file_zodb provides BigFile backed by ZODB.
+
+ZBigFile provides BigFile backend with data stored in ZODB. Files data are
+stored in ZODB in blocks with each block stored as separate ZODB object(s).
+This way only regular ZODB objects - not blobs - are used, and whenever file
+data is changed, δ(ZODB) is proportional to δ(data).
+
+Being BigFile ZBigFile can be memory-mapped. Created mappings provide lazy
+on-read block loading and on-write dirtying. This way ZBigFile larger than RAM
+can be accessed transparently as if it was a regular data in program memory.
+Changes made to ZBigFile data will be either saved or discarded depending on
+current transaction completion - commit or abort. The amount of ZBigFile
+changes in one transaction is limited by available RAM.
+
+ZBigFile does not weaken ZODB ACID properties, in particular:
+
+  - (A) either none or all changes to file data will be committed;
+  - (I) file view in current transaction is isolated from simultaneous
+        changes to this file done by other database users.
+
+
+API for clients
+---------------
+
+API for clients is ZBigFile class and its .fileh_open() method:
+
+    .fileh_open()   -> opens new BigFileH-like object which can be mmaped
+
+The primary user of ZBigFile is ZBigArray (see bigarray/__init__.py and
+bigarray/array_zodb.py), but ZBigFile itself can be used directly too.
+
+
+Data format
+-----------
+
+Due to weakness of current ZODB storage servers, wendelin.core cannot provide
+at the same time both fast reads and small database size growth on small data
+changes. "Small" here means something like 1-10000 bytes per transaction as
+larger changes become comparable to 2M block size and are handled efficiently
+out of the box. Until the problem is fixed on ZODB server side, wendelin.core
+provides on-client workaround in the form of specialized block format, and
+users have to explicitly indicate via environment variable that their workload
+is "small changes" if they prefer to prioritize database size over access
+speed::
+
+  $WENDELIN_CORE_ZBLK_FMT
+      ZBlk0             fast reads      (default)
+      ZBlk1             small changes
+
+Description of block formats follow:
 
 To represent BigFile as ZODB objects, each file block is represented separately
 either as
@@ -49,34 +98,38 @@ On the other hand, if object management is moved to DB *server* side, it is
 possible to deduplicate them there and this way have low-overhead for both
 access-time and DB size with just client storing 1 object per file block. This
 will be our future approach after we teach NEO about object deduplication.
-
-~~~~
-
-As file pages are changed in RAM with changes being managed by virtmem
-subsystem, we need to propagate the changes to ZODB objects back at some time.
-
-Two approaches exist:
-
-    1) on every RAM page dirty, in a callback invoked by virtmem, mark
-       corresponding ZODB object as dirty, and at commit time, in
-       obj.__getstate__ retrieve memory content.
-
-    2) hook into commit process, and before committing, synchronize RAM page
-       state to ZODB objects state, propagating all dirtied pages to ZODB objects
-       and then do the commit process as usual.
-
-"1" is more natural to how ZODB works, but requires tight integration between
-virtmem subsystem and ZODB (to be able to receive callback on a page dirtying).
-
-"2" is less natural to how ZODB works, but requires less-tight integration
-between virtmem subsystem and ZODB, and virtmem->ZODB propagation happens only
-at commit time.
-
-Since, for performance reasons, virtmem subsystem is going away and BigFiles
-will be represented by real FUSE-based filesystem with virtual memory being
-done by kernel, where we cannot get callback on a page-dirtying, it is more
-natural to also use "2" here.
 """
+
+# ZBigFile organization
+#
+# TODO add top-level overview
+#
+#
+# As file pages are changed in RAM with changes being managed by virtmem
+# subsystem, we need to propagate the changes to ZODB objects back at some time.
+#
+# Two approaches exist:
+#
+#     1) on every RAM page dirty, in a callback invoked by virtmem, mark
+#        corresponding ZODB object as dirty, and at commit time, in
+#        obj.__getstate__ retrieve memory content.
+#
+#     2) hook into commit process, and before committing, synchronize RAM page
+#        state to ZODB objects state, propagating all dirtied pages to ZODB objects
+#        and then do the commit process as usual.
+#
+# "1" is more natural to how ZODB works, but requires tight integration between
+# virtmem subsystem and ZODB (to be able to receive callback on a page dirtying).
+#
+# "2" is less natural to how ZODB works, but requires less-tight integration
+# between virtmem subsystem and ZODB, and virtmem->ZODB propagation happens only
+# at commit time.
+#
+# Since, for performance reasons, virtmem subsystem is going away and BigFiles
+# will be represented by real FUSE-based filesystem with virtual memory being
+# done by kernel, where we cannot get callback on a page-dirtying, it is more
+# natural to also use "2" here.
+
 
 from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.lib.mem import bzero, memcpy
@@ -436,6 +489,8 @@ class LivePersistent(Persistent):
     # NOTE _p_invalidate() is triggered on invalidations. We do not override it.
 
 
+# ZBigFile implements BigFile backend with data stored in ZODB.
+#
 # NOTE Can't inherit from Persistent and BigFile at the same time - both are C
 # types and their layout conflict. Persistent must be here for object to be
 # tracked -> BigFile is moved to a data member (the same way and for the same
@@ -507,8 +562,8 @@ class ZBigFile(LivePersistent):
             fileh.invalidate_page(blk)  # XXX assumes blksize == pagesize
 
 
-
-    # bigfile-like
+    # fileh_open is bigfile-like method that creates new file-handle object
+    # that is given to user for mmap.
     def fileh_open(self):
         fileh = _ZBigFileH(self)
         self._v_filehset.add(fileh)
