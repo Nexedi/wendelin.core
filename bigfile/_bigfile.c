@@ -44,6 +44,7 @@
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
 #include <wendelin/compat_py2.h>
+#include <ccan/container_of/container_of.h>
 
 static PyObject *gcmodule;
 static PyObject *pybuf_str;
@@ -85,10 +86,10 @@ static PyObject *pybuf_str;
  *      .pyuser                 generic python-level attribute (see below).
  */
 struct PyVMA {
-    PyObject;
+    PyObject pyobj;
     PyObject *in_weakreflist;
 
-    VMA;
+    VMA vma;
 
     /* python-level user of this VMA.
      *
@@ -116,10 +117,10 @@ typedef struct PyVMA PyVMA;
  *      .isdirty()              for knowing are there any changes at all
  */
 struct PyBigFileH {
-    PyObject;
+    PyObject pyobj;
     PyObject *in_weakreflist;
 
-    BigFileH;
+    BigFileH fileh;
 };
 typedef struct PyBigFileH PyBigFileH;
 
@@ -131,11 +132,11 @@ typedef struct PyBigFileH PyBigFileH;
  * For users .fileh_open() is exposed to get to file handles.
  */
 struct PyBigFile {
-    PyObject;
+    PyObject pyobj;
     /* NOTE no explicit weakref support is needed - this is a base class and python
      * automatically adds support for weakrefs for in-python defined children   */
 
-    BigFile;
+    BigFile file;
 };
 typedef struct PyBigFile PyBigFile;
 
@@ -191,25 +192,27 @@ static PyObject *FUNC
 static Py_ssize_t
 pyvma_getbuf(PyObject *pyvma0, Py_ssize_t segment, void **pptr)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
 
     if (segment) {
         PyErr_SetString(PyExc_SystemError, "access to non-zero vma segment");
         return -1;
     }
 
-    *pptr = (void *)pyvma->addr_start;
-    return pyvma->addr_stop - pyvma->addr_start;
+    *pptr = (void *)vma->addr_start;
+    return vma->addr_stop - vma->addr_start;
 }
 
 
 static Py_ssize_t
 pyvma_getsegcount(PyObject *pyvma0, Py_ssize_t *lenp)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
 
     if (lenp)
-        *lenp = pyvma->addr_stop - pyvma->addr_start;
+        *lenp = vma->addr_stop - vma->addr_start;
     return 1;
 }
 #endif
@@ -218,10 +221,11 @@ pyvma_getsegcount(PyObject *pyvma0, Py_ssize_t *lenp)
 static int
 pyvma_getbuffer(PyObject *pyvma0, Py_buffer *view, int flags)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
 
-    return PyBuffer_FillInfo(view, pyvma,
-            (void *)pyvma->addr_start, pyvma->addr_stop - pyvma->addr_start,
+    return PyBuffer_FillInfo(view, &pyvma->pyobj,
+            (void *)vma->addr_start, vma->addr_stop - vma->addr_start,
             /*readonly=*/0, flags);
 }
 
@@ -230,9 +234,10 @@ pyvma_getbuffer(PyObject *pyvma0, Py_buffer *view, int flags)
 static Py_ssize_t
 pyvma_len(PyObject *pyvma0)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
 
-    return pyvma->addr_stop - pyvma->addr_start;
+    return vma->addr_stop - vma->addr_start;
 }
 
 
@@ -240,7 +245,7 @@ pyvma_len(PyObject *pyvma0)
 static int
 pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
 
     Py_VISIT(pyvma->pyuser);
     return 0;
@@ -249,7 +254,7 @@ pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
 static int
 pyvma_clear(PyObject *pyvma0)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
 
     Py_CLEAR(pyvma->pyuser);
     return 0;
@@ -259,11 +264,12 @@ pyvma_clear(PyObject *pyvma0)
 PyFunc(pyvma_filerange, "filerange() -> (pgoffset, pglen) -- file range this vma covers")
     (PyObject *pyvma0, PyObject *args)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
     Py_ssize_t pgoffset, pglen;     // XXX Py_ssize_t vs pgoff_t
 
-    pgoffset = pyvma->f_pgoffset;
-    pglen    = (pyvma->addr_stop - pyvma->addr_start) / pyvma->fileh->ramh->ram->pagesize;
+    pgoffset = vma->f_pgoffset;
+    pglen    = (vma->addr_stop - vma->addr_start) / vma->fileh->ramh->ram->pagesize;
     /* NOTE ^^^ addr_stop and addr_start must be page-aligned */
 
     return Py_BuildValue("(nn)", pgoffset, pglen);
@@ -273,8 +279,9 @@ PyFunc(pyvma_filerange, "filerange() -> (pgoffset, pglen) -- file range this vma
 PyFunc(pyvma_pagesize, "pagesize() -> pagesize -- page size of RAM underlying this VMA")
     (PyObject *pyvma0, PyObject *args)
 {
-    PyVMA *pyvma = upcast(PyVMA *, pyvma0);
-    Py_ssize_t pagesize = pyvma->fileh->ramh->ram->pagesize;
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA   *vma   = &pyvma->vma;
+    Py_ssize_t pagesize = vma->fileh->ramh->ram->pagesize;
 
     return Py_BuildValue("n", pagesize);
 }
@@ -290,22 +297,23 @@ pyvma_dealloc(PyObject *pyvma0)
      * See https://bugs.python.org/issue31095 for details */
     PyObject_GC_UnTrack(pyvma0);
 
-    PyVMA       *pyvma = upcast(PyVMA *, pyvma0);
-    BigFileH    *fileh = pyvma->fileh;
+    PyVMA       *pyvma = container_of(pyvma0, PyVMA, pyobj);
+    VMA         *vma   = &pyvma->vma;
+    BigFileH    *fileh = vma->fileh;
 
     if (pyvma->in_weakreflist)
-        PyObject_ClearWeakRefs(pyvma);
+        PyObject_ClearWeakRefs(&pyvma->pyobj);
 
     /* pyvma->fileh indicates whether vma was yet created (via fileh_mmap()) or not */
     if (fileh) {
-        vma_unmap(pyvma);
+        vma_unmap(vma);
 
-        PyBigFileH *pyfileh = upcast(PyBigFileH *, fileh);
+        PyBigFileH *pyfileh = container_of(fileh, PyBigFileH, fileh);
         Py_DECREF(pyfileh);
     }
 
-    pyvma_clear(pyvma);
-    pyvma->ob_type->tp_free(pyvma);
+    pyvma_clear(&pyvma->pyobj);
+    pyvma->pyobj.ob_type->tp_free(&pyvma->pyobj);
 }
 
 
@@ -319,7 +327,7 @@ pyvma_new(PyTypeObject *type, PyObject *args, PyObject *kw)
         return NULL;
     self->in_weakreflist = NULL;
 
-    return self;
+    return &self->pyobj;
 }
 
 
@@ -355,10 +363,10 @@ const int _ =
 #define T_UINTPTR   T_ULONG
 
 static /*const*/ PyMemberDef pyvma_members[] = {
-    {"addr_start",  T_UINTPTR,      offsetof(PyVMA, addr_start),  READONLY, "vma's start addr"},
-    {"addr_stop",   T_UINTPTR,      offsetof(PyVMA, addr_stop),   READONLY, "vma's start addr"},
+    {"addr_start",  T_UINTPTR,      offsetof(PyVMA, vma.addr_start),    READONLY, "vma's start addr"},
+    {"addr_stop",   T_UINTPTR,      offsetof(PyVMA, vma.addr_stop),     READONLY, "vma's start addr"},
     // XXX pyuser: restrict to read-only access?
-    {"pyuser",      T_OBJECT_EX,    offsetof(PyVMA, pyuser),      0,        "user of this vma"},
+    {"pyuser",      T_OBJECT_EX,    offsetof(PyVMA, pyuser),            0,        "user of this vma"},
     {NULL}
 };
 
@@ -389,7 +397,7 @@ static PyTypeObject PyVMA_Type = {
 PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
     (PyObject *pyfileh0, PyObject *args)
 {
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
     Py_ssize_t  pgoffset, pglen;    // XXX Py_ssize_t vs pgoff_t ?
     PyVMA       *pyvma;
     int         err;
@@ -402,7 +410,7 @@ PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
         return NULL;
 
     Py_INCREF(pyfileh);
-    err = fileh_mmap(pyvma, pyfileh, pgoffset, pglen);
+    err = fileh_mmap(&pyvma->vma, &pyfileh->fileh, pgoffset, pglen);
     if (err) {
         Py_DECREF(pyfileh);
         Py_DECREF(pyvma);
@@ -410,7 +418,7 @@ PyFunc(pyfileh_mmap, "mmap(pgoffset, pglen) - map fileh part into memory")
         return NULL;
     }
 
-    return pyvma;
+    return &pyvma->pyobj;
 }
 
 
@@ -418,14 +426,15 @@ PyFunc(pyfileh_dirty_writeout,
         "dirty_writeout(flags) - write changes made to fileh memory back to file")
     (PyObject *pyfileh0, PyObject *args)
 {
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
     long flags;
     int err;
 
     if (!PyArg_ParseTuple(args, "l", &flags))
         return NULL;
 
-    err = fileh_dirty_writeout(pyfileh, flags);
+    err = fileh_dirty_writeout(fileh, flags);
     if (err) {
         if (!PyErr_Occurred())
             // XXX not very informative
@@ -440,12 +449,13 @@ PyFunc(pyfileh_dirty_writeout,
 PyFunc(pyfileh_dirty_discard, "dirty_discard() - discard changes made to fileh memory")
     (PyObject *pyfileh0, PyObject *args)
 {
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
 
     if (!PyArg_ParseTuple(args, ""))
         return NULL;
 
-    fileh_dirty_discard(pyfileh);
+    fileh_dirty_discard(fileh);
     Py_RETURN_NONE;
 }
 
@@ -453,26 +463,28 @@ PyFunc(pyfileh_dirty_discard, "dirty_discard() - discard changes made to fileh m
 PyFunc(pyfileh_isdirty, "isdirty() - are there any changes to fileh memory at all?")
     (PyObject *pyfileh0, PyObject *args)
 {
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
 
     if (!PyArg_ParseTuple(args, ""))
         return NULL;
 
     /* NOTE not strictly necessary to virt_lock() for checking ->dirty_pages not empty */
-    return PyBool_FromLong(!list_empty(&pyfileh->dirty_pages));
+    return PyBool_FromLong(!list_empty(&fileh->dirty_pages));
 }
 
 
 PyFunc(pyfileh_invalidate_page, "invalidate_page(pgoffset) - invalidate fileh page")
     (PyObject *pyfileh0, PyObject *args)
 {
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
     Py_ssize_t  pgoffset;   // XXX Py_ssize_t vs pgoff_t ?
 
     if (!PyArg_ParseTuple(args, "n", &pgoffset))
         return NULL;
 
-    fileh_invalidate_page(pyfileh, pgoffset);
+    fileh_invalidate_page(fileh, pgoffset);
 
     Py_RETURN_NONE;
 }
@@ -483,22 +495,23 @@ pyfileh_dealloc(PyObject *pyfileh0)
 {
     /* PyBigFileH does not support cyclic GC - no need to PyObject_GC_UnTrack it */
 
-    PyBigFileH  *pyfileh = upcast(PyBigFileH *, pyfileh0);
-    BigFile     *file = pyfileh->file;
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+    BigFile     *file    = fileh->file;
     PyBigFile   *pyfile;
 
     if (pyfileh->in_weakreflist)
-        PyObject_ClearWeakRefs(pyfileh);
+        PyObject_ClearWeakRefs(&pyfileh->pyobj);
 
     /* pyfileh->file indicates whether fileh was yet opened (via fileh_open()) or not */
     if (file) {
-        fileh_close(pyfileh);
+        fileh_close(fileh);
 
-        pyfile = upcast(PyBigFile  *, file);
+        pyfile = container_of(file, PyBigFile, file);
         Py_DECREF(pyfile);
     }
 
-    pyfileh->ob_type->tp_free(pyfileh);
+    pyfileh->pyobj.ob_type->tp_free(&pyfileh->pyobj);
 }
 
 
@@ -512,7 +525,7 @@ pyfileh_new(PyTypeObject *type, PyObject *args, PyObject *kw)
         return NULL;
     self->in_weakreflist = NULL;
 
-    return self;
+    return &self->pyobj;
 }
 
 
@@ -548,7 +561,7 @@ static /*const*/ PyTypeObject PyBigFileH_Type = {
 
 static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 {
-    PyBigFile *pyfile = upcast(PyBigFile *, file);
+    PyBigFile *pyfile = container_of(file, PyBigFile, file);
     PyObject  *pybuf = NULL;
     PyObject  *loadret = NULL;
 
@@ -641,7 +654,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     /* NOTE K = unsigned long long */
     BUILD_ASSERT(sizeof(blk) == sizeof(unsigned long long));
-    loadret = PyObject_CallMethod(pyfile, "loadblk", "KO", blk, pybuf);
+    loadret = PyObject_CallMethod(&pyfile->pyobj, "loadblk", "KO", blk, pybuf);
 
     /* python should return to original frame */
     BUG_ON(ts != PyThreadState_GET());
@@ -894,7 +907,7 @@ err:
 
 static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
 {
-    PyBigFile *pyfile = upcast(PyBigFile *, file);
+    PyBigFile *pyfile = container_of(file, PyBigFile, file);
     PyObject  *pybuf;
     PyObject  *storeret = NULL;
 
@@ -919,7 +932,7 @@ static int pybigfile_storeblk(BigFile *file, blk_t blk, const void *buf)
 
     /* NOTE K = unsigned long long */
     BUILD_ASSERT(sizeof(blk) == sizeof(unsigned long long));
-    storeret = PyObject_CallMethod(pyfile, "storeblk", "KO", blk, pybuf);
+    storeret = PyObject_CallMethod(&pyfile->pyobj, "storeblk", "KO", blk, pybuf);
 
     /* we need to know only whether storeret != NULL, decref it now */
     Py_XDECREF(storeret);
@@ -976,7 +989,7 @@ static const struct bigfile_ops pybigfile_ops = {
 static PyObject *
 pyfileh_open(PyObject *pyfile0, PyObject *args)
 {
-    PyBigFile   *pyfile = upcast(PyBigFile *, pyfile0);
+    PyBigFile   *pyfile = container_of(pyfile0, PyBigFile, pyobj);
     PyBigFileH  *pyfileh;
     /* NOTE no virtmem lock needed - default RAM does not change */
     RAM *ram = ram_get_default(NULL);   // TODO get ram from args
@@ -991,7 +1004,7 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
         return NULL;
 
     Py_INCREF(pyfile);
-    err = fileh_open(pyfileh, pyfile, ram);
+    err = fileh_open(&pyfileh->fileh, &pyfile->file, ram);
     if (err) {
         XPyErr_SetFromErrno();
         Py_DECREF(pyfile);
@@ -999,7 +1012,7 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
         return NULL;
     }
 
-    return pyfileh;
+    return &pyfileh->pyobj;
 }
 
 
@@ -1014,18 +1027,18 @@ pyfile_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 
     // FIXME "k" = unsigned long - we need size_t
     static char *kw_list[] = {"blksize", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "k", kw_list, &self->blksize)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "k", kw_list, &self->file.blksize)) {
         Py_DECREF(self);
         return NULL;
     }
 
-    self->file_ops = &pybigfile_ops;
-    return self;
+    self->file.file_ops = &pybigfile_ops;
+    return &self->pyobj;
 }
 
 
 static PyMemberDef pyfile_members[] = {
-    {"blksize", T_ULONG /* XXX vs typeof(blksize) = size_t ? */, offsetof(PyBigFile, blksize), READONLY, "block size"},
+    {"blksize", T_ULONG /* XXX vs typeof(blksize) = size_t ? */, offsetof(PyBigFile, file.blksize), READONLY, "block size"},
     {NULL}
 };
 
