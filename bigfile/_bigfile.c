@@ -17,15 +17,28 @@
  *
  * See COPYING file for full licensing terms.
  * See https://www.nexedi.com/licensing for rationale and options.
+ */
+
+/* Package _bigfile provides Python bindings to virtmem.
  *
- * ~~~~~~~~
+ * - `BigFile` is base class that allows implementing BigFile backends in Python.
+ *   Users can inherit from BigFile, implement loadblk/storeblk and this way
+ *   provide access to data managed from Python to virtmem subsystem.
+ * - `BigFileH` represents virtmem file handle for opened BigFile.
+ *   It can be mmap'ed and provides writeout control.
+ * - `VMA` represents mmap'ed part of a BigFileH.
+ *   It provides buffer/memoryview interface for data access.
+ */
+
+/* _bigfile organization
  *
- * TODO big picture module description
- * - what maps to what, briefly
+ * NOTE on refcounting - who holds who:
  *
- *   VMA with a buffer/memoryview interface
- *   BigFileH  with mmap (-> vma) and writeout control
- *   BigFile   base class (to allow implementing BigFile backends in python)
+ *  vma  ->  fileh  ->  file
+ *   ^         |
+ *   +---------+
+ *   fileh->mmaps (kind of weak)
+ *
  *
  * NOTE virtmem/bigfile functions release/reacquire GIL (see virt_lock()) -
  * thus functions that use them cannot assume they run mutually exclusive to
@@ -139,16 +152,6 @@ struct PyBigFile {
     BigFile file;
 };
 typedef struct PyBigFile PyBigFile;
-
-
-/* NOTE on refcounting: who holds who
- *
- *
- *  vma  ->  fileh  ->  file
- *   ^         |
- *   +---------+
- *   fileh->mmaps (kind of weak)
- */
 
 
 /* like PyObject_New, but fully initializes instance (e.g. calls type ->tp_new) */
