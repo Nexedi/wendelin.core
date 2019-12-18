@@ -41,6 +41,7 @@ _bigfile = Extension('wendelin.bigfile._bigfile',
                 'lib/utils.c',
             ],
             include_dirs = [
+                '.',
                 './include',
                 './3rdparty/ccan',
                 './3rdparty/include'

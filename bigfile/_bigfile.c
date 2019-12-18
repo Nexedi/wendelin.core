@@ -20,15 +20,7 @@
  */
 
 /* Package _bigfile provides Python bindings to virtmem.
- *
- * - `BigFile` is base class that allows implementing BigFile backends in Python.
- *   Users can inherit from BigFile, implement loadblk/storeblk and this way
- *   provide access to data managed from Python to virtmem subsystem.
- * - `BigFileH` represents virtmem file handle for opened BigFile.
- *   It can be mmap'ed and provides writeout control.
- * - `VMA` represents mmap'ed part of a BigFileH.
- *   It provides buffer/memoryview interface for data access.
- */
+ * See _bigfile.h for package overview. */
 
 /* _bigfile organization
  *
@@ -48,12 +40,10 @@
  * https://github.com/python/cpython/blob/v2.7.15-310-g112e4afd582/Include/object.h#L790-L798
  */
 
-#include <Python.h>
+#include "bigfile/_bigfile.h"
 #include "structmember.h"
 #include "frameobject.h"
 
-#include <wendelin/bigfile/file.h>
-#include <wendelin/bigfile/virtmem.h>
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
 #include <wendelin/compat_py2.h>
@@ -83,75 +73,6 @@ static PyObject *pybuf_str;
  * Starting from Python 3.7 the place to keep exception state was changed:
  * https://github.com/python/cpython/commit/ae3087c638  */
 #define BIGFILE_USE_PYTS_EXC_INFO   (PY_VERSION_HEX >= 0x030700A3)
-
-
-/*
- * python representation of VMA - exposes vma memory as python buffer
- *
- * also exposes:
- *
- *      .filerange()            to know which range in mmaped file this vma covers.
- *      .pagesize()             to know page size of underlying RAM.
- *
- * and:
- *
- *      .addr_start, .addr_stop to know offset of ndarray in VMA.
- *      .pyuser                 generic python-level attribute (see below).
- */
-struct PyVMA {
-    PyObject pyobj;
-    PyObject *in_weakreflist;
-
-    VMA vma;
-
-    /* python-level user of this VMA.
-     *
-     * for example for ArrayRef to work, BigArray needs to find out VMA ->
-     * top-level BigArray object for which this VMA was created.
-     *
-     * There is vma -> fileh -> file chain, but e.g. for a given ZBigFile there
-     * can be several ZBigArrays created on top of it to view its data (e.g. via
-     * BigArray.view()). So even if it can go from vma to -> zfile it does not
-     * help to find out the top-level ZBigArray object itself.
-     *
-     * This way we allow BigArray python code to set vma.pyuser attribute
-     * pointing to original BigArray object for which this VMA was created. */
-    PyObject *pyuser;
-};
-typedef struct PyVMA PyVMA;
-
-
-/*
- * python representation of BigFileH - exposes
- *
- *      .mmap()                 to create VMAs and
- *      .dirty_discard() and
- *      .dirty_writeout()       for storing changes back to file.
- *      .isdirty()              for knowing are there any changes at all
- */
-struct PyBigFileH {
-    PyObject pyobj;
-    PyObject *in_weakreflist;
-
-    BigFileH fileh;
-};
-typedef struct PyBigFileH PyBigFileH;
-
-
-/*
- * BigFile that can be implemented in python
- *
- * Allows subclasses to implement .loadblk() (& friends) in python.
- * For users .fileh_open() is exposed to get to file handles.
- */
-struct PyBigFile {
-    PyObject pyobj;
-    /* NOTE no explicit weakref support is needed - this is a base class and python
-     * automatically adds support for weakrefs for in-python defined children   */
-
-    BigFile file;
-};
-typedef struct PyBigFile PyBigFile;
 
 
 /* like PyObject_New, but fully initializes instance (e.g. calls type ->tp_new) */
