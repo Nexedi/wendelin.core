@@ -28,6 +28,18 @@ import os
 import sys
 
 
+# tell cython to resolve `cimport wendelin.*` modules hierarchy starting at top-level.
+# see wendelin.py for details.
+from Cython.Compiler.Main import Context as CyContext
+cy_search_inc_dirs = CyContext.search_include_directories
+def wendelin_cy_searh_in_dirs(self, qualified_name, suffix, pos, include=False, sys_path=False):
+    _ = qualified_name.split('.')
+    if len(_) >= 1 and _[0] == "wendelin":
+        qualified_name = '.'.join(_[1:])
+    return cy_search_inc_dirs(self, qualified_name, suffix, pos, include, sys_path)
+CyContext.search_include_directories = wendelin_cy_searh_in_dirs
+
+
 # _with_defaults calls what(*argv, **kw) with kw amended with default build flags.
 # e.g. _with_defaults(_DSO, *argv, **kw)
 def _with_defaults(what, *argv, **kw):
