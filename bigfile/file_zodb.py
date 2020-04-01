@@ -140,7 +140,6 @@ from persistent import Persistent, GHOST
 from BTrees.LOBTree import LOBTree
 from BTrees.IOBTree import IOBTree
 from zope.interface import implementer
-from ZODB.Connection import Connection
 from weakref import WeakSet
 import os
 
@@ -570,37 +569,6 @@ class ZBigFile(LivePersistent):
         fileh = _ZBigFileH(self)
         self._v_filehset.add(fileh)
         return fileh
-
-
-
-
-# patch for ZODB.Connection to support callback on .open()
-# NOTE on-open  callbacks are setup once and fire many times on every open
-#      on-close callbacks are setup once and fire only once on next close
-Connection._onOpenCallbacks = None
-def Connection_onOpenCallback(self, f):
-    if self._onOpenCallbacks is None:
-        # NOTE WeakSet does not work for bound methods - they are always created
-        # anew for each obj.method access, and thus will go away almost immediately
-        self._onOpenCallbacks = WeakSet()
-    self._onOpenCallbacks.add(f)
-
-assert not hasattr(Connection, 'onOpenCallback')
-Connection.onOpenCallback = Connection_onOpenCallback
-
-orig_Connection_open = Connection.open
-def Connection_open(self, transaction_manager=None, delegate=True):
-    orig_Connection_open(self, transaction_manager, delegate)
-
-    # FIXME method name hardcoded. Better not do it and allow f to be general
-    # callable, but that does not work with bound method - see above.
-    # ( Something like WeakMethod from py3 could help )
-    if self._onOpenCallbacks:
-        for f in self._onOpenCallbacks:
-            f.on_connection_open()
-
-Connection.open = Connection_open
-# ------------
 
 
 

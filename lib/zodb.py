@@ -1,5 +1,5 @@
 # Wendelin.bigfile | common ZODB-related helpers
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -19,9 +19,11 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 """Package wendelin.lib.zodb provides ZODB-related utilities."""
 
+import ZODB
 from ZODB.FileStorage import FileStorage
 from ZODB import DB
 from persistent import Persistent
+from weakref import WeakSet
 import gc
 
 
@@ -131,3 +133,31 @@ def _deactivate_bucket(bucket):
             obj._p_deactivate()
 
     bucket._p_deactivate()
+
+
+# patch for ZODB.Connection to support callback on .open()
+# NOTE on-open  callbacks are setup once and fire many times on every open
+#      on-close callbacks are setup once and fire only once on next close
+ZODB.Connection.Connection._onOpenCallbacks = None
+def Connection_onOpenCallback(self, f):
+    if self._onOpenCallbacks is None:
+        # NOTE WeakSet does not work for bound methods - they are always created
+        # anew for each obj.method access, and thus will go away almost immediately
+        self._onOpenCallbacks = WeakSet()
+    self._onOpenCallbacks.add(f)
+
+assert not hasattr(ZODB.Connection.Connection, 'onOpenCallback')
+ZODB.Connection.Connection.onOpenCallback = Connection_onOpenCallback
+
+_orig_Connection_open = ZODB.Connection.Connection.open
+def Connection_open(self, transaction_manager=None, delegate=True):
+    _orig_Connection_open(self, transaction_manager, delegate)
+
+    # FIXME method name hardcoded. Better not do it and allow f to be general
+    # callable, but that does not work with bound method - see above.
+    # ( Something like WeakMethod from py3 could help )
+    if self._onOpenCallbacks:
+        for f in self._onOpenCallbacks:
+            f.on_connection_open()
+
+ZODB.Connection.Connection.open = Connection_open
