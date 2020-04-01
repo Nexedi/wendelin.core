@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigfile | BigFile ZODB backend
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -136,7 +136,7 @@ from wendelin.lib.mem import bzero, memcpy
 from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
-from persistent import Persistent, PickleCache, GHOST
+from persistent import Persistent, GHOST
 from BTrees.LOBTree import LOBTree
 from BTrees.IOBTree import IOBTree
 from zope.interface import implementer

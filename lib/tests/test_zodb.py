@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB utilities
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -24,7 +24,6 @@ from BTrees.IOBTree import IOBTree
 import transaction
 from transaction import TransactionManager
 from golang import defer, func
-import gc
 
 testdb = None
 
