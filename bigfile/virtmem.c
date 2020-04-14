@@ -938,8 +938,8 @@ static void vma_mmap_page(VMA *vma, Page *page) {
 
     pgoff_invma = page->f_pgoffset - vma->f_pgoffset;
     if (!bitmap_test_bit(vma->page_ismappedv, pgoff_invma)) {
-        // XXX err
-        page_mmap(page, vma_page_addr(vma, page), prot);
+        void *mmapped = page_mmap(page, vma_page_addr(vma, page), prot);
+        BUG_ON(!mmapped);
         bitmap_set_bit(vma->page_ismappedv, pgoff_invma);
         page_incref(page);
     }
