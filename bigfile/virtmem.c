@@ -901,6 +901,7 @@ static void page_drop_memory(Page *page)
 static void page_del(Page *page) {
     BUG_ON(page->refcnt != 0);
     BUG_ON(page->state != PAGE_EMPTY);
+    BUG_ON(!list_empty(&page->in_dirty));
 
     list_del(&page->lru);
     bzero(page, sizeof(*page)); /* just in case */
