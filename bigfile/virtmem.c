@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2020  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -40,6 +40,7 @@
 
 static size_t   page_size(const Page *page);
 static void     page_drop_memory(Page *page);
+static void     page_del(Page *page);
 static void    *vma_page_addr(VMA *vma, Page *page);
 static pgoff_t  vma_addr_fpgoffset(VMA *vma, uintptr_t addr);
 static int      vma_page_ismapped(VMA *vma, Page *page);
@@ -185,9 +186,7 @@ void fileh_close(BigFileH *fileh)
          * currently being done in another thread */
         BUG_ON(page->state == PAGE_LOADING);
         page_drop_memory(page);
-        list_del(&page->lru);
-        bzero(page, sizeof(*page)); /* just in case */
-        free(page);
+        page_del(page);
     }
 
     BUG_ON(!list_empty(&fileh->dirty_pages));
@@ -696,9 +695,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
          * removed it from pagemap */
         if (page->state == PAGE_LOADING_INVALIDATED) {
             page_drop_memory(page);
-            list_del(&page->lru);
-            bzero(page, sizeof(*page)); /* just in case */
-            free(page);
+            page_del(page);
         }
 
         /* else just mark the page as loaded ok */
@@ -808,9 +805,7 @@ static int __ram_reclaim(RAM *ram)
 
             /* delete page & its entry in fileh->pagemap */
             pagemap_del(&page->fileh->pagemap, page->f_pgoffset);
-            list_del(&page->lru);
-            bzero(page, sizeof(*page)); /* just in case */
-            free(page);
+            page_del(page);
         }
 
     }
@@ -867,6 +862,9 @@ void *page_mmap(Page *page, void *addr, int prot)
 }
 
 
+/* page_drop_memory frees RAM associated with page and transitions page state into PAGE_EMPTY.
+ *
+ * The Page struct itself is not released - see page_del for that. */
 static void page_drop_memory(Page *page)
 {
     /* Memory for this page goes out. 1) unmap it from all mmaps */
@@ -893,6 +891,20 @@ static void page_drop_memory(Page *page)
     page->state = PAGE_EMPTY;
 
     // XXX touch lru?
+}
+
+/* page_del deletes Page struct (but not page memory - see page_drop_memory).
+ *
+ * The page must be in PAGE_EMPTY state.
+ * The page is removed from ram->lru.
+ */
+static void page_del(Page *page) {
+    BUG_ON(page->refcnt != 0);
+    BUG_ON(page->state != PAGE_EMPTY);
+
+    list_del(&page->lru);
+    bzero(page, sizeof(*page)); /* just in case */
+    free(page);
 }
 
 
