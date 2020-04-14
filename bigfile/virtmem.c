@@ -43,6 +43,7 @@ static void     page_drop_memory(Page *page);
 static void     page_del(Page *page);
 static void    *vma_page_addr(VMA *vma, Page *page);
 static pgoff_t  vma_addr_fpgoffset(VMA *vma, uintptr_t addr);
+static void     vma_mmap_page(VMA *vma, Page *page);
 static int      vma_page_ismapped(VMA *vma, Page *page);
 static void     vma_page_ensure_unmapped(VMA *vma, Page *page);
 static void     vma_page_ensure_notmappedrw(VMA *vma, Page *page);
@@ -732,22 +733,9 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 
     /* (6) page data ready. Mmap it atomically into vma address space, or mprotect
      * appropriately if it was already mmaped. */
-    int prot = PROT_READ;
     PageState newstate = PAGE_LOADED;
     if (write || page->state == PAGE_DIRTY) {
-        prot |= PROT_WRITE;
         newstate = PAGE_DIRTY;
-    }
-
-    if (!bitmap_test_bit(vma->page_ismappedv, page->f_pgoffset - vma->f_pgoffset)) {
-        // XXX err
-        page_mmap(page, vma_page_addr(vma, page), prot);
-        bitmap_set_bit(vma->page_ismappedv, page->f_pgoffset - vma->f_pgoffset);
-        page_incref(page);
-    }
-    else {
-        /* just changing protection bits should not fail, if parameters ok */
-        xmprotect(vma_page_addr(vma, page), page_size(page), prot);
     }
 
     // XXX also call page->markdirty() ?
@@ -758,6 +746,8 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         list_add_tail(&page->in_dirty, &fileh->dirty_pages);
     }
     page->state = max(page->state, newstate);
+
+    vma_mmap_page(vma, page);
 
     /* mark page as used recently */
     // XXX = list_move_tail()
@@ -930,6 +920,34 @@ static pgoff_t vma_addr_fpgoffset(VMA *vma, uintptr_t addr)
 }
 
 
+/* vma_mmap_page mmaps page into vma.
+ *
+ * the page must belong to covered file.
+ * mmap protection is PROT_READ if page is PAGE_LOADED or PROT_READ|PROT_WRITE
+ * if page is PAGE_DIRTY.
+ *
+ * must be called under virtmem lock.
+ */
+static void vma_mmap_page(VMA *vma, Page *page) {
+    pgoff_t pgoff_invma;
+    int prot = (page->state == PAGE_DIRTY ? PROT_READ|PROT_WRITE : PROT_READ);
+
+    ASSERT(page->state == PAGE_LOADED || page->state == PAGE_DIRTY);
+    ASSERT(vma->f_pgoffset <= page->f_pgoffset &&
+                              page->f_pgoffset < vma_addr_fpgoffset(vma, vma->addr_stop));
+
+    pgoff_invma = page->f_pgoffset - vma->f_pgoffset;
+    if (!bitmap_test_bit(vma->page_ismappedv, pgoff_invma)) {
+        // XXX err
+        page_mmap(page, vma_page_addr(vma, page), prot);
+        bitmap_set_bit(vma->page_ismappedv, pgoff_invma);
+        page_incref(page);
+    }
+    else {
+        /* just changing protection bits should not fail, if parameters ok */
+        xmprotect(vma_page_addr(vma, page), page_size(page), prot);
+    }
+}
 
 /* is `page` mapped to `vma` */
 static int vma_page_ismapped(VMA *vma, Page *page)
