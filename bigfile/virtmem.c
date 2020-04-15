@@ -219,9 +219,12 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     sigsegv_block(&save_sigset);
     virt_lock();
 
-    /* alloc vma->page_ismappedv[] */
+    /* start preparing vma */
     bzero(vma, sizeof(*vma));
+    vma->fileh       = fileh;
+    vma->f_pgoffset  = pgoffset;
 
+    /* alloc vma->page_ismappedv[] */
     vma->page_ismappedv = bitmap_alloc0(pglen);
     if (!vma->page_ismappedv)
         goto fail;
@@ -235,8 +238,6 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     vma->addr_start  = (uintptr_t)addr;
     vma->addr_stop   = vma->addr_start + len;
 
-    vma->fileh       = fileh;
-    vma->f_pgoffset  = pgoffset;
 
     // XXX need to init vma->virt_list first?
     /* hook vma to fileh->mmaps */
@@ -252,7 +253,7 @@ out:
 
 fail:
     free(vma->page_ismappedv);
-    vma->page_ismappedv = NULL;
+    bzero(vma, sizeof(*vma));
     err = -1;
     goto out;
 }
