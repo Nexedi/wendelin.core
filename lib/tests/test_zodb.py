@@ -17,13 +17,16 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zmajor
 from wendelin.lib.testing import getTestDB
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
+from ZODB import DB, POSException
 from BTrees.IOBTree import IOBTree
 import transaction
 from transaction import TransactionManager
 from golang import defer, func
+from pytest import raises
+import pytest; xfail = pytest.mark.xfail
 
 testdb = None
 
@@ -225,3 +228,89 @@ def test_deactivate_btree():
         for obj in [B] + leafv:
             assert obj._p_state == GHOST
             assert obj not in cached
+
+
+# verify that zconn_at gives correct answer.
+@xfail(zmajor < 5, reason="zconn_at is TODO for ZODB4 and ZODB3")
+@func
+def test_zconn_at():
+    stor = testdb.getZODBStorage()
+    defer(stor.close)
+    db  = DB(stor)
+
+    zsync(stor)
+    at0 = stor.lastTransaction()
+
+    # open connection, it must be viewing the database @at0
+    tm1 = TransactionManager()
+    conn1 = db.open(transaction_manager=tm1)
+    assert zconn_at(conn1) == at0
+
+    # open another simultaneous connection
+    tm2 = TransactionManager()
+    conn2 = db.open(transaction_manager=tm2)
+    assert zconn_at(conn2) == at0
+
+    # commit in conn1
+    root1 = conn1.root()
+    root1['z'] = 1
+    tm1.commit()
+    zsync(stor)
+    at1 = stor.lastTransaction()
+
+    # after commit conn1 view is updated; conn2 view stays @at0
+    assert zconn_at(conn1) == at1
+    assert zconn_at(conn2) == at0
+
+    # reopen conn1 -> view @at1
+    conn1.close()
+    with raises(POSException.ConnectionStateError):
+        zconn_at(conn1)
+    assert zconn_at(conn2) == at0
+    conn1_ = db.open(transaction_manager=tm1)
+    assert conn1_ is conn1   # returned from DB pool
+    assert zconn_at(conn1) == at1
+    assert zconn_at(conn2) == at0
+    conn1.close()
+
+    # commit empty transaction - view stays in sync with storage head
+    conn1_ = db.open(transaction_manager=tm1)
+    assert conn1_ is conn1   # from DB pool
+    assert zconn_at(conn1) == at1
+    assert zconn_at(conn2) == at0
+    tm1.commit()
+    zsync(stor)
+    at1_ = stor.lastTransaction()
+
+    assert zconn_at(conn1) == at1_
+    assert zconn_at(conn2) == at0
+
+
+    # reopen conn2 -> view upated to @at1_
+    conn2.close()
+    conn2_ = db.open(transaction_manager=tm1)
+    assert conn2_ is conn2  # from DB pool
+    assert zconn_at(conn1) == at1_
+    assert zconn_at(conn2) == at1_
+
+    conn1.close()
+    conn2.close()
+
+
+    # verify with historic connection @at0
+    tm_old = TransactionManager()
+    defer(tm_old.abort)
+    conn_at0 = db.open(transaction_manager=tm_old, at=at0)
+    assert conn_at0 is not conn1
+    assert conn_at0 is not conn2
+    assert zconn_at(conn_at0) == at0
+
+
+# ---- misc ----
+
+# zsync syncs ZODB storage.
+# it is noop, if zstor does not support syncing (i.e. FileStorage has no .sync())
+def zsync(zstor):
+    sync = getattr(zstor, 'sync', None)
+    if sync is not None:
+        sync()

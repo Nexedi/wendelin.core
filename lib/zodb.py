@@ -22,6 +22,8 @@
 import ZODB
 from ZODB.FileStorage import FileStorage
 from ZODB import DB
+from ZODB import POSException
+from ZODB.utils import p64, u64
 from persistent import Persistent
 from weakref import WeakSet
 import gc
@@ -135,6 +137,70 @@ def _deactivate_bucket(bucket):
             obj._p_deactivate()
 
     bucket._p_deactivate()
+
+
+# zconn_at returns tid as of which ZODB connection is viewing the database.
+def zconn_at(zconn): # -> tid
+    assert isinstance(zconn, ZODB.Connection.Connection)
+    if zconn.opened is None: # zconn must be in "opened" state
+        raise POSException.ConnectionStateError("database connection is closed")
+
+    # ZODB5 uses MVCC uniformly
+    #
+    # zconn.db._storage always provides IMVCCStorage - either raw storage provides it,
+    # or DB wraps raw storage with MVCCAdapter.
+    #
+    # MVCCAdapter in turn uses either MVCCAdapterInstance (current) or
+    # HistoricalStorageAdapter, or UndoAdapterInstance. Retriving zconn.at from those:
+    #
+    # MVCCAdapterInstance
+    #     ._start
+    #
+    # HistoricalStorageAdapter
+    #     ._before
+    #
+    # UndoAdapterInstance
+    #     # no way to retrieve `at`, but .undo_instance() through which
+    #     # UndoAdapterInstance is returnerd, is not used anywhere.
+    #
+    # For the reference: FileStorage, ZEO and NEO do not provide IMVCCStorage, thus
+    # for them we can rely on MVCCAdapterInstance.
+    #
+    # RelStorage is IMVCCStorage - TODO: how to extract at.
+    if zmajor >= 5:
+        zstor = zconn._storage
+        if isinstance(zstor, ZODB.mvccadapter.MVCCAdapterInstance):
+            return before2at(zstor._start)
+
+        if isinstance(zstor, ZODB.mvccadapter.HistoricalStorageAdapter):
+            return before2at(zstor._before)
+
+        raise AssertionError("zconn_at: TODO: add support for zstor %r" % zstor)
+
+    # ZODB4
+    #
+    # Connection:
+    #     .before     !None for historic connections
+    #
+    #     ._txn_time  - if !None - set to tid of _next_ transaction
+    #                   XXX set to None initially - what to do?
+    #
+    #     # XXX do something like that ZODB5 is doing:
+    #     zconn._start = zconn._storage.lastTransaction() + 1
+    #     # XXX _and_ check out queued invalidations
+    elif zmajor == 4:
+        raise AssertionError("zconn_at: TODO: add support for ZODB4")
+
+
+    # ZODB3
+    else:
+        raise AssertionError("zconn_at: TODO: add support for ZODB3")
+
+
+# before2at converts tid that specifies database state as "before" into tid that
+# specifies database state as "at".
+def before2at(before): # -> at
+    return p64(u64(before) - 1)
 
 
 # _zversion returns ZODB version object
