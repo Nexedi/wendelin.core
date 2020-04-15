@@ -572,8 +572,9 @@ class ZBigFile(LivePersistent):
 
 
 
-# BigFileH wrapper that also acts as DataManager proxying changes back to ZODB
-# objects at two-phase-commit (TPC) level.
+
+# BigFileH wrapper that also acts as DataManager proxying changes ZODB <- virtmem
+# at two-phase-commit (TPC), and ZODB -> virtmem on objects invalidation.
 #
 # NOTE several fileh can be opened for ZBigFile - and this does not
 #      conflict with the way ZODB organises its work - just for fileh
@@ -612,7 +613,7 @@ class ZBigFile(LivePersistent):
 @implementer(ISynchronizer)
 class _ZBigFileH(object):
     # .zfile        ZBigFile we were opened for
-    # .zfileh       handle for ^^^
+    # .zfileh       handle for ZBigFile in virtmem
 
     def __init__(self, zfile):
         self.zfile  = zfile
@@ -699,7 +700,7 @@ class _ZBigFileH(object):
         #
         # the reason we do it here, is that if we don't and Connection was not
         # yet joined to transaction (i.e. no changes were made to Connection's
-        # objects), as storeblk() running inside commit will case changes to
+        # objects), as storeblk() running inside commit will cause changes to
         # ZODB objects, zconn will want to join transaction, and that is
         # currently forbidden.
         #
