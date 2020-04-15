@@ -1,5 +1,5 @@
 # Wendelin.core | pythonic package setup
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -170,6 +170,15 @@ def register_as_entrypoint(func, entryname, groupname, distname):
     group = dist.get_entry_map(groupname)
     assert entryname not in group
     group[entryname] = entrypoint
+
+    # XXX hack to workaround ImportError in PEP517 mode: pip -> pep517 -> _in_process
+    # sources, not imports, setup.py and so there, even though git_lsfiles.__module__=='__main__',
+    # the module that is actually __main__ is pip. This leads to ImportError
+    # when trying to resolve the entrypoint.
+    mod = sys.modules[func.__module__]
+    _ = getattr(mod, func.__name__, func)
+    assert _ is func
+    setattr(mod, func.__name__, func)
 
 
 # like subprocess.check_output(), but properly report errors, if e.g. commands is not found
