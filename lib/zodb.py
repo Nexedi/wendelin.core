@@ -299,3 +299,20 @@ elif zmajor == 4:
 # ZODB3: TODO
 else:
     pass    # raises in onResyncCallback
+
+
+
+# zstor_2zurl converts a ZODB storage to URL to access it.
+def zstor_2zurl(zstor):
+    # There is, sadly, no unified way to do it, as even if storages are created via
+    # zodburi, after creation its uri is lost. And storages could be created not
+    # only through URI but e.g. via ZConfig and manually. We want to support all
+    # those cases...
+    #
+    # For this reason extract URL with important for wcfs use-case parameters in
+    # ad-hoc way.
+    if isinstance(zstor, FileStorage):
+        return "file://%s" % (zstor._file_name,)
+
+    # TODO ZEO + NEO support
+    raise NotImplementedError("don't know how to extract zurl from %r" % zstor)

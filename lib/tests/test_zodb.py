@@ -17,8 +17,9 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zmajor
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor
 from wendelin.lib.testing import getTestDB
+from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
 from ZODB import DB, POSException
 from BTrees.IOBTree import IOBTree
@@ -349,6 +350,21 @@ def test_zodb_onresync():
     assert t.nresync == 5
 
     conn.close()
+
+
+# test that zurl does not change from one open to another storage open.
+def test_zurlstable():
+    if not isinstance(testdb, testing.TestDB_FileStorage):
+        pytest.xfail(reason="zstor_2zurl is TODO for ZEO and NEO")
+    zurl0 = None
+    for i in range(10):
+        zstor = testdb.getZODBStorage()
+        zurl  = zstor_2zurl(zstor)
+        zstor.close()
+        if i == 0:
+            zurl0 = zurl
+        else:
+            assert zurl == zurl0
 
 
 # ---- misc ----
