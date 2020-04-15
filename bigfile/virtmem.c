@@ -906,7 +906,7 @@ static void page_del(Page *page) {
 static void *vma_page_addr(VMA *vma, Page *page)
 {
     uintptr_t addr;
-    ASSERT(vma->fileh == page->fileh);      // XXX needed here?
+    ASSERT(vma->fileh == page->fileh);
 
     addr = vma->addr_start + (page->f_pgoffset - vma->f_pgoffset) * page_size(page);
     ASSERT(vma->addr_start <= addr  &&
