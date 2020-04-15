@@ -26,6 +26,8 @@ from persistent import Persistent
 from weakref import WeakSet
 import gc
 
+import pkg_resources
+
 
 # open db storage by uri
 def dbstoropen(uri):
@@ -133,6 +135,36 @@ def _deactivate_bucket(bucket):
             obj._p_deactivate()
 
     bucket._p_deactivate()
+
+
+# _zversion returns ZODB version object
+def _zversion():
+    dzodb3 = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZODB3'))
+    dzodb  = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZODB'))
+    v311   = pkg_resources.parse_version('3.11dev')
+
+    if dzodb3 is None and dzodb is None:
+        raise RuntimeError('ZODB is not installed')
+
+    if dzodb3 is not None:
+        if dzodb3.parsed_version >= v311:
+            vzodb = dzodb.parsed_version # ZODB 3.11 just requires latest ZODB & ZEO
+        else:
+            vzodb = dzodb3.parsed_version
+    else:
+        vzodb = dzodb.parsed_version
+
+    assert vzodb is not None
+    return vzodb
+
+# _zmajor returns major ZODB version.
+def _zmajor():
+    vzodb = _zversion()
+    # XXX hack - packaging.version.Version provides no way to extract major?
+    return int(vzodb.public.split('.')[0])  # 3.11.dev0 -> 3
+
+# zmajor is set to major ZODB version.
+zmajor = _zmajor()
 
 
 # patch for ZODB.Connection to support callback on .open()
