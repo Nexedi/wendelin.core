@@ -44,6 +44,7 @@ static void     page_del(Page *page);
 static void    *vma_page_addr(VMA *vma, Page *page);
 static pgoff_t  vma_addr_fpgoffset(VMA *vma, uintptr_t addr);
 static void     vma_mmap_page(VMA *vma, Page *page);
+static int      vma_page_infilerange(VMA *vma, Page *page);
 static int      vma_page_ismapped(VMA *vma, Page *page);
 static void     vma_page_ensure_unmapped(VMA *vma, Page *page);
 static void     vma_page_ensure_notmappedrw(VMA *vma, Page *page);
@@ -950,15 +951,23 @@ static void vma_mmap_page(VMA *vma, Page *page) {
     }
 }
 
-/* is `page` mapped to `vma` */
-static int vma_page_ismapped(VMA *vma, Page *page)
+/* is `page->fpgoffset` in file-range covered by `vma` */
+static int vma_page_infilerange(VMA *vma, Page *page)
 {
     pgoff_t vma_fpgstop;
     ASSERT(vma->fileh == page->fileh);
 
     vma_fpgstop = vma_addr_fpgoffset(vma, vma->addr_stop);
-    if (!(vma->f_pgoffset <= page->f_pgoffset  &&
-                             page->f_pgoffset < vma_fpgstop))
+    return (vma->f_pgoffset <= page->f_pgoffset  &&
+                               page->f_pgoffset < vma_fpgstop);
+}
+
+/* is `page` mapped to `vma` */
+static int vma_page_ismapped(VMA *vma, Page *page)
+{
+    ASSERT(vma->fileh == page->fileh);
+
+    if (!vma_page_infilerange(vma, page))
         return 0;
 
     return bitmap_test_bit(vma->page_ismappedv, page->f_pgoffset - vma->f_pgoffset);
