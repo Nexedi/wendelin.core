@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_FILE_H_
 
 /* Wendelin.bigfile | Base file class
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2020  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -20,13 +20,16 @@
  *
  * See COPYING file for full licensing terms.
  * See https://www.nexedi.com/licensing for rationale and options.
+ */
+
+/* Header wendelin/bigfile/file.h provides BigFile and interfaces that
+ * particular BigFile implementations must provide.
  *
- * ~~~~~~~~
+ * The interfaces are described in `struct bigfile_ops`.
+ * A particular BigFile implementation must provide loadblk/storeblk methods.
  *
- * TODO description
- *
- * Clients usually work with bigfiles via mapping files to memory -
- * see wendelin/bigfile/virtmem.h and BigFileH for details. XXX
+ * Clients work with bigfiles via mapping files to memory - see
+ * wendelin/bigfile/virtmem.h and BigFileH for client-level API details.
  */
 
 #include <stddef.h>
@@ -51,24 +54,33 @@ struct BigFile {
 };
 typedef struct BigFile BigFile;
 
+/* bigfile_ops defines interface that BigFile implementations must provide. */
 struct bigfile_ops {
-    /* load/store file block to/from memory.
-     * NOTE len(buf) must be = file->blksize
+    /* loadblk is called to load file block into memory.
      *
+     * NOTE loadblk is called from SIGSEGV signal handler context.
+     *
+     * len(buf) must be = file->blksize.
      * @return  0 - ok      !0 - fail
      */
-    // XXX loadblk  - called from SIGSEGV context;
-    //     storeblk - called from usual context
-    //                (in the future maybe in SIGSEGV context too?)
-    //
-    // TODO maybe also/instead use ram-fd based interface and then
-    // loadblk/storeblk would use splice(2) into/from that?
     int  (*loadblk)  (BigFile *file, blk_t blk, void *buf);
+
+    /* storeblk is called to store file block from memory.
+     *
+     * NOTE contrary to loadblk, storeblk is called from regular context.
+     *
+     * len(buf) must be = file->blksize.
+     * @return  0 - ok      !0 - fail
+     */
     int  (*storeblk) (BigFile *file, blk_t blk, const void *buf);
 
-    /* release file */
+    /* release is called to release resources associated with file.
+     *
+     * The file is not otherwise used at the time of and past release call.
+     */
     void (*release)  (BigFile *file);
 };
+typedef struct bigfile_ops bigfile_ops;
 
 #ifdef __cplusplus
 }
