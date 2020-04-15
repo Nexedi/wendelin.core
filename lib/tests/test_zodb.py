@@ -306,6 +306,51 @@ def test_zconn_at():
     assert zconn_at(conn_at0) == at0
 
 
+# verify that ZODB.Connection.onResyncCallback works
+@xfail(zmajor < 5, reason="ZODB.Connection.onResyncCallback is TODO for ZODB4 and ZODB3")
+@func
+def test_zodb_onresync():
+    stor = testdb.getZODBStorage()
+    defer(stor.close)
+    db  = DB(stor)
+
+    class T:
+        def __init__(t):
+            t.nresync = 0
+        def on_connection_resync(t):
+            t.nresync += 1
+
+    t = T()
+
+    conn = db.open()
+    conn.onResyncCallback(t)
+    assert t.nresync == 0
+
+    # abort makes conn to enter new transaction
+    transaction.abort()
+    assert t.nresync == 1
+
+    # close/reopen -> new transaction
+    conn.close()
+    assert t.nresync == 1
+    conn_ = db.open()
+    assert conn_ is conn
+    assert t.nresync == 2
+
+    # commit -> new transaction
+    root = conn.root()
+    root['r'] = 1
+    assert t.nresync == 2
+    transaction.commit()
+    assert t.nresync == 3
+    transaction.commit()
+    assert t.nresync == 4
+    transaction.commit()
+    assert t.nresync == 5
+
+    conn.close()
+
+
 # ---- misc ----
 
 # zsync syncs ZODB storage.

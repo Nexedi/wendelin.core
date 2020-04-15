@@ -259,3 +259,43 @@ def Connection_open(self, transaction_manager=None, delegate=True):
             f.on_connection_open()
 
 ZODB.Connection.Connection.open = Connection_open
+
+
+# patch for ZODB.Connection to support callback on after database view is changed
+ZODB.Connection.Connection._onResyncCallbacks = None
+def Connection_onResyncCallback(self, f):
+    if zmajor <= 4:
+        raise AssertionError("onResyncCallback: TODO: add support for ZODB34")
+    if self._onResyncCallbacks is None:
+        # NOTE WeakSet does not work for bound methods - they are always created
+        # anew for each obj.method access, and thus will go away almost immediately
+        self._onResyncCallbacks = WeakSet()
+    self._onResyncCallbacks.add(f)
+
+assert not hasattr(ZODB.Connection.Connection, 'onResyncCallback')
+ZODB.Connection.Connection.onResyncCallback = Connection_onResyncCallback
+
+# ZODB5: hook into Connection.newTransaction
+if zmajor >= 5:
+    _orig_Connection_newTransaction = ZODB.Connection.Connection.newTransaction
+    def _ZConnection_newTransaction(self, transaction, sync=True):
+        _orig_Connection_newTransaction(self, transaction, sync)
+
+        # FIXME method name hardcoded. Better not do it and allow f to be general
+        # callable, but that does not work with bound method - see above.
+        # ( Something like WeakMethod from py3 could help )
+        if self._onResyncCallbacks:
+            for f in self._onResyncCallbacks:
+                f.on_connection_resync()
+
+    ZODB.Connection.Connection.newTransaction = _ZConnection_newTransaction
+
+
+# ZODB4: hook into Connection._storage_sync
+elif zmajor == 4:
+    pass    # raises in onResyncCallback
+
+
+# ZODB3: TODO
+else:
+    pass    # raises in onResyncCallback
