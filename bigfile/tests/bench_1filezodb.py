@@ -1,5 +1,5 @@
 # Wendelin.bigfile | benchmarks for zodb backend
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -24,7 +24,7 @@ from wendelin.lib.mem import memset
 from wendelin.lib.testing import getTestDB, Adler32, nulladler32_bysize, ffadler32_bysize
 from wendelin.lib.zodb import dbclose
 import transaction
-from pygolang import defer, func
+from golang import defer, func
 
 testdb = None
 from wendelin.bigfile.tests.bench_0virtmem import filesize, blksize # to get comparable timings
