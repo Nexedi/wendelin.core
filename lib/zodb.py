@@ -140,6 +140,9 @@ def _deactivate_bucket(bucket):
 
 
 # zconn_at returns tid as of which ZODB connection is viewing the database.
+#
+# In other words zconn_at returns database state corresponding to database view
+# of the connection.
 def zconn_at(zconn): # -> tid
     assert isinstance(zconn, ZODB.Connection.Connection)
     if zconn.opened is None: # zconn must be in "opened" state
