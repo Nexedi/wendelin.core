@@ -154,7 +154,7 @@ def zconn_at(zconn): # -> tid
     # or DB wraps raw storage with MVCCAdapter.
     #
     # MVCCAdapter in turn uses either MVCCAdapterInstance (current) or
-    # HistoricalStorageAdapter, or UndoAdapterInstance. Retriving zconn.at from those:
+    # HistoricalStorageAdapter, or UndoAdapterInstance. Retrieving zconn.at from those:
     #
     # MVCCAdapterInstance
     #     ._start
@@ -164,7 +164,7 @@ def zconn_at(zconn): # -> tid
     #
     # UndoAdapterInstance
     #     # no way to retrieve `at`, but .undo_instance() through which
-    #     # UndoAdapterInstance is returnerd, is not used anywhere.
+    #     # UndoAdapterInstance is returned, is not used anywhere.
     #
     # For the reference: FileStorage, ZEO and NEO do not provide IMVCCStorage, thus
     # for them we can rely on MVCCAdapterInstance.
