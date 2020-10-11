@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -28,8 +28,8 @@ import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError
 from numpy import ndarray, array_equal, uint32, zeros, arange
-from golang import defer, func
-from threading import Thread
+from golang import defer, func, chan
+from golang import context, sync
 from six.moves import _thread
 from six import b
 import struct
@@ -223,7 +223,9 @@ def test_bigfile_filezodb_vs_conn_migration():
     c21_1 = NotifyChannel()   # T21 -> T11
 
     # open, modify, commit, close, open, commit
-    def T11():
+    T11ident = [None] # [0] = gettid(T11)
+    def T11(ctx):
+        T11ident[0] = _thread.get_ident()
         tell, wait = c12_1.tell, c21_1.wait
 
         conn11_1 = db.open()
@@ -247,8 +249,8 @@ def test_bigfile_filezodb_vs_conn_migration():
         # close conn, wait till T21 reopens it
         del vma11, fh11, a11, f11, root11_1
         conn11_1.close()
-        tell('T1-conn11_1-closed')
-        wait('T2-conn21-opened')
+        tell(ctx, 'T1-conn11_1-closed')
+        wait(ctx, 'T2-conn21-opened')
 
         # open another connection (e.g. for handling next request) which does
         # not touch  zfile at all, and arrange timings so that T2 modifies
@@ -257,33 +259,36 @@ def test_bigfile_filezodb_vs_conn_migration():
         assert conn11_2 is not conn11_1
         root11_2 = conn11_2.root()
 
-        wait('T2-zfile2-modified')
+        wait(ctx, 'T2-zfile2-modified')
 
         # XXX do we want to also modify some other objects?
         # (but this have side effect for joining conn11_2 to txn)
         transaction.commit()    # should be nothing
-        tell('T1-txn12-committed')
+        tell(ctx, 'T1-txn12-committed')
 
-        wait('T2-conn21-closed')
+        wait(ctx, 'T2-conn21-closed')
         del root11_2
         conn11_2.close()
 
         # hold on this thread until main driver tells us
-        wait('T11-exit-command')
+        wait(ctx, 'T11-exit-command')
 
 
     # open, modify, abort
-    def T21():
+    T21done = chan()
+    @func
+    def T21(ctx):
+        defer(T21done.close)
         tell, wait = c21_1.tell, c12_1.wait
 
         # - wait until T1 finish setting up initial data for zfile and closes connection.
         # - open that connection before T1 is asleep - because ZODB organizes
         #   connection pool as stack (with correction for #active objects),
         #   we should get exactly the same connection T1 had.
-        wait('T1-conn11_1-closed')
+        wait(ctx, 'T1-conn11_1-closed')
         conn21 = db.open()
         assert conn21 is conn01
-        tell('T2-conn21-opened')
+        tell(ctx, 'T2-conn21-opened')
 
         # modify zfile and arrange timings so that T1 commits after zfile is
         # modified, but before we commit/abort.
@@ -295,21 +300,21 @@ def test_bigfile_filezodb_vs_conn_migration():
 
         Blk(vma21, 0)[0] = 21
 
-        tell('T2-zfile2-modified')
-        wait('T1-txn12-committed')
+        tell(ctx, 'T2-zfile2-modified')
+        wait(ctx, 'T1-txn12-committed')
 
         # abort - zfile2 should stay unchanged
         transaction.abort()
 
         del vma21, fh21, a21, root21
         conn21.close()
-        tell('T2-conn21-closed')
+        tell(ctx, 'T2-conn21-closed')
 
 
-    t11, t21 = Thread(target=T11), Thread(target=T21)
-    t11.start(); t21.start()
-    t11_ident = t11.ident
-    t21.join()     # NOTE not joining t11 yet
+    wg = sync.WorkGroup(context.background())
+    wg.go(T11)
+    wg.go(T21)
+    T21done.recv()  # NOTE not joining t11 yet
 
     # now verify that zfile2 stays at 11 state, i.e. T21 was really aborted
     conn02 = db.open()
@@ -334,39 +339,45 @@ def test_bigfile_filezodb_vs_conn_migration():
     c21_2 = NotifyChannel()   # T22 -> T12
 
     # open, abort
-    def T12():
+    T12done = chan()
+    @func
+    def T12(ctx):
+        defer(T12done.close)
         tell, wait = c12_2.tell, c21_2.wait
 
-        wait('T2-conn22-opened')
+        wait(ctx, 'T2-conn22-opened')
 
         conn12 = db.open()
 
-        tell('T1-conn12-opened')
-        wait('T2-zfile2-modified')
+        tell(ctx, 'T1-conn12-opened')
+        wait(ctx, 'T2-zfile2-modified')
 
         transaction.abort()
 
-        tell('T1-txn-aborted')
-        wait('T2-txn-committed')
+        tell(ctx, 'T1-txn-aborted')
+        wait(ctx, 'T2-txn-committed')
 
         conn12.close()
 
 
     # open, modify, commit
-    def T22():
+    T22done = chan()
+    @func
+    def T22(ctx):
+        defer(T22done.close)
         tell, wait = c21_2.tell, c12_2.wait
 
         # make sure we are not the same thread which ran T11
         # (should be so because we cared not to stop T11 yet)
-        assert _thread.get_ident() != t11_ident
+        assert _thread.get_ident() != T11ident[0]
 
         conn22 = db.open()
         assert conn22 is conn01
-        tell('T2-conn22-opened')
+        tell(ctx, 'T2-conn22-opened')
 
         # modify zfile and arrange timings so that T1 does abort after we
         # modify, but before we commit
-        wait('T1-conn12-opened')
+        wait(ctx, 'T1-conn12-opened')
         root22 = conn22.root()
         a22 = root22['zarray2']
 
@@ -375,24 +386,27 @@ def test_bigfile_filezodb_vs_conn_migration():
 
         Blk(vma22, 0)[0] = 22
 
-        tell('T2-zfile2-modified')
-        wait('T1-txn-aborted')
+        tell(ctx, 'T2-zfile2-modified')
+        wait(ctx, 'T1-txn-aborted')
 
         # commit - changes should propagate to zfile
         transaction.commit()
 
-        tell('T2-txn-committed')
+        tell(ctx, 'T2-txn-committed')
 
         conn22.close()
 
 
-    t12, t22 = Thread(target=T12), Thread(target=T22)
-    t12.start(); t22.start()
-    t12.join();  t22.join()
+    wg.go(T12)
+    wg.go(T22)
+    T12done.recv()
+    T22done.recv()
 
     # tell T11 to stop also
-    c21_1.tell('T11-exit-command')
-    t11.join()
+    def _(ctx):
+        c21_1.tell(ctx, 'T11-exit-command')
+    wg.go(_)
+    wg.wait()
 
     # now verify that zfile2 changed to 22 state, i.e. T22 was really committed
     conn03 = db.open()
