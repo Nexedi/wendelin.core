@@ -1,0 +1,29 @@
+# setup to run tests on Nexedi testing infrastructure.
+# https://stack.nexedi.com/test_status
+
+storv = ['fs', 'zeo', 'neo'] # storage backends to test against
+
+
+# test.t & friends unit-test core of UVMM and are Go-, Python- and ZODB-storage independent.
+# we don't run test.vg* because there is currently no valgrind on SlapOS.
+for kind in ['t', 'fault', 'asan', 'tsan']:
+    t = 'test.%s' % kind
+    envadj = {}
+
+    # test.fault: on Ubuntu, when apport is registerd in /proc/sys/kernel/core_pattern,
+    # it is apport which is run to process core. Apport dumps core for us, but
+    # rejects to run in parralel with the following message in its log:
+    #   ERROR: apport ...: another apport instance is already running, aborting
+    # this way, when test.fault tests are run in parallel, some of them fail to
+    # find core corresponding to expected crash.
+    # -> force serial execution to workaround that.
+    if kind == 'fault':
+        envadj['MAKEFLAGS'] = '-j1'
+
+    TestCase(t, ['make', t], envadj=envadj)  # TODO summaryf=TAP.summary
+
+# test.py/<stor> runs unit- and functional- tests for wendelin.core .
+for stor in storv:
+    TestCase('test.py/%s-!wcfs' % stor, ['make', 'test.py'],
+             envadj={'WENDELIN_CORE_TEST_DB': '<%s>' % stor},
+             summaryf=PyTest.summary)
