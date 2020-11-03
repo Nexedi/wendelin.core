@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 # tfault-run <tfault> <arg> <mustdie>
 # run `<tfault> <arg>` and verify that it produces correct coredump, dieing for
 #   SIGSEGV in function <mustdie>.
