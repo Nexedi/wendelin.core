@@ -17,6 +17,7 @@ mustdie=$3
 workdir=t/tfault-run.$arg
 
 cwd=`pwd`
+rm -rf "$workdir"
 mkdir "$workdir"
 cd "$workdir"
 
