@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Basic tests
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -423,6 +423,52 @@ def test_vma_del_vs_gc():
     # this will segfault, if vma.dealloc does not properly untrack vma from GC first.
     wvma = weakref.ref(vma, lambda _: gc.collect())
     del vma
+
+
+# verify that BigFile / BigFileH properly support cyclic GC.
+def test_bigfile_vs_cyclic_gc():
+    f   = XBigFile(b'abcd', PS)
+    fh  = f.fileh_open()
+    # keep reference f -> fh
+    # together with builtin fileh -> file reference this forms  f <=> fh cycle
+    f._myfh = fh
+
+    vma = fh.mmap(0, 1)
+    # NOTE: vma <=> f cycle is not supported: fileh_close called by
+    # fileh.__del__ BUGs if there are still opened mmappings, and py-level
+    # users are protected from that via requiring vma to be collected first.
+    #
+    # keep reference f -> vma
+    # together with builtin vma -> fileh reference this forms another cycle
+    #
+    #   vma  ->  fileh  ->  file
+    #    ^                   |
+    #    +-------------------+
+    f._myvma = vma
+
+    wf   = weakref.ref(f)
+    wfh  = weakref.ref(fh)
+    wvma = weakref.ref(vma)
+
+    gc.collect()
+    assert wf()   is not None
+    assert wfh()  is not None
+    assert wvma() is not None
+
+    # unreference objects; nothing is collected because of vma <=> f cycle through f._myvma
+    del vma, fh, f
+    gc.collect()
+    assert wf()   is not None
+    assert wfh()  is not None
+    assert wvma() is not None
+
+    # after removing vma <=> f cycle manually, everything goes to GC
+    wf()._myvma = None
+    gc.collect()
+    assert wf()   is None
+    assert wfh()  is None
+    assert wvma() is None
+
 
 # test that there is no crash after first store error on writeout
 class StoreError(Exception):
