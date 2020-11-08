@@ -26,11 +26,14 @@
  *
  * NOTE on refcounting - who holds who:
  *
- *  vma  ->  fileh  ->  file
+ *  vma  ->  fileh  ->  file(*)
  *   ^         |
  *   +---------+
  *   fileh->mmaps (kind of weak)
  *
+ * (*) PyBigFile is intended to be used as subclass, whose children can add
+ *     references from file to other objects. In particular ZBigFile keeps
+ *     references to fileh that were created through it.
  *
  * NOTE virtmem/bigfile functions release/reacquire GIL (see virt_lock()) -
  * thus functions that use them cannot assume they run mutually exclusive to
@@ -197,6 +200,8 @@ pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
 {
     PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
 
+    /* NOTE don't traverse vma->fileh (see pyvma_clear for details) */
+
     Py_VISIT(pyvma->pyuser);
     return 0;
 }
@@ -205,6 +210,12 @@ static int
 pyvma_clear(PyObject *pyvma0)
 {
     PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+
+    /* NOTE don't clear vma->fileh: we need vma to be released first - else -
+     * if there would be vma <=> fileh cycle, it could be possible for Python
+     * to release fileh first, and then fileh_close called by fileh release
+     * would break with BUG asserting that there is no fileh mappings left.
+     * Protect py-level users from that. */
 
     Py_CLEAR(pyvma->pyuser);
     return 0;
@@ -414,10 +425,57 @@ PyFunc(pyfileh_invalidate_page, "invalidate_page(pgoffset) - invalidate fileh pa
 }
 
 
+
+/* pyfileh vs cyclic GC */
+static int
+pyfileh_traverse(PyObject *pyfileh0, visitproc visit, void *arg)
+{
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+    BigFile     *file    = fileh->file;
+    PyBigFile   *pyfile;
+
+    if (file) {
+        pyfile = container_of(file, PyBigFile, file);
+        Py_VISIT(pyfile);
+    }
+
+    return 0;
+}
+
+static int
+pyfileh_clear(PyObject *pyfileh0)
+{
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+    BigFile     *file    = fileh->file;
+    PyBigFile   *pyfile;
+
+    /* pyfileh->file indicates whether fileh was yet opened (via fileh_open()) or not */
+    if (file) {
+        pyfile = container_of(file, PyBigFile, file);
+
+        /* NOTE calling fileh_close in tp_clear - it is a bit hacky but ok.
+         * we have to call fileh_close now becuase we'll reset fileh->file=NULL next.
+         * pyfileh_dealloc also calls pyfileh_clear. */
+        fileh_close(fileh);
+
+        Py_DECREF(pyfile);
+    }
+
+    return 0;
+}
+
+
 static void
 pyfileh_dealloc(PyObject *pyfileh0)
 {
-    /* PyBigFileH does not support cyclic GC - no need to PyObject_GC_UnTrack it */
+    /* PyBigFileH supports cyclic GC - first, before destructing, remove it from GC
+     * list to avoid segfaulting on double entry here - e.g. if GC is triggered
+     * from a weakref callback, or concurrently from another thread.
+     *
+     * See https://bugs.python.org/issue31095 for details */
+    PyObject_GC_UnTrack(pyfileh0);
 
     PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
     BigFileH    *fileh   = &pyfileh->fileh;
@@ -427,14 +485,7 @@ pyfileh_dealloc(PyObject *pyfileh0)
     if (pyfileh->in_weakreflist)
         PyObject_ClearWeakRefs(&pyfileh->pyobj);
 
-    /* pyfileh->file indicates whether fileh was yet opened (via fileh_open()) or not */
-    if (file) {
-        fileh_close(fileh);
-
-        pyfile = container_of(file, PyBigFile, file);
-        Py_DECREF(pyfile);
-    }
-
+    pyfileh_clear(&pyfileh->pyobj);
     pyfileh->pyobj.ob_type->tp_free(&pyfileh->pyobj);
 }
 
@@ -467,7 +518,9 @@ static /*const*/ PyTypeObject PyBigFileH_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name            = "_bigfile.BigFileH",
     .tp_basicsize       = sizeof(PyBigFileH),
-    .tp_flags           = Py_TPFLAGS_DEFAULT,
+    .tp_flags           = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse        = pyfileh_traverse,
+    .tp_clear           = pyfileh_clear,
     .tp_methods         = pyfileh_methods,
     .tp_dealloc         = pyfileh_dealloc,
     .tp_new             = pyfileh_new,
@@ -939,6 +992,40 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
     return &pyfileh->pyobj;
 }
 
+/* pyfile vs cyclic GC */
+static int
+pyfile_traverse(PyObject *pyfile0, visitproc visit, void *arg)
+{
+    PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
+
+    return 0;
+}
+
+static int
+pyfile_clear(PyObject *pyfile0)
+{
+    PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
+
+    return 0;
+}
+
+
+static void
+pyfile_dealloc(PyObject *pyfile0)
+{
+    /* PyBigFile supports cyclic GC - first, before destructing, remove it from GC
+     * list to avoid segfaulting on double entry here - e.g. if GC is triggered
+     * from a weakref callback, or concurrently from another thread.
+     *
+     * See https://bugs.python.org/issue31095 for details */
+    PyObject_GC_UnTrack(pyfile0);
+
+    PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
+
+    pyfile_clear(&pyfile->pyobj);
+    pyfile->pyobj.ob_type->tp_free(&pyfile->pyobj);
+}
+
 
 static PyObject *
 pyfile_new(PyTypeObject *type, PyObject *args, PyObject *kw)
@@ -975,10 +1062,12 @@ static PyTypeObject PyBigFile_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name            = "_bigfile.BigFile",
     .tp_basicsize       = sizeof(PyBigFile),
-    .tp_flags           = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_flags           = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse        = pyfile_traverse,
+    .tp_clear           = pyfile_clear,
     .tp_methods         = pyfile_methods,
     .tp_members         = pyfile_members,
-    .tp_dealloc         = NULL, // XXX
+    .tp_dealloc         = pyfile_dealloc,
     .tp_new             = pyfile_new,
     .tp_doc             = "Base class for creating BigFile(s)\n\nTODO describe",    // XXX
 };
