@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2020  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -165,26 +165,6 @@ pyvma_len(PyObject *pyvma0)
 }
 
 
-/* pyvma vs cyclic GC */
-static int
-pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
-{
-    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
-
-    Py_VISIT(pyvma->pyuser);
-    return 0;
-}
-
-static int
-pyvma_clear(PyObject *pyvma0)
-{
-    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
-
-    Py_CLEAR(pyvma->pyuser);
-    return 0;
-}
-
-
 PyFunc(pyvma_filerange, "filerange() -> (pgoffset, pglen) -- file range this vma covers")
     (PyObject *pyvma0, PyObject *args)
 {
@@ -208,6 +188,26 @@ PyFunc(pyvma_pagesize, "pagesize() -> pagesize -- page size of RAM underlying th
     Py_ssize_t pagesize = vma->fileh->ramh->ram->pagesize;
 
     return Py_BuildValue("n", pagesize);
+}
+
+
+/* pyvma vs cyclic GC */
+static int
+pyvma_traverse(PyObject *pyvma0, visitproc visit, void *arg)
+{
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+
+    Py_VISIT(pyvma->pyuser);
+    return 0;
+}
+
+static int
+pyvma_clear(PyObject *pyvma0)
+{
+    PyVMA *pyvma = container_of(pyvma0, PyVMA, pyobj);
+
+    Py_CLEAR(pyvma->pyuser);
+    return 0;
 }
 
 
