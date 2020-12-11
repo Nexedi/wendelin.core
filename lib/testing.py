@@ -1,5 +1,5 @@
 # Wendelin. Testing utilities
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2020  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -214,7 +214,6 @@ class TestDB_Base(object):
                   "; opened by:\n%s" % (conn, tb), file=sys.stderr)
 
             db = conn.db()
-            stor = db.storage
             conn.close()
             # DB.close() should close underlying storage and is noop when
             # called the second time.
