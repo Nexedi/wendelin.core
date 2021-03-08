@@ -248,6 +248,7 @@ setup(
                    'numpy',     # BigArray + its children
 
                    'ZODB >= 4', # for ZBigFile / ZBigArray
+                   'zodbtools >= 0.0.0.dev8', # lib.zodb.dbstoropen + ...
 
                    'pygolang >= 0.0.2', # defer, sync.WaitGroup, ...
 
