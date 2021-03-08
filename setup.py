@@ -1,5 +1,5 @@
 # Wendelin.core | pythonic package setup
-# Copyright (C) 2014-2020  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -247,11 +247,7 @@ setup(
     install_requires = [
                    'numpy',     # BigArray + its children
 
-                   # for ZBigFile / ZBigArray
-                   # ( NOTE: ZODB3 3.11 just pulls in latest ZODB _4_, so this way
-                   #   specifying ZODB _3_ we allow external requirements to
-                   #   specify either to use e.g. ZODB3.10 or ZODB4 )
-                   'ZODB3 >= 3.10',
+                   'ZODB >= 4', # for ZBigFile / ZBigArray
 
                    'pygolang >= 0.0.2', # defer, sync.WaitGroup, ...
 

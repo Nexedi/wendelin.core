@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB utilities
-# Copyright (C) 2014-2020  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -232,7 +232,7 @@ def test_deactivate_btree():
 
 
 # verify that zconn_at gives correct answer.
-@xfail(zmajor < 5, reason="zconn_at is TODO for ZODB4 and ZODB3")
+@xfail(zmajor < 5, reason="zconn_at is TODO for ZODB4")
 @func
 def test_zconn_at():
     stor = testdb.getZODBStorage()
@@ -308,7 +308,7 @@ def test_zconn_at():
 
 
 # verify that ZODB.Connection.onResyncCallback works
-@xfail(zmajor < 5, reason="ZODB.Connection.onResyncCallback is TODO for ZODB4 and ZODB3")
+@xfail(zmajor < 5, reason="ZODB.Connection.onResyncCallback is TODO for ZODB4")
 @func
 def test_zodb_onresync():
     stor = testdb.getZODBStorage()

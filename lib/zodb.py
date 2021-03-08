@@ -1,5 +1,5 @@
 # Wendelin.bigfile | common ZODB-related helpers
-# Copyright (C) 2014-2020  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -197,7 +197,7 @@ def zconn_at(zconn): # -> tid
 
     # ZODB3
     else:
-        raise AssertionError("zconn_at: TODO: add support for ZODB3")
+        raise AssertionError("zconn_at: ZODB3 is not supported anymore")
 
 
 # before2at converts tid that specifies database state as "before" into tid that
@@ -267,8 +267,10 @@ ZODB.Connection.Connection.open = Connection_open
 # patch for ZODB.Connection to support callback on after database view is changed
 ZODB.Connection.Connection._onResyncCallbacks = None
 def Connection_onResyncCallback(self, f):
-    if zmajor <= 4:
-        raise AssertionError("onResyncCallback: TODO: add support for ZODB34")
+    if zmajor <= 3:
+        raise AssertionError("onResyncCallback: ZODB3 is not supported anymore")
+    if zmajor == 4:
+        raise AssertionError("onResyncCallback: TODO: add support for ZODB4")
     if self._onResyncCallbacks is None:
         # NOTE WeakSet does not work for bound methods - they are always created
         # anew for each obj.method access, and thus will go away almost immediately
@@ -299,9 +301,9 @@ elif zmajor == 4:
     pass    # raises in onResyncCallback
 
 
-# ZODB3: TODO
+# ZODB3
 else:
-    pass    # raises in onResyncCallback
+    raise AssertionError("ZODB3 is not supported anymore")
 
 
 
