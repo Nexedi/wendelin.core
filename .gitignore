@@ -6,6 +6,7 @@ build/
 
 *.o
 *.so
+*_dsoinfo.py
 
 /dist/
 *.egg-info
