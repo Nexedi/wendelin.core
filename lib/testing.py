@@ -1,5 +1,5 @@
 # Wendelin. Testing utilities
-# Copyright (C) 2014-2020  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -204,6 +204,10 @@ class TestDB_Base(object):
 
     def teardown(self):
         # close connections that test code forgot to close
+        #
+        # see also conftest.transaction_reset(), which tries to isolate all
+        # tests from each other. (TestDB_Base.teardown - on the other hand - is
+        # invoked per module and so isolates at module-level only)
         for connref, tb in self.connv:
             conn = connref()
             if conn is None:
