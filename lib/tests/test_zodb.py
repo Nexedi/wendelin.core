@@ -1,4 +1,4 @@
-# Wendelin.core.bigfile | Tests for ZODB utilities
+# Wendelin.core.bigfile | Tests for ZODB utilities and critical properties of ZODB itself
 # Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
@@ -22,12 +22,16 @@ from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
 from ZODB import DB, POSException
+from ZODB.FileStorage import FileStorage
+from ZODB.MappingStorage import MappingStorage
 from BTrees.IOBTree import IOBTree
 import transaction
 from transaction import TransactionManager
 from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+
+from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
 testdb = None
 
@@ -365,6 +369,28 @@ def test_zurlstable():
             zurl0 = zurl
         else:
             assert zurl == zurl0
+
+
+# ---- tests for critical properties of ZODB ----
+
+# verify race in between Connection.open and invalidations.
+def test_zodb_zopenrace_basic():
+    # exercises mostly logic inside ZODB around ZODB.Connection
+    zopenrace.test(MappingStorage())
+def test_zodb_zopenrace():
+    # exercises ZODB.Connection + particular storage implementation
+    zopenrace.main()
+
+# verify race in between loading and invalidations.
+def test_zodb_zloadrace():
+    # skip testing with FileStorage - in ZODB/py opening simultaneous read-write
+    # connections to the same file is not supported and will raise LockError.
+    _ = testdb.getZODBStorage()
+    _.close()
+    if isinstance(_, FileStorage):
+        pytest.skip("skipping on FileStorage")
+
+    zloadrace.main()
 
 
 # ---- misc ----
