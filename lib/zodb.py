@@ -395,4 +395,11 @@ def zstor_2zurl(zstor):
 
         return u
 
+    # MappingStorage:
+    if ztype == "ZODB.MappingStorage.MappingStorage":
+        raise ValueError(("%s is in-RAM storage\n"  +
+            "\tin-RAM storages are not supported:\n" +
+            "\ta zurl pointing to in-RAM storage in one process would lead to\n"
+            "\tanother in-RAM storage in WCFS process.") % ztype)
+
     raise NotImplementedError("don't know how to extract zurl from %r" % zstor)
