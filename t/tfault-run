@@ -25,6 +25,9 @@ ulimit -c unlimited
 $tfault $arg 2>&1 |tee run.out
 
 grep -q "^# going to fault" run.out     || die "test didn't run to faulting point"
+if [ $mustdie == "on_pagefault" ]; then
+    grep -q "dump_traceback" run.out    || die "on_pagefault didn't print traceback"
+fi
 test -e core                            || die "no core after run"
 gdb -q -batch $tfault core >core.info   || die "can't gdb(core)"
 grep -q "Program terminated with signal SIGSEGV, Segmentation fault." core.info || die "not SIGSEGV"

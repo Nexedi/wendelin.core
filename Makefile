@@ -182,6 +182,7 @@ tfault	:= bigfile/tests/tfault
 FAULTS	:= $(shell grep '{"fault.*"' $(tfault).c | sed 's/"/ /g' |awk '{print $$2}')
 test.fault : $(FAULTS:%=%.tfault)
 
+$(tfault).t: CFLAGS += -rdynamic	# so that backtrace_symbols works
 %.tfault : $(tfault).t
 	t/tfault-run $< $* $(shell grep '{"$*"' $(tfault).c | awk '{print $$NF}')
 

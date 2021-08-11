@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Low-level pagefault handler
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -44,7 +44,7 @@ static struct sigaction prev_segv_act;
 static int    segv_act_installed;
 
 static int faulted_by(const ucontext_t *uc);
-
+static const char hexdigit[16] = "0123456789abcdef";
 
 /* SIGSEGV handler */
 static void on_pagefault(int sig, siginfo_t *si, void *_uc)
@@ -150,6 +150,24 @@ dont_handle:
         // XXX how to know access size? we just proceed here with 1byte ...
         // FIXME don't touch memory on SI_USER - just BUG.
         volatile uint8_t *p = (uint8_t *)si->si_addr;
+        uintptr_t a = (uintptr_t)si->si_addr;
+        char msg[256], *s=msg;
+
+        *s = 0;
+        strcat(s, "Segmentation fault: ");
+        strcat(s, write ? "write" : "read");
+        strcat(s, " @");
+        s += strlen(s);
+        for (int byte=sizeof(a); byte > 0; byte--) {
+            *s = hexdigit[(a>>((byte-1)*8+4)) & 0xf]; s++;
+            *s = hexdigit[(a>>((byte-1)*8  )) & 0xf]; s++;
+        }
+        *s = 0;
+        strcat(s, "\n");
+
+        xwrite(1, msg, strlen(msg));
+        dump_traceback(1);
+
         if (write)
             *p = *p;
         else

@@ -1,5 +1,5 @@
 /* Wendelin. Miscellaneous utilities
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <execinfo.h>
 
 
 /* ilog2 that must be exact */
@@ -160,4 +161,29 @@ void xpthread_mutex_unlock(pthread_mutex_t *lock)
     err = pthread_mutex_unlock(lock);
     if (err)
         BUGerr(err);
+}
+
+
+void xwrite(int fd, const void *buf, size_t count)
+{
+    ssize_t n;
+
+    while (count != 0) {
+        n = write(fd, buf, count);
+        if (n == -1)
+            BUGe();
+        count -= n;
+    }
+}
+
+/* dump traceback to fd */
+void dump_traceback(int fd)
+{
+    void *pcv[256];
+    int n;
+
+    /* TODO better use https://github.com/ianlancetaylor/libbacktrace
+     * because backtrace_symbols often does not provide symbolic information */
+    n = backtrace(pcv, 256);
+    backtrace_symbols_fd(pcv, n, fd);
 }

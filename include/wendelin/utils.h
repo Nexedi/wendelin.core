@@ -2,7 +2,7 @@
 #define _WENDELIN_UTILS_H_
 
 /* Wendelin. Miscellaneous utilities
- * Copyright (C) 2014-2015  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -87,6 +87,11 @@ void xpthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 
 void xpthread_mutex_lock(pthread_mutex_t *);
 void xpthread_mutex_unlock(pthread_mutex_t *);
+
+void xwrite(int fd, const void *buf, size_t count);
+
+/* dump traceback */
+void dump_traceback(int fd);
 
 #ifdef __cplusplus
 }
