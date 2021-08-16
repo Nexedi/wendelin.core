@@ -1,5 +1,5 @@
 # Wendelin.core | Instructions to build & test
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                     	   Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -94,7 +94,7 @@ test.t	: $(TESTS:%=%.trun)
 %.trun	: %.t
 	$(XRUN<)
 
-%.t	: %.c $(ccan_config)
+%.t	: %.c $(ccan_config) FORCE
 	$(LINKC)
 
 # test with AddressSanitizer
