@@ -23,6 +23,7 @@ PYTHON	?= python
 PYTEST	?= $(PYTHON) -m pytest
 PYBENCH ?= $(PYTHON) -m golang.cmd.pybench
 VALGRIND?= valgrind
+GO	?= go
 
 # use the same C compiler as python
 # (for example it could be `gcc -m64` on a 32bit userspace)
@@ -33,7 +34,7 @@ ifeq ($(CC),)
 $(error "Cannot defermine py-CC")
 endif
 
-all	: bigfile/_bigfile.so
+all	: bigfile/_bigfile.so wcfs/wcfs
 
 
 ccan_config := 3rdparty/ccan/config.h
@@ -41,6 +42,9 @@ ccan_config := 3rdparty/ccan/config.h
 bigfile/_bigfile.so : $(ccan_config) FORCE
 	$(PYTHON) setup.py build_dso --inplace
 	$(PYTHON) setup.py ll_build_ext --inplace
+
+wcfs/wcfs: FORCE
+	cd wcfs && $(GO) build
 
 
 FORCE	:
@@ -69,7 +73,7 @@ CFLAGS	:= -g -Wall -D_GNU_SOURCE -std=gnu99 -fplan9-extensions	\
 # XXX hack ugly
 LOADLIBES=lib/bug.c lib/utils.c 3rdparty/ccan/ccan/tap/tap.c
 TESTS	:= $(patsubst %.c,%,$(wildcard bigfile/tests/test_*.c))
-test	: test.t test.py test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
+test	: test.t test.go test.wcfs test.py test.fault test.asan test.tsan test.vgmem test.vghel test.vgdrd
 
 # TODO move XFAIL markers into *.c
 
@@ -165,16 +169,24 @@ test.vgdrd: $(TESTS:%=%.vgdrdrun)
 
 # run python tests
 PYTEST_IGNORE	:=  --ignore=3rdparty --ignore=build --ignore=t
-test.py	: bigfile/_bigfile.so
-	$(PYTEST) $(PYTEST_IGNORE)
+# wcfs unit-tests
+test.wcfs : bigfile/_bigfile.so wcfs/wcfs
+	$(PYTEST) wcfs/
+# unit/functional tests for whole wendelin.core
+test.py	: bigfile/_bigfile.so wcfs/wcfs
+	$(PYTEST) $(PYTEST_IGNORE) --ignore=wcfs
 
 # test.py via Valgrind (very slow)
-test.py.vghel: bigfile/_bigfile.so
+test.py.vghel: bigfile/_bigfile.so wcfs/wcfs
 	$(call vgxrun,--tool=helgrind, $(PYTEST) $(PYTEST_IGNORE))
 
-test.py.drd: bigfile/_bigfile.so
+test.py.drd: bigfile/_bigfile.so wcfs/wcfs
 	$(call vgxrun,--tool=drd, $(PYTEST) $(PYTEST_IGNORE))
 
+
+# run go tests
+test.go	:
+	cd wcfs && $(GO) test -count=1 ./... # -count=1 disables tests caching
 
 
 # test pagefault for double/real faults - it should crash
@@ -194,5 +206,5 @@ bench	: bench.t bench.py
 
 bench.t	: $(BENCHV.C:%=%.trun)
 
-bench.py: bigfile/_bigfile.so
+bench.py: bigfile/_bigfile.so wcfs/wcfs
 	$(PYBENCH) --count=3 --forked $(PYTEST_IGNORE)

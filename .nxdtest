@@ -3,6 +3,10 @@
 
 storv = ['fs', 'zeo', 'neo'] # storage backends to test against
 
+# some bugs are only likely to trigger when there is only 1 or 2 main OS thread(s) in wcfs
+# GOMAXPROCS='' means use `nproc`
+gonprocv = ['1', '2', '']           # GOMAXPROCS=... to test against
+
 
 # test.t & friends unit-test core of UVMM and are Go-, Python- and ZODB-storage independent.
 # we don't run test.vg* because there is currently no valgrind on SlapOS.
@@ -27,3 +31,17 @@ for stor in storv:
     TestCase('test.py/%s-!wcfs' % stor, ['make', 'test.py'],
              envadj={'WENDELIN_CORE_TEST_DB': '<%s>' % stor},
              summaryf=PyTest.summary)
+
+
+# test.go unit-tests Go bits in wcfs.
+for nproc in gonprocv:
+    TestCase('test.go:%s' % nproc, ['make', 'test.go'],
+             envadj={'GOMAXPROCS': nproc})
+
+# test.wcfs/<stor> runs unit tests for WCFS
+for stor in storv:
+    envdb = {'WENDELIN_CORE_TEST_DB': '<%s>' % stor}
+
+    for nproc in gonprocv:
+        TestCase('test.wcfs/%s:%s' % (stor, nproc), ['make', 'test.wcfs'],
+                 envadj=dict(GOMAXPROCS=nproc, **envdb), summaryf=PyTest.summary)

@@ -21,11 +21,13 @@ from golang.pyx.build import setup, DSO as _DSO, Extension as _PyGoExt, build_ex
 from setuptools import Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from pkg_resources import working_set, EntryPoint
+from distutils.file_util import copy_file
 from distutils.errors import DistutilsExecError
 from subprocess import Popen, PIPE
 
 import os
 import sys
+from errno import EEXIST
 
 
 # tell cython to resolve `cimport wendelin.*` modules hierarchy starting at top-level.
@@ -172,11 +174,23 @@ def viamake(target, help_text):
 
 # build_ext that
 # - builds via Makefile  (and thus pre-builds ccan)  XXX hacky
+# - integrates built wcfs/wcfs.go exe into wcfs/ python package
 class build_ext(_build_ext):
 
     def run(self):
         runmake('all')
-        return _build_ext.run(self)
+        _build_ext.run(self)
+
+        # copy wcfs/wcfs built from wcfs.go by make into build/lib.linux-x86_64-2.7/...
+        # so that py packaging tools see built wcfs.go as part of wendelin/wcfs package.
+        dst = os.path.join(self.build_lib, 'wendelin/wcfs')
+        try:
+            os.makedirs(dst)
+        except OSError as e:
+            if e.errno != EEXIST:
+                raise
+        copy_file('wcfs/wcfs', dst, verbose=self.verbose, dry_run=self.dry_run)
+
 
 
 
@@ -329,6 +343,9 @@ setup(
                   },
 
     entry_points= {'console_scripts': [
+                        # start wcfs for zurl
+                        'wcfs           = wendelin.wcfs:main',
+
                         # demo to test
                         'demo-zbigarray = wendelin.demo.demo_zbigarray:main',
                       ]
