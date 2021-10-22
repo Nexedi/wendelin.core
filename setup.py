@@ -17,9 +17,9 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from setuptools import setup, Extension as _Ext, Command, find_packages
+from golang.pyx.build import setup, DSO as _DSO, Extension as _PyGoExt, build_ext as _build_ext
+from setuptools import Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
-from setuptools.command.build_ext import build_ext as _build_ext
 from pkg_resources import working_set, EntryPoint
 from distutils.errors import DistutilsExecError
 from subprocess import Popen, PIPE
@@ -29,7 +29,7 @@ import sys
 
 
 # _with_defaults calls what(*argv, **kw) with kw amended with default build flags.
-# e.g. _with_defaults(_Ext, *argv, **kw)
+# e.g. _with_defaults(_DSO, *argv, **kw)
 def _with_defaults(what, *argv, **kw):
     kw = kw.copy()
     kw['include_dirs'] = [
@@ -39,21 +39,26 @@ def _with_defaults(what, *argv, **kw):
             './3rdparty/include',
         ]
 
-    ccdefault = [
-        '-std=gnu99',           # declarations inside for-loop
-        '-fplan9-extensions',   # anonymous-structs + simple inheritance
-        '-fvisibility=hidden',  # by default symbols not visible outside DSO
+    ccdefault = []
+    if kw.get('language') == 'c':
+        ccdefault += [
+            '-std=gnu99',           # declarations inside for-loop
+            '-fplan9-extensions',   # anonymous-structs + simple inheritance
 
-        # in C99 declaration after statement is ok, and we explicitly compile with -std=gnu99.
-        # Python >= 3.4 however adds -Werror=declaration-after-statement even for extension
-        # modules irregardless of their compilation flags:
-        #
-        #   https://bugs.python.org/issue21121
-        #
-        # ensure there is no warnings / errors for decl-after-statements.
-        '-Wno-declaration-after-statement',
-        '-Wno-error=declaration-after-statement',
-    ]
+            # in C99 declaration after statement is ok, and we explicitly compile with -std=gnu99.
+            # Python >= 3.4 however adds -Werror=declaration-after-statement even for extension
+            # modules irregardless of their compilation flags:
+            #
+            #   https://bugs.python.org/issue21121
+            #
+            # ensure there is no warnings / errors for decl-after-statements.
+            '-Wno-declaration-after-statement',
+            '-Wno-error=declaration-after-statement',
+        ]
+    else:
+        ccdefault.append('-std=gnu++11')    # not c++11 since we use typeof
+
+    ccdefault.append('-fvisibility=hidden')  # by default symbols not visible outside DSO
 
     _ = kw.get('extra_compile_args', [])[:]
     _[0:0] = ccdefault
@@ -63,7 +68,7 @@ def _with_defaults(what, *argv, **kw):
     # python extensions cannot be built with -Wl,--no-undefined: at runtime
     # they link with either python (without libpython) or libpython. linking
     # with both libpython and python would be wrong.
-    if 0:
+    if what == _DSO:
         lddefault.append('-Wl,--no-undefined')  # check DSO for undefined symbols at link time
 
     _ = kw.get('extra_link_args', [])[:]
@@ -73,7 +78,8 @@ def _with_defaults(what, *argv, **kw):
     return what(*argv, **kw)
 
 
-def Ext(*argv, **kw):   return _with_defaults(_Ext, *argv, **kw)
+def PyGoExt(*argv, **kw):   return _with_defaults(_PyGoExt, *argv, **kw)
+def DSO(*argv, **kw):       return _with_defaults(_DSO, *argv, **kw)
 
 
 # build_py that
@@ -245,7 +251,7 @@ setup(
     keywords    = 'bigdata out-of-core numpy virtual-memory',
 
     ext_modules = [
-                    Ext('wendelin.bigfile._bigfile',
+                    PyGoExt('wendelin.bigfile._bigfile',
                         ['bigfile/_bigfile.c',
                          'bigfile/pagefault.c',
                          'bigfile/pagemap.c',
@@ -255,7 +261,8 @@ setup(
                          'bigfile/virtmem.c',
                          'lib/bug.c',
                          'lib/utils.c'],
-                        define_macros   = [('_GNU_SOURCE',None)]),
+                        define_macros   = [('_GNU_SOURCE',None)],
+                        language        = 'c'),
                   ],
 
     package_dir = {'wendelin': ''},
@@ -267,7 +274,7 @@ setup(
                    'ZODB >= 4', # for ZBigFile / ZBigArray
                    'zodbtools >= 0.0.0.dev8', # lib.zodb.dbstoropen + ...
 
-                   'pygolang >= 0.0.2', # defer, sync.WaitGroup, ...
+                   'pygolang >= 0.0.8', # defer, sync.WaitGroup, pyx/nogil channels ...
 
                    'six',       # compat py2/py3
 
