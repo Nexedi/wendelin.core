@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from setuptools import setup, Extension, Command, find_packages
+from setuptools import setup, Extension as _Ext, Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from setuptools.command.build_ext import build_ext as _build_ext
 from pkg_resources import working_set, EntryPoint
@@ -28,47 +28,52 @@ import os
 import sys
 
 
-_bigfile = Extension('wendelin.bigfile._bigfile',
-            sources = [
-                'bigfile/_bigfile.c',
-                'bigfile/pagefault.c',
-                'bigfile/pagemap.c',
-                'bigfile/ram.c',
-                'bigfile/ram_shmfs.c',
-                'bigfile/ram_hugetlbfs.c',
-                'bigfile/virtmem.c',
-                'lib/bug.c',
-                'lib/utils.c',
-            ],
-            include_dirs = [
-                '.',
-                './include',
-                './3rdparty/ccan',
-                './3rdparty/include'
-            ],
-            define_macros       = [('_GNU_SOURCE',None)],
-            extra_compile_args  = [
-                '-std=gnu99',           # declarations inside for-loop
-                '-fplan9-extensions',   # anonymous-structs + simple inheritance
-                '-fvisibility=hidden',  # by default symbols not visible outside DSO
+# _with_defaults calls what(*argv, **kw) with kw amended with default build flags.
+# e.g. _with_defaults(_Ext, *argv, **kw)
+def _with_defaults(what, *argv, **kw):
+    kw = kw.copy()
+    kw['include_dirs'] = [
+            '.',
+            './include',
+            './3rdparty/ccan',
+            './3rdparty/include',
+        ]
 
-                # in C99 declaration after statement is ok, and we explicitly compile with -std=gnu99.
-                # Python >= 3.4 however adds -Werror=declaration-after-statement even for extension
-                # modules irregardless of their compilation flags:
-                #
-                #   https://bugs.python.org/issue21121
-                #
-                # ensure there is no warnings / errors for decl-after-statements.
-                '-Wno-declaration-after-statement',
-                '-Wno-error=declaration-after-statement',
-            ],
+    ccdefault = [
+        '-std=gnu99',           # declarations inside for-loop
+        '-fplan9-extensions',   # anonymous-structs + simple inheritance
+        '-fvisibility=hidden',  # by default symbols not visible outside DSO
 
-            # can't - at runtime links with either python (without libpython) or libpython
-            # linking with both libpython and python would be wrong
-            #extra_link_args     = [
-            #    '-Wl,--no-undefined',   # check DSO for undefined symbols at link time
-            #]
-            )
+        # in C99 declaration after statement is ok, and we explicitly compile with -std=gnu99.
+        # Python >= 3.4 however adds -Werror=declaration-after-statement even for extension
+        # modules irregardless of their compilation flags:
+        #
+        #   https://bugs.python.org/issue21121
+        #
+        # ensure there is no warnings / errors for decl-after-statements.
+        '-Wno-declaration-after-statement',
+        '-Wno-error=declaration-after-statement',
+    ]
+
+    _ = kw.get('extra_compile_args', [])[:]
+    _[0:0] = ccdefault
+    kw['extra_compile_args'] = _
+
+    lddefault = []
+    # python extensions cannot be built with -Wl,--no-undefined: at runtime
+    # they link with either python (without libpython) or libpython. linking
+    # with both libpython and python would be wrong.
+    if 0:
+        lddefault.append('-Wl,--no-undefined')  # check DSO for undefined symbols at link time
+
+    _ = kw.get('extra_link_args', [])[:]
+    _[0:0] = lddefault
+    kw['extra_link_args'] = _
+
+    return what(*argv, **kw)
+
+
+def Ext(*argv, **kw):   return _with_defaults(_Ext, *argv, **kw)
 
 
 # build_py that
@@ -239,7 +244,19 @@ setup(
 
     keywords    = 'bigdata out-of-core numpy virtual-memory',
 
-    ext_modules = [_bigfile],
+    ext_modules = [
+                    Ext('wendelin.bigfile._bigfile',
+                        ['bigfile/_bigfile.c',
+                         'bigfile/pagefault.c',
+                         'bigfile/pagemap.c',
+                         'bigfile/ram.c',
+                         'bigfile/ram_shmfs.c',
+                         'bigfile/ram_hugetlbfs.c',
+                         'bigfile/virtmem.c',
+                         'lib/bug.c',
+                         'lib/utils.c'],
+                        define_macros   = [('_GNU_SOURCE',None)]),
+                  ],
 
     package_dir = {'wendelin': ''},
     packages    = ['wendelin'] + ['wendelin.%s' % _ for _ in
