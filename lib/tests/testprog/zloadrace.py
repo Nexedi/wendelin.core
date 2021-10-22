@@ -87,7 +87,6 @@ concurrency bugs that lead to corrupt data.
 
 from __future__ import print_function
 from ZODB import DB
-from ZODB.FileStorage import FileStorage
 from ZODB.POSException import ConflictError
 import transaction
 from persistent import Persistent
