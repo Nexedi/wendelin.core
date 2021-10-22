@@ -39,6 +39,7 @@ all	: bigfile/_bigfile.so
 ccan_config := 3rdparty/ccan/config.h
 
 bigfile/_bigfile.so : $(ccan_config) FORCE
+	$(PYTHON) setup.py build_dso --inplace
 	$(PYTHON) setup.py ll_build_ext --inplace
 
 

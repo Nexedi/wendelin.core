@@ -70,7 +70,9 @@ def _with_defaults(what, *argv, **kw):
     else:
         ccdefault.append('-std=gnu++11')    # not c++11 since we use typeof
 
-    ccdefault.append('-fvisibility=hidden')  # by default symbols not visible outside DSO
+    # DSOs are not yet annotated for visibility
+    if what != _DSO:
+        ccdefault.append('-fvisibility=hidden')  # by default symbols not visible outside DSO
 
     _ = kw.get('extra_compile_args', [])[:]
     _[0:0] = ccdefault
@@ -249,6 +251,18 @@ def readfile(path):
     with open(path, 'r') as f:
         return f.read()
 
+libvirtmem_h = [
+    '3rdparty/include/linux/list.h',
+    'include/wendelin/bigfile/file.h',
+    'include/wendelin/bigfile/pagemap.h',
+    'include/wendelin/bigfile/ram.h',
+    'include/wendelin/bigfile/types.h',
+    'include/wendelin/bigfile/virtmem.h',
+    'include/wendelin/bug.h',
+    'include/wendelin/list.h',
+    'include/wendelin/utils.h',
+]
+
 setup(
     name        = 'wendelin.core',
     version     = '0.13',
@@ -262,32 +276,29 @@ setup(
 
     keywords    = 'bigdata out-of-core numpy virtual-memory',
 
+    x_dsos      = [DSO('wendelin.bigfile.libvirtmem',
+                    ['bigfile/pagefault.c',
+                     'bigfile/pagemap.c',
+                     'bigfile/ram.c',
+                     'bigfile/ram_shmfs.c',
+                     'bigfile/ram_hugetlbfs.c',
+                     'bigfile/virtmem.c',
+                     'lib/bug.c',
+                     'lib/utils.c'],
+                    depends = libvirtmem_h,
+                    define_macros       = [('_GNU_SOURCE',None)],
+                    language = 'c')],
+
     ext_modules = [
                     PyGoExt('wendelin.bigfile._bigfile',
-                        ['bigfile/_bigfile.c',
-                         'bigfile/pagefault.c',
-                         'bigfile/pagemap.c',
-                         'bigfile/ram.c',
-                         'bigfile/ram_shmfs.c',
-                         'bigfile/ram_hugetlbfs.c',
-                         'bigfile/virtmem.c',
-                         'lib/bug.c',
-                         'lib/utils.c'],
+                        ['bigfile/_bigfile.c'],
                         depends = [
                          'bigfile/_bigfile.h',
                          'include/wendelin/compat_py2.h',
-                         '3rdparty/include/linux/list.h',
-                         'include/wendelin/bigfile/file.h',
-                         'include/wendelin/bigfile/pagemap.h',
-                         'include/wendelin/bigfile/ram.h',
-                         'include/wendelin/bigfile/types.h',
-                         'include/wendelin/bigfile/virtmem.h',
-                         'include/wendelin/bug.h',
-                         'include/wendelin/list.h',
-                         'include/wendelin/utils.h',
-                        ],
+                        ] + libvirtmem_h,
                         define_macros   = [('_GNU_SOURCE',None)],
-                        language        = 'c'),
+                        language        = 'c',
+                        dsos = ['wendelin.bigfile.libvirtmem']),
                   ],
 
     package_dir = {'wendelin': ''},
