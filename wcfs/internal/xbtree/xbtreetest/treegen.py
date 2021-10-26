@@ -20,7 +20,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 """Program treegen provides infrastructure to generate ZODB BTree states.
 
-It will be used as helper for ΔBtail and ΔFtail tests.
+It is used as helper for ΔBtail and ΔFtail tests.
 
 The following subcommands are provided:
 

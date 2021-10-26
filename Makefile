@@ -186,7 +186,9 @@ test.py.drd: bigfile/_bigfile.so wcfs/wcfs
 
 # run go tests
 test.go	:
-	cd wcfs && $(GO) test -count=1 ./... # -count=1 disables tests caching
+	# -timeout=20m: xbtree tests are computationally expensive, and
+	# sometime cross 10 minutes border when testnodes are otherwise loaded.
+	cd wcfs && $(GO) test -timeout=20m -count=1 ./... # -count=1 disables tests caching
 
 
 # test pagefault for double/real faults - it should crash

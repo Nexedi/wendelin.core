@@ -20,7 +20,7 @@
 """Package xbtree provides utilities for inspecting/manipulating internal
 structure of integer-keyed BTrees.
 
-It will be primarily used to help verify ΔBTail in WCFS.
+It is primarily used to help verify ΔBTail in WCFS.
 
 - `Tree` represents a tree node.
 - `Bucket` represents a bucket node.

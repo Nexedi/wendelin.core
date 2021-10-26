@@ -56,7 +56,9 @@ const KeyMin  = blib.KeyMin
 type Value  = zodb.Oid
 const VDEL  = zodb.InvalidOid
 
+type setKey = set.I64
 type setOid = set.Oid
+type setTid = set.Tid
 
 
 // pathEqual returns whether two paths are the same.
@@ -98,6 +100,10 @@ func zgetNodeOrNil(ctx context.Context, zconn *zodb.Connection, oid zodb.Oid) (n
 	return node, nil
 }
 
+
+func kstr(key Key) string {
+	return blib.KStr(key)
+}
 
 func panicf(format string, argv ...interface{}) {
 	panic(fmt.Sprintf(format, argv...))
