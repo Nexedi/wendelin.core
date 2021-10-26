@@ -346,7 +346,7 @@ setup(
                   ],
 
     extras_require = {
-                   'test': ['pytest'],
+                   'test': ['pytest', 'scipy'],
     },
 
     cmdclass    = {'build_ext':     build_ext,
