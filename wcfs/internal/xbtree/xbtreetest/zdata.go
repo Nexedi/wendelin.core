@@ -18,27 +18,37 @@
 // See https://www.nexedi.com/licensing for rationale and options.
 
 package xbtreetest
+// access to ZBlk data
 
 import (
-	"reflect"
-	"testing"
+	"context"
+
+	"lab.nexedi.com/kirr/go123/exc"
+
+	"lab.nexedi.com/kirr/neo/go/zodb"
+	_ "lab.nexedi.com/kirr/neo/go/zodb/wks"
 )
 
-func TestKVDiff(t *testing.T) {
-	kv1 := map[Key]string{1:"a", 3:"c", 4:"d"}
-	kv2 := map[Key]string{1:"b",        4:"d", 5:"e"}
-	got  := KVDiff(kv1, kv2)
-	want := map[Key]Δstring{1:{"a","b"}, 3:{"c",DEL}, 5:{DEL,"e"}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("error:\ngot:  %v\nwant: %v", got, want)
+// ZBlk-related functions are imported at runtime by package xbtreetest/init
+var (
+	ZGetBlkData func(context.Context, *zodb.Connection, zodb.Oid) (string, error)
+)
+
+func zassertInitDone() {
+	if ZGetBlkData == nil {
+		panic("xbtreetest/zdata not initialized -> import xbtreetest/init to fix")
 	}
 }
 
-func TestKVTxt(t *testing.T) {
-	kv := map[Key]string{3:"hello", 1:"zzz", 4:"world"}
-	got  := KVTxt(kv)
-	want := "1:zzz,3:hello,4:world"
-	if got != want {
-		t.Fatalf("error:\ngot:  %q\nwant: %q", got, want)
+// xzgetBlkData loads block data from ZBlk object specified by its oid.
+func xzgetBlkData(ctx context.Context, zconn *zodb.Connection, zblkOid zodb.Oid) string {
+	zassertInitDone()
+	X := exc.Raiseif
+
+	if zblkOid == VDEL {
+		return DEL
 	}
+
+	data, err := ZGetBlkData(ctx, zconn, zblkOid); X(err)
+	return string(data)
 }

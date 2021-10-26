@@ -23,6 +23,9 @@ package xbtreetest
 import (
 	"fmt"
 
+	"lab.nexedi.com/kirr/neo/go/zodb"
+
+	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/set"
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xbtree/blib"
 )
 
@@ -37,6 +40,10 @@ type Key      = blib.Key
 type KeyRange = blib.KeyRange
 const KeyMax  = blib.KeyMax
 const KeyMin  = blib.KeyMin
+
+type setKey = set.I64
+
+const VDEL  = zodb.InvalidOid
 
 
 func panicf(format string, argv ...interface{}) {

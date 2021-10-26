@@ -18,12 +18,38 @@
 // See https://www.nexedi.com/licensing for rationale and options.
 
 package xbtreetest
+// kvdiff + friends
 
 import (
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// KVDiff returns difference in between kv1 and kv2.
+const DEL = "ø" // DEL means deletion
+type Δstring struct {
+	Old string
+	New string
+}
+func KVDiff(kv1, kv2 map[Key]string) map[Key]Δstring {
+	delta := map[Key]Δstring{}
+	keys := setKey{}
+	for k := range kv1 { keys.Add(k) }
+	for k := range kv2 { keys.Add(k) }
+
+	for k := range keys {
+		v1, ok := kv1[k]
+		if !ok { v1 = DEL }
+		v2, ok := kv2[k]
+		if !ok { v2 = DEL }
+		if v1 != v2 {
+			delta[k] = Δstring{v1,v2}
+		}
+	}
+
+	return delta
+}
 
 // KVTxt returns string representation of {} kv.
 func KVTxt(kv map[Key]string) string {
