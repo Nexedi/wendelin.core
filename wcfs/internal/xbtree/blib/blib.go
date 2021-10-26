@@ -25,6 +25,8 @@ import (
 	"math"
 
 	"lab.nexedi.com/kirr/neo/go/zodb/btree"
+
+	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/set"
 )
 
 // XXX instead of generics
@@ -39,6 +41,8 @@ type KeyRange    = btree.LKeyRange
 const KeyMax Key = math.MaxInt64
 const KeyMin Key = math.MinInt64
 
+type setOid = set.Oid
+
 
 // KStr formats key as string.
 func KStr(k Key) string {
@@ -49,4 +53,9 @@ func KStr(k Key) string {
 		return "∞"
 	}
 	return fmt.Sprintf("%d", k)
+}
+
+
+func panicf(format string, argv ...interface{}) {
+	panic(fmt.Sprintf(format, argv...))
 }
