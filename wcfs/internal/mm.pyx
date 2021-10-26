@@ -19,14 +19,117 @@
 
 # cython: language_level=2
 
-"""Package mm provides access to OS memory management interfaces."""
+"""Package mm provides access to OS memory management interfaces like mlock and mincore."""
 
 from posix cimport mman
 from cpython.exc cimport PyErr_SetFromErrno
+#from libc.stdio cimport printf
+
+# mlock2 is provided starting from glibc 2.27
+cdef extern from *:
+    """
+    #if defined(__GLIBC__)
+    #if !__GLIBC_PREREQ(2, 27)
+    #include <unistd.h>
+    #include <sys/syscall.h>
+    static int mlock2(const void *addr, size_t len, int flags) {
+    #ifndef SYS_mlock2
+        errno = ENOSYS;
+        return -1;
+    #else
+        long err = syscall(SYS_mlock2, addr, len, flags);
+        if (err != 0) {
+            errno = -err;
+            return -1;
+        }
+        return 0;
+    #endif
+    }
+    #endif
+    #endif
+
+    #ifndef MLOCK_ONFAULT
+    # define MLOCK_ONFAULT  1
+    #endif
+    """
+    pass
 
 cdef extern from "<sys/user.h>":
     cpdef enum:
         PAGE_SIZE
+
+cpdef enum:
+    PROT_EXEC       = mman.PROT_EXEC
+    PROT_READ       = mman.PROT_READ
+    PROT_WRITE      = mman.PROT_WRITE
+    PROT_NONE       = mman.PROT_NONE
+
+    MLOCK_ONFAULT   = mman.MLOCK_ONFAULT
+    MCL_CURRENT     = mman.MCL_CURRENT
+    MCL_FUTURE      = mman.MCL_FUTURE
+    #MCL_ONFAULT     = mman.MCL_ONFAULT
+
+    MADV_NORMAL     = mman.MADV_NORMAL
+    MADV_RANDOM     = mman.MADV_RANDOM
+    MADV_SEQUENTIAL = mman.MADV_SEQUENTIAL
+    MADV_WILLNEED   = mman.MADV_WILLNEED
+    MADV_DONTNEED   = mman.MADV_DONTNEED
+    #MADV_FREE       = mman.MADV_FREE
+    MADV_REMOVE     = mman.MADV_REMOVE
+
+    MS_ASYNC        = mman.MS_ASYNC
+    MS_SYNC         = mman.MS_SYNC
+    MS_INVALIDATE   = mman.MS_INVALIDATE
+
+# incore returns bytearray vector indicating whether page of mem is in core or not.
+#
+# mem start must be page-aligned.
+def incore(const unsigned char[::1] mem not None) -> bytearray:
+    cdef size_t size = mem.shape[0]
+    if size == 0:
+        return bytearray()
+    cdef const void *addr = &mem[0]
+
+    # size in pages; rounded up
+    cdef size_t pgsize = (size + (PAGE_SIZE-1)) // PAGE_SIZE
+
+    #printf("\n\n%p %ld\n", addr, size)
+
+    incore = bytearray(pgsize)
+    cdef unsigned char[::1] incorev = incore
+
+    cdef err = mman.mincore(<void *>addr, size, &incorev[0])
+    if err:
+        PyErr_SetFromErrno(OSError)
+
+    return incore
+
+
+# lock locks mem pages to be resident in RAM.
+#
+# see mlock2(2) for description of flags.
+def lock(const unsigned char[::1] mem not None, int flags):
+    cdef const void *addr = &mem[0]
+    cdef size_t      size = mem.shape[0]
+
+    cdef err = mman.mlock2(addr, size, flags)
+    if err:
+        PyErr_SetFromErrno(OSError)
+
+    return
+
+
+# unlock unlocks mem pages from being pinned in RAM.
+def unlock(const unsigned char[::1] mem not None):
+    cdef const void *addr = &mem[0]
+    cdef size_t      size = mem.shape[0]
+
+    cdef err = mman.munlock(addr, size)
+    if err:
+        PyErr_SetFromErrno(OSError)
+
+    return
+
 
 from posix.types cimport off_t
 
@@ -47,6 +150,20 @@ def unmap(const unsigned char[::1] mem not None):
     cdef size_t      size = mem.shape[0]
 
     cdef err = mman.munmap(<void *>addr, size)
+    if err:
+        PyErr_SetFromErrno(OSError)
+
+    return
+
+
+# advise advises kernel about use of mem's memory.
+#
+# see madvise(2) for details.
+def advise(const unsigned char[::1] mem not None, int advice):
+    cdef const void *addr = &mem[0]
+    cdef size_t      size = mem.shape[0]
+
+    cdef err = mman.madvise(<void *>addr, size, advice)
     if err:
         PyErr_SetFromErrno(OSError)
 

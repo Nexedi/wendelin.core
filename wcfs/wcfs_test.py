@@ -37,6 +37,7 @@ import sys, os, os.path
 from thread import get_ident as gettid
 from time import gmtime
 from errno import EINVAL, ENOTCONN
+from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, b
 from golang import context, time
 from zodbtools.util import ashex as h
@@ -65,6 +66,12 @@ def setup_module():
     if gorace != "":
         gorace += " "
     os.environ["GORACE"] = gorace + "halt_on_error=1"
+
+    # ↑ memlock soft-limit till its hard maximum
+    # (tFile needs ~ 64M to mlock while default memlock soft-limit is usually 64K)
+    memlockS, memlockH = getrlimit(RLIMIT_MEMLOCK)
+    if memlockS != memlockH:
+        setrlimit(RLIMIT_MEMLOCK, (memlockH, memlockH))
 
     global testdb, testzurl, testmntpt
     testdb = getTestDB()
@@ -527,11 +534,12 @@ class tDB(tWCFS):
 
 # tFile provides testing environment for one bigfile opened on wcfs.
 #
-# ._blk() provides access to data of a block.
-# .assertBlk/.assertData assert
-# on state of data.
+# ._blk() provides access to data of a block. .cached() gives state of which
+# blocks are in OS pagecache. .assertCache and .assertBlk/.assertData assert
+# on state of cache and data.
 class tFile:
     # maximum number of pages we mmap for 1 file.
+    # this should be not big not to exceed mlock limit.
     _max_tracked_pages = 8
 
     def __init__(t, tdb, zf, at=None):
@@ -549,9 +557,56 @@ class tFile:
         st = os.fstat(t.f.fileno())
         assert st.st_blksize == t.blksize
 
-        # mmap the file past the end up to _max_tracked_pages
+        # mmap the file past the end up to _max_tracked_pages and setup
+        # invariants on which we rely to verify OS cache state:
+        #
+        # 1. lock pages with MLOCK_ONFAULT: this way after a page is read by
+        #    mmap access we have the guarantee from kernel that the page will
+        #    stay in pagecache.
+        #
+        # 2. madvise memory with MADV_SEQUENTIAL and MADV_RANDOM in interleaved
+        #    mode. This adjusts kernel readahead (which triggers for
+        #    MADV_NORMAL or MADV_SEQUENTIAL vma) to not go over to next block
+        #    and thus a read access to one block won't trigger implicit read
+        #    access to its neighbour block.
+        #
+        #      https://www.quora.com/What-heuristics-does-the-adaptive-readahead-implementation-in-the-Linux-kernel-use
+        #      https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/madvise.c?h=v5.2-rc4#n51
+        #
+        #    we don't use MADV_NORMAL instead of MADV_SEQUENTIAL, because for
+        #    MADV_NORMAL, there is not only read-ahead, but also read-around,
+        #    which might result in accessing previous block.
+        #
+        #    we don't disable readahead universally, since enabled readahead
+        #    helps to test how wcfs handles simultaneous read triggered by
+        #    async kernel readahead vs wcfs uploading data for the same block
+        #    into OS cache. Also, fully enabled readahead is how wcfs is
+        #    actually used in practice.
         assert t.blksize % mm.PAGE_SIZE == 0
         t.fmmap = mm.map_ro(t.f.fileno(), 0, t._max_tracked_pages*t.blksize)
+
+        mm.lock(t.fmmap, mm.MLOCK_ONFAULT)
+
+        for blk in range(t._max_tracked_pages):
+            blkmmap = t.fmmap[blk*t.blksize:(blk+1)*t.blksize]
+            # NOTE the kernel does not start readahead from access to
+            # MADV_RANDOM vma, but for a MADV_{NORMAL/SEQUENTIAL} vma it starts
+            # readahead which can go _beyond_ vma that was used to decide RA
+            # start. For this reason - to prevent RA started at one block to
+            # overlap with the next block, we put MADV_RANDOM vma at the end of
+            # every block covering last 1/8 of it.
+            # XXX implicit assumption that RA window is < 1/8·blksize
+            #
+            # NOTE with a block completely covered by MADV_RANDOM the kernel
+            # issues 4K sized reads; wcfs starts uploading into cache almost
+            # immediately, but the kernel still issues many reads to read the
+            # full 2MB of the block. This works slowly.
+            # XXX -> investigate and maybe make read(while-uploading) wait for
+            # uploading to complete and only then return? (maybe it will help
+            # performance even in normal case)
+            _ = len(blkmmap)*7//8
+            mm.advise(blkmmap[:_], mm.MADV_SEQUENTIAL)
+            mm.advise(blkmmap[_:], mm.MADV_RANDOM)
 
     def close(t):
         t.tdb._files.remove(t)
@@ -569,6 +624,24 @@ class tFile:
         if t.at is None:    # notify tDB only for head/file access
             t.tdb._blkheadaccess(t.zf, blk)
 
+    # cached returns [] with indicating whether a file block is cached or not.
+    # 1 - cached, 0 - not cached, fractional (0,1) - some pages of the block are cached some not.
+    def cached(t):
+        l = t._sizeinblk()
+        incorev = mm.incore(t.fmmap[:l*t.blksize])
+        # incorev is in pages; convert to in blocks
+        assert t.blksize % mm.PAGE_SIZE == 0
+        blkpages = t.blksize // mm.PAGE_SIZE
+        cachev = [0.]*l
+        for i, v in enumerate(incorev):
+            blk = i // blkpages
+            cachev[blk] += bool(v)
+        for blk in range(l):
+            cachev[blk] /= blkpages
+            if cachev[blk] == int(cachev[blk]):
+                cachev[blk] = int(cachev[blk])  # 0.0 -> 0, 1.0 -> 1
+        return cachev
+
     # _sizeinblk returns file size in blocks.
     def _sizeinblk(t):
         st = os.fstat(t.f.fileno())
@@ -576,6 +649,12 @@ class tFile:
         assert st.st_size % t.blksize == 0
         assert st.st_size // t.blksize <= t._max_tracked_pages
         return st.st_size // t.blksize
+
+    # assertCache asserts on state of OS cache for file.
+    #
+    # incorev is [] of 1/0 representing whether block data is present or not.
+    def assertCache(t, incorev):
+        assert t.cached() == incorev
 
     # assertBlk asserts that file[blk] has data as expected.
     #
@@ -603,11 +682,27 @@ class tFile:
         dataok += b'\0'*(t.blksize - len(dataok))   # tailing zeros
         assert blk < t._sizeinblk()
 
+        # access to this block must not trigger access to other blocks
+        incore_before = t.cached()
+        def _():
+            incore_after = t.cached()
+            incore_before[blk] = 'x'
+            incore_after [blk] = 'x'
+            assert incore_before == incore_after
+        defer(_)
+
+        cached = t.cached()[blk]
+        assert cached in (0, 1) # every check accesses a block in full
+
         blkview = t._blk(blk)
+        assert t.cached()[blk] == cached
 
         # verify full data of the block
         # TODO(?) assert individually for every block's page? (easier debugging?)
         assert blkview.tobytes() == dataok
+
+        # we just accessed the block in full - it has to be in OS cache completely
+        assert t.cached()[blk] == 1
 
 
     # assertData asserts that file has data blocks as specified.
@@ -624,10 +719,15 @@ class tFile:
         if mtime is not None:
             assert st.st_mtime == tidtime(mtime)
 
+        cachev = t.cached()
         for blk, dataok in enumerate(dataokv):
             if dataok == 'x':
                 continue
             t.assertBlk(blk, dataok)
+            cachev[blk] = 1
+
+        # all accessed blocks must be in cache after we touched them all
+        t.assertCache(cachev)
 
 
 # ---- infrastructure: helpers to query dFtail/accessed history ----
@@ -676,11 +776,13 @@ def test_wcfs_basic():
 
     # >>> file initially empty
     f = t.open(zf)
+    f.assertCache([])
     f.assertData ([], mtime=t.at0)
 
     # >>> (@at1) commit data -> we can see it on wcfs
     at1 = t.commit(zf, {2:'c1'})
 
+    f.assertCache([0,0,0])  # initially not cached
     f.assertData (['','','c1']) # TODO + mtime=t.head
 
     # >>> (@at2) commit again -> we can see both latest and snapshotted states
@@ -688,10 +790,13 @@ def test_wcfs_basic():
     at2 = t.commit(zf, {2:'c2', 3:'d2', 5:'f2'})
 
     # f @head
+    #f.assertCache([1,1,0,0,0,0])                 TODO enable after wcfs supports invalidations
     f.assertData (['','', 'c2', 'd2', 'x','x']) # TODO + mtime=t.head
+    f.assertCache([1,1,1,1,0,0])
 
     # f @at1
     f1 = t.open(zf, at=at1)
+    #f1.assertCache([0,0,1])       TODO enable after wcfs supports invalidations
     f1.assertData (['','','c1']) # TODO + mtime=at1
 
 
@@ -699,14 +804,19 @@ def test_wcfs_basic():
     f2 = t.open(zf, at=at2)
     at3 = t.commit(zf, {0:'a3', 2:'c3', 5:'f3'})
 
+    #f.assertCache([0,1,0,1,0,0])   TODO enable after wcfs supports invalidations
+
     # f @head
+    #f.assertCache([0,1,0,1,0,0])   TODO enable after wcfs supports invalidations
     f.assertData (['a3','','c3','d2','x','x']) # TODO + mtime=t.head
 
     # f @at2
     # NOTE f(2) is accessed but via @at/ not head/  ; f(2) in head/zf remains unaccessed
+    #f2.assertCache([0,0,1,0,0,0])  TODO enable after wcfs supports invalidations
     f2.assertData (['','','c2','d2','','f2']) # TODO mtime=at2
 
     # f @at1
+    #f1.assertCache([1,1,1])        TODO enable after wcfs supports invalidations
     f1.assertData (['','','c1']) # TODO mtime=at1
 
 
