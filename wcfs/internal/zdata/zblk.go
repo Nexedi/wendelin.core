@@ -19,7 +19,7 @@
 
 // Package zdata provides access for wendelin.core in-ZODB data.
 //
-// ZBlk* + ZBigFile.
+// ZBlk* + ZBigFile + ΔFtail for ZBigFile-level ZODB history.
 package zdata
 
 // module: "wendelin.bigfile.file_zodb"
