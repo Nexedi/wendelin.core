@@ -1,0 +1,165 @@
+// Copyright (C) 2015-2021  Nexedi SA and Contributors.
+//                          Kirill Smelkov <kirr@nexedi.com>
+//
+// This program is free software: you can Use, Study, Modify and Redistribute
+// it under the terms of the GNU General Public License version 3, or (at your
+// option) any later version, as published by the Free Software Foundation.
+//
+// You can also Link and Combine this program with other software covered by
+// the terms of any of the Free Software licenses or any of the Open Source
+// Initiative approved licenses and Convey the resulting work. Corresponding
+// source of such a combination shall include the source code for all other
+// software used.
+//
+// This program is distributed WITHOUT ANY WARRANTY; without even the implied
+// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+//
+// See COPYING file for full licensing terms.
+// See https://www.nexedi.com/licensing for rationale and options.
+
+package set
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// Set is a set of VALUE.
+type Set map[VALUE]struct{}
+
+// Add adds v to the set.
+func (s Set) Add(v VALUE) {
+	s[v] = struct{}{}
+}
+
+// Del removes v from the set.
+// it is noop if v was not in the set.
+func (s Set) Del(v VALUE) {
+	delete(s, v)
+}
+
+// Has checks whether the set contains v.
+func (s Set) Has(v VALUE) bool {
+	_, ok := s[v]
+	return ok
+}
+
+// Update adds t values to s.
+func (s Set) Update(t Set) {
+	for v := range t {
+		s.Add(v)
+	}
+}
+
+// Elements returns all elements of set as slice.
+func (s Set) Elements() []VALUE {
+	ev := make([]VALUE, len(s))
+	i := 0
+	for e := range s {
+		ev[i] = e
+		i++
+	}
+	return ev
+}
+
+// Union returns s ∪ t
+func (s Set) Union(t Set) Set {
+	// l = max(len(s), len(t))
+	l := len(s)
+	if lt := len(t); lt > l {
+		l = lt
+	}
+
+	u := make(Set, l)
+
+	for v := range s {
+		u.Add(v)
+	}
+	for v := range t {
+		u.Add(v)
+	}
+	return u
+}
+
+// Intersection returns s ∩ t
+func (s Set) Intersection(t Set) Set {
+	i := Set{}
+	for v := range s {
+		if t.Has(v) {
+			i.Add(v)
+		}
+	}
+	return i
+}
+
+// Difference returns s\t.
+func (s Set) Difference(t Set) Set {
+	d := Set{}
+	for v := range s {
+		if !t.Has(v) {
+			d.Add(v)
+		}
+	}
+	return d
+}
+
+// SymmetricDifference returns s Δ t.
+func (s Set) SymmetricDifference(t Set) Set {
+	d := Set{}
+	for v := range s {
+		if !t.Has(v) {
+			d.Add(v)
+		}
+	}
+	for v := range t {
+		if !s.Has(v) {
+			d.Add(v)
+		}
+	}
+	return d
+}
+
+// Equal returns whether a == b.
+func (a Set) Equal(b Set) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for v := range a {
+		_, ok := b[v]
+		if !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Clone returns copy of the set.
+func (orig Set) Clone() Set {
+	klon := make(Set, len(orig))
+	for v := range orig {
+		klon.Add(v)
+	}
+	return klon
+}
+
+// --------
+
+func (s Set) SortedElements() []VALUE {
+	ev := s.Elements()
+	sort.Slice(ev, func(i, j int) bool {
+		return ev[i] < ev[j]
+	})
+	return ev
+}
+
+func (s Set) String() string {
+	ev := s.SortedElements()
+	strv := make([]string, len(ev))
+	for i, v := range ev {
+		strv[i] = fmt.Sprintf("%v", v)
+	}
+	return "{" + strings.Join(strv, " ") + "}"
+}
