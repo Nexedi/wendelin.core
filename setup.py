@@ -18,6 +18,7 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 from golang.pyx.build import setup, DSO as _DSO, Extension as _PyGoExt, build_ext as _build_ext
+from setuptools_dso import Extension
 from setuptools import Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from pkg_resources import working_set, EntryPoint
@@ -73,8 +74,12 @@ def _with_defaults(what, *argv, **kw):
         ccdefault.append('-std=gnu++11')    # not c++11 since we use typeof
 
     # DSOs are not yet annotated for visibility
+    # XXX pyext besides _bigfile.so also cannot do this because PyMODINIT_FUNC
+    # does not include export in it. TODO reenable for _bigfile.so
+    """
     if what != _DSO:
         ccdefault.append('-fvisibility=hidden')  # by default symbols not visible outside DSO
+    """
 
     _ = kw.get('extra_compile_args', [])[:]
     _[0:0] = ccdefault
@@ -313,6 +318,15 @@ setup(
                         define_macros   = [('_GNU_SOURCE',None)],
                         language        = 'c',
                         dsos = ['wendelin.bigfile.libvirtmem']),
+
+                    PyGoExt('wendelin.wcfs.internal.wcfs_test',
+                        ['wcfs/internal/wcfs_test.pyx']),
+
+                    Extension('wendelin.wcfs.internal.io',
+                        ['wcfs/internal/io.pyx']),
+
+                    Extension('wendelin.wcfs.internal.mm',
+                        ['wcfs/internal/mm.pyx']),
                   ],
 
     package_dir = {'wendelin': ''},

@@ -27,6 +27,8 @@ github.com/fsnotify/fsnotify v1.4.10-0.20200417215612-7f4cf4dd2b52 h1:0NmERxogGT
 github.com/fsnotify/fsnotify v1.4.10-0.20200417215612-7f4cf4dd2b52/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
 github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b h1:VKtxabqXZkF25pY9ekfRL6a582T4P37/31XEstQ5p58=
 github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
+github.com/golang/glog v1.0.0 h1:nfP3RFugxnNRyKgeWd4oI1nYvXpxrx8ck8ZrcizshdQ=
+github.com/golang/glog v1.0.0/go.mod h1:EWib/APOK0SL3dFbYqvxE3UYd8E6s1ouQ7iEp/0LWV4=
 github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
 github.com/golang/protobuf v1.3.2/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
@@ -60,6 +62,7 @@ github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfn
 github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
+github.com/kylelemons/godebug v0.0.0-20170820004349-d65d576e9348/go.mod h1:B69LEHPfb2qLo0BaaOLcbitczOKLWTsrBG9LczfCD4k=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/philhofer/fwd v1.1.1 h1:GdGcTjf5RNAxwS4QLsiMzJYj5KEvPJD3Abr261yRQXQ=
 github.com/philhofer/fwd v1.1.1/go.mod h1:gk3iGcWd9+svBvR0sR+KPcfE+RNWozjowpeBVG3ZVNU=
@@ -170,6 +173,12 @@ gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b h1:h8qDotaEPuJATrMmW04NCwg7v
 gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210215102255-f0cbba3ef97e h1:6eJe/VaiivudiUEc2R324WN5djDycNvM1IkSQrC9idk=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210215102255-f0cbba3ef97e/go.mod h1:oRyA5eK+pvJyv5otpO/DgccS8y/RvYMaO00GgRLGryc=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210610115330-7e0334c3e76a h1:1Kagc2s/E5p2iqLLyGBtJRDssIa0uPbUKEEjKUZKSM4=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210610115330-7e0334c3e76a/go.mod h1:oRyA5eK+pvJyv5otpO/DgccS8y/RvYMaO00GgRLGryc=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210910085851-e6ee85fd0a1e h1:QP8PhLssUs3SEoM+UfQLxfDke7uQtyte4FNu6cw00L4=
+lab.nexedi.com/kirr/go-fuse/v2 v2.0.0-20210910085851-e6ee85fd0a1e/go.mod h1:B1nGE/6RBFyBRC1RRnf23UpwCdyJ31eukw34oAKukAc=
 lab.nexedi.com/kirr/go123 v0.0.0-20210128150852-c20e95f0f789/go.mod h1:1wkWl3WhmutZiho+wsE7ymOKvRkN7hV3YZtL0f0gXTo=
 lab.nexedi.com/kirr/go123 v0.0.0-20210906140734-c9eb28d9e408 h1:H7YpNUDfTSvvRpKivUMrL9C09tQssQ6brEoX6K/OxOw=
 lab.nexedi.com/kirr/go123 v0.0.0-20210906140734-c9eb28d9e408/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=

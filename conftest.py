@@ -41,3 +41,20 @@ def transaction_reset():
     transaction.manager.clearSynchs()
     yield
     # nothing to run after test
+
+
+# enable log_cli on no-capture
+# (output during a test is a mixture of print and log)
+def pytest_configure(config):
+    if config.option.capture == "no":
+        config.inicfg['log_cli'] = "true"
+        assert config.getini("log_cli") is True
+        # -v   -> verbose wcfs.py logs
+        if config.option.verbose > 0:
+            import logging
+            wcfslog = logging.getLogger('wcfs')
+            wcfslog.setLevel(logging.INFO)
+        # -vv  -> verbose *.py logs
+        # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-d -alsologtostderr -v=1" ?
+        if config.option.verbose > 1:
+            config.inicfg['log_cli_level'] = "INFO"

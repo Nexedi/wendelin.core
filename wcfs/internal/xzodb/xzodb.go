@@ -21,8 +21,12 @@
 package xzodb
 
 import (
+	"context"
 	"fmt"
 
+	"lab.nexedi.com/kirr/go123/xcontext"
+
+	"lab.nexedi.com/kirr/neo/go/transaction"
 	"lab.nexedi.com/kirr/neo/go/zodb"
 )
 
@@ -41,4 +45,38 @@ func TypeOf(obj interface{}) string {
 	default:
 		return fmt.Sprintf("%T", obj)
 	}
+}
+
+// ZConn is zodb.Connection + associated read-only transaction under which
+// objects of the connection are accessed.
+type ZConn struct {
+	*zodb.Connection
+
+	// read-only transaction under which we access zodb.Connection data.
+	TxnCtx context.Context // XXX -> better directly store txn
+}
+
+// ZOpen opens new connection to ZODB database + associated read-only transaction.
+func ZOpen(ctx context.Context, zdb *zodb.DB, zopt *zodb.ConnOptions) (_ *ZConn, err error) {
+	// create new read-only transaction
+	txn, txnCtx := transaction.New(context.Background())
+	defer func() {
+		if err != nil {
+			txn.Abort()
+		}
+	}()
+
+	// XXX better ctx = transaction.PutIntoContext(ctx, txn)
+	ctx, cancel := xcontext.Merge(ctx, txnCtx)
+	defer cancel()
+
+	zconn, err := zdb.Open(ctx, zopt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ZConn{
+		Connection: zconn,
+		TxnCtx:     txnCtx,
+	}, nil
 }
