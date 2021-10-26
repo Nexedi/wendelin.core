@@ -40,7 +40,7 @@ from errno import EINVAL, ENOTCONN
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, b
 from golang import context, time
-from zodbtools.util import ashex as h
+from zodbtools.util import ashex as h, fromhex
 import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
@@ -299,6 +299,7 @@ def timeout(parent=context.background()):   # -> ctx
 
 
 # DF represents a change in files space.
+# it corresponds to ΔF in wcfs.go .
 class DF:
     # .rev      tid
     # .byfile   {} ZBigFile -> DFile
@@ -307,6 +308,7 @@ class DF:
         dF.byfile = {}
 
 # DFile represents a change to one file.
+# it is similar to ΔFile in wcfs.go .
 class DFile:
     # .rev      tid
     # .ddata    {} blk -> data
@@ -415,6 +417,10 @@ class tDB(tWCFS):
         t.tail   = t.root._p_jar.db().storage.lastTransaction()
         t.dFtail = [] # of DF; head = dFtail[-1].rev
 
+        # fh(.wcfs/zhead) + history of zhead read from there
+        t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
+        t._wc_zheadv  = []
+
         # tracked opened tFiles
         t._files    = set()
 
@@ -443,6 +449,7 @@ class tDB(tWCFS):
         for tf in t._files.copy():
             tf.close()
         assert len(t._files)   == 0
+        t._wc_zheadfh.close()
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
@@ -521,15 +528,18 @@ class tDB(tWCFS):
 
     # _wcsync makes sure wcfs is synchronized to latest committed transaction.
     def _wcsync(t):
-        # XXX stub: unmount/remount + close/reopen files until wcfs supports invalidations
-        files = t._files.copy()
-        for tf in files:
-            tf.close()
-        tWCFS.close(t)
-        tWCFS.__init__(t)
-        for tf in files:
-            tf.__init__(t, tf.zf, tf.at)
-        assert len(t._files) == len(files)
+        while len(t._wc_zheadv) < len(t.dFtail):
+            l = t._wc_zheadfh.readline()
+            #print('> zhead read: %r' % l)
+            l = l.rstrip('\n')
+            wchead = tAt(t, fromhex(l))
+            i = len(t._wc_zheadv)
+            if wchead != t.dFtail[i].rev:
+                raise RuntimeError("wcsync #%d: wczhead (%s) != zhead (%s)" % (i, wchead, t.dFtail[i].rev))
+            t._wc_zheadv.append(wchead)
+
+        # head/at = last txn of whole db
+        assert t.wc._read("head/at") == h(t.head)
 
 
 # tFile provides testing environment for one bigfile opened on wcfs.
@@ -763,7 +773,7 @@ def _blkDataAt(t, zf, blk, at): # -> (data, rev)
 # ---- actual tests to access data ----
 
 # exercise wcfs functionality
-# plain data access.
+# plain data access + wcfs handling of ZODB invalidations.
 @func
 def test_wcfs_basic():
     t = tDB(); zf = t.zfile
@@ -783,20 +793,20 @@ def test_wcfs_basic():
     at1 = t.commit(zf, {2:'c1'})
 
     f.assertCache([0,0,0])  # initially not cached
-    f.assertData (['','','c1']) # TODO + mtime=t.head
+    f.assertData (['','','c1'], mtime=t.head)
 
     # >>> (@at2) commit again -> we can see both latest and snapshotted states
     # NOTE blocks e(4) and f(5) will be accessed only in the end
     at2 = t.commit(zf, {2:'c2', 3:'d2', 5:'f2'})
 
     # f @head
-    #f.assertCache([1,1,0,0,0,0])                 TODO enable after wcfs supports invalidations
-    f.assertData (['','', 'c2', 'd2', 'x','x']) # TODO + mtime=t.head
+    f.assertCache([1,1,0,0,0,0])
+    f.assertData (['','', 'c2', 'd2', 'x','x'], mtime=t.head)
     f.assertCache([1,1,1,1,0,0])
 
     # f @at1
     f1 = t.open(zf, at=at1)
-    #f1.assertCache([0,0,1])       TODO enable after wcfs supports invalidations
+    f1.assertCache([0,0,1])
     f1.assertData (['','','c1']) # TODO + mtime=at1
 
 
@@ -804,21 +814,58 @@ def test_wcfs_basic():
     f2 = t.open(zf, at=at2)
     at3 = t.commit(zf, {0:'a3', 2:'c3', 5:'f3'})
 
-    #f.assertCache([0,1,0,1,0,0])   TODO enable after wcfs supports invalidations
+    f.assertCache([0,1,0,1,0,0])
+
+    # f @head is opened again -> cache must not be lost
+    f_ = t.open(zf)
+    f_.assertCache([0,1,0,1,0,0])
+    f_.close()
+    f.assertCache([0,1,0,1,0,0])
 
     # f @head
-    #f.assertCache([0,1,0,1,0,0])   TODO enable after wcfs supports invalidations
-    f.assertData (['a3','','c3','d2','x','x']) # TODO + mtime=t.head
+    f.assertCache([0,1,0,1,0,0])
+    f.assertData (['a3','','c3','d2','x','x'], mtime=t.head)
 
     # f @at2
     # NOTE f(2) is accessed but via @at/ not head/  ; f(2) in head/zf remains unaccessed
-    #f2.assertCache([0,0,1,0,0,0])  TODO enable after wcfs supports invalidations
+    f2.assertCache([0,0,1,0,0,0])
     f2.assertData (['','','c2','d2','','f2']) # TODO mtime=at2
 
     # f @at1
-    #f1.assertCache([1,1,1])        TODO enable after wcfs supports invalidations
+    f1.assertCache([1,1,1])
     f1.assertData (['','','c1']) # TODO mtime=at1
 
+
+    # >>> f close / open again -> cache must not be lost
+    # XXX a bit flaky since OS can evict whole f cache under pressure
+    f.assertCache([1,1,1,1,0,0])
+    f.close()
+    f = t.open(zf)
+    if f.cached() != [1,1,1,1,0,0]:
+        assert sum(f.cached()) > 4*1/2  # > 50%
+
+    # verify all blocks
+    f.assertData(['a3','','c3','d2','','f3'])
+    f.assertCache([1,1,1,1,1,1])
+
+
+# verify how wcfs processes ZODB invalidations when hole becomes a block with data.
+@func
+def test_wcfs_basic_hole2zblk():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    f = t.open(zf)
+    t.commit(zf, {2:'c1'})  # b & a are holes
+    f.assertCache([0,0,0])
+    f.assertData(['','','c1'])
+
+    t.commit(zf, {1:'b2'})  # hole -> zblk
+    f.assertCache([1,0,1])
+    f.assertData(['','b2','c1'])
+
+# TODO ZBlk copied from blk1 -> blk2 ; for the same file and for file1 -> file2
+# TODO ZBlk moved  from blk1 -> blk2 ; for the same file and for file1 -> file2
 
 # verify that read after file size returns (0, ok)
 # (the same behaviour as on e.g. ext4 and as requested by posix)

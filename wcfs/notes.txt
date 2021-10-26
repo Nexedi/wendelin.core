@@ -1,0 +1,73 @@
+==============================================
+ Additional notes to documentation in wcfs.go
+==============================================
+
+This file contains notes additional to usage documentation and internal
+organization overview in wcfs.go .
+
+
+Notes on OS pagecache control
+=============================
+
+The cache of snapshotted bigfile can be pre-made hot if invalidated region
+was already in pagecache of head/bigfile/file:
+
+- we can retrieve a region from pagecache of head/file with FUSE_NOTIFY_RETRIEVE.
+- we can store that retrieved data into pagecache region of @<revX>/ with FUSE_NOTIFY_STORE.
+- we can invalidate a region from pagecache of head/file with FUSE_NOTIFY_INVAL_INODE.
+
+we have to disable FUSE_AUTO_INVAL_DATA to tell the kernel we are fully
+responsible for invalidating pagecache. If we don't, the kernel will be
+clearing whole cache of head/file on e.g. its mtime change.
+
+Note: disabling FUSE_AUTO_INVAL_DATA does not fully prevent kernel from automatically
+invalidating pagecache - e.g. it will invalidate whole cache on file size changes:
+
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fuse/inode.c?id=e0bc833d10#n233
+
+It was hoped that we could workaround it with using writeback mode (see !is_wb
+in the link above), but it turned out that in writeback mode the kernel indeed
+does not invalidate data cache on file size change, but neither it allows the
+filesystem to set the size due to external event (see https://git.kernel.org/linus/8373200b12
+"fuse: Trust kernel i_size only"). This prevents us to use writeback workaround
+as we cannot even update the file from being empty to have some data.
+
+-> we did the patch for FUSE to have proper flag for filesystem server to tell
+the kernel it is fully responsible for invalidating pagecache. The patch is
+part of Linux 5.2:
+
+  https://git.kernel.org/linus/ad2ba64dd489
+
+
+Kernel locks page on read/cache store/... - we have to be careful not to deadlock
+=================================================================================
+
+The kernel, when doing FUSE operations, locks corresponding pages. For example
+it locks a page, where it is going to read data into, before issuing FUSE read
+request. Correspondingly, on e.g. cache store, the kernel also locks page where
+data has to be stored.
+
+It is easy to deadlock if we don't take this locks into account. For example
+if we try to upload data to kernel pagecache from under serving read request,
+this can deadlock.
+
+Another case that needs to be cared about is interaction between uploadBlk and
+zwatcher: zheadMu being RWMutex, does not allow new RLocks to be taken once
+Lock request has been issued. Thus the following scenario is possible::
+
+   uploadBlk      os.Read        zwatcher
+
+                  page.Lock
+   zheadMu.Rlock
+                                 zheadMu.Lock
+   page.Lock
+                  zheadMu.Rlock
+
+
+- zwatcher is waiting for uploadBlk to release zheadMu;
+- uploadBlk is waiting for os.Read to release page;
+- os.Read is waiting for zwatcher to release zheadMu;
+- deadlock.
+
+To avoid such deadlocks zwatcher asks OS cache uploaders to pause while it is
+running, and retries taking zheadMu.Lock until all uploaders are indeed paused.
