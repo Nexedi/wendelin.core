@@ -43,6 +43,7 @@ const KeyMin  = blib.KeyMin
 
 type setKey = set.I64
 
+// XXX dup from xbtree  (to avoid import cycle)
 const VDEL  = zodb.InvalidOid
 
 

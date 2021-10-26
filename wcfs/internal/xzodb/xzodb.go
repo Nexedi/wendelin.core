@@ -22,9 +22,12 @@ package xzodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"lab.nexedi.com/kirr/go123/xcontext"
+	"lab.nexedi.com/kirr/go123/xerr"
 
 	"lab.nexedi.com/kirr/neo/go/transaction"
 	"lab.nexedi.com/kirr/neo/go/zodb"
@@ -79,4 +82,55 @@ func ZOpen(ctx context.Context, zdb *zodb.DB, zopt *zodb.ConnOptions) (_ *ZConn,
 		Connection: zconn,
 		TxnCtx:     txnCtx,
 	}, nil
+}
+
+// ZGetOrNil returns zconn.Get(oid), or (nil,ok) if the object does not exist.
+func ZGetOrNil(ctx context.Context, zconn *zodb.Connection, oid zodb.Oid) (_ zodb.IPersistent, err error) {
+	defer xerr.Contextf(&err, "zget %s@%s", oid, zconn.At())
+	obj, err := zconn.Get(ctx, oid)
+	if err != nil {
+		if IsErrNoData(err) {
+			err = nil
+		}
+		return nil, err
+	}
+
+	// activate the object to find out it really exists
+	// after removal on storage, the object might have stayed in Connection
+	// cache due to e.g. PCachePinObject, and it will be PActivate that
+	// will return "deleted" error.
+	err = obj.PActivate(ctx)
+	if err != nil {
+		if IsErrNoData(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	obj.PDeactivate()
+
+	return obj, nil
+}
+
+// IsErrNoData returns whether err is due to NoDataError or NoObjectError.
+func IsErrNoData(err error) bool {
+	var eNoData   *zodb.NoDataError
+	var eNoObject *zodb.NoObjectError
+
+	switch {
+	case errors.As(err, &eNoData):
+		return true
+	case errors.As(err, &eNoObject):
+		return true
+	default:
+		return false
+	}
+}
+
+// XidOf returns string representation of object xid.
+func XidOf(obj zodb.IPersistent) string {
+	if obj == nil || reflect.ValueOf(obj).IsNil() {
+		return "ø"
+	}
+	xid := zodb.Xid{At: obj.PJar().At(), Oid: obj.POid()}
+	return xid.String()
 }
