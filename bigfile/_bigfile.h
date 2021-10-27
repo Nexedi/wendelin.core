@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE__BIGFILE_H
 
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -26,11 +26,14 @@
  *
  * - `BigFile` is base class that allows implementing BigFile backends in Python.
  *   Users can inherit from BigFile, implement loadblk/storeblk and this way
- *   provide access to data managed from Python to virtmem subsystem.
+ *   provide access to data managed from Python to virtmem subsystem(*).
  * - `BigFileH` represents virtmem file handle for opened BigFile.
  *   It can be mmap'ed and provides writeout control.
  * - `VMA` represents mmap'ed part of a BigFileH.
  *   It provides buffer/memoryview interface for data access.
+ *
+ * (*) A subclass may additionally provide functionality to map file data into
+ *     memory. Please see BigFile documentation for details.
  */
 
 #include <Python.h>
@@ -97,8 +100,18 @@ typedef struct PyBigFileH PyBigFileH;
 /*
  * BigFile that can be implemented in python
  *
- * Allows subclasses to implement .loadblk() (& friends) in python.
+ * Allows subclasses to implement .loadblk() and .storeblk() in python.
  * For users .fileh_open() is exposed to get to file handles.
+ *
+ * A subclass may additionally provide functionality to map file data into
+ * memory: if subclass provides .blkmmapper attribute, it is treated as
+ * pycapsule with type "wendelin.bigfile.IBlkMMapper" and C-level bigfile_ops
+ * struct that provides .mmap_setup_read and other operations related to
+ * mmapping data. To avoid deadlocks all mmap-related functionality must be
+ * nogil and so cannot be implemented in Python.
+ *
+ * The primary user of .blkmmapper functionality will be _ZBigFile which uses WCFS
+ * and mmaps files from it to provide memory mappings for ZBigFile data.
  */
 struct PyBigFile {
     PyObject pyobj;
@@ -106,6 +119,11 @@ struct PyBigFile {
      * automatically adds support for weakrefs for in-python defined children   */
 
     BigFile file;
+
+    /* blkmmapper is PyCapsule object with type.blkmmapper if BigFile subclass has it | NULL */
+    PyObject     *blkmmapper;
+    /* bigfile_ops extracted from ^^^ capsule | NULL */
+    bigfile_ops  *blkmmap_ops;
 };
 typedef struct PyBigFile PyBigFile;
 

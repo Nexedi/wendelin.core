@@ -425,6 +425,19 @@ PyFunc(pyfileh_invalidate_page, "invalidate_page(pgoffset) - invalidate fileh pa
 }
 
 
+PyFunc(pyfileh_uses_mmap_overlay, "uses_mmap_overlay() - whether base data for all VMAs"
+                                  " of this fileh are taken as base-layer mmap")
+    (PyObject *pyfileh0, PyObject *args)
+{
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+
+    if (!PyArg_ParseTuple(args, ""))
+        return NULL;
+
+    return PyBool_FromLong(fileh->mmap_overlay);
+}
+
 
 /* pyfileh vs cyclic GC */
 static int
@@ -505,11 +518,12 @@ pyfileh_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 
 
 static /*const*/ PyMethodDef pyfileh_methods[] = {
-    {"mmap",            pyfileh_mmap,           METH_VARARGS,   pyfileh_mmap_doc},
-    {"dirty_writeout",  pyfileh_dirty_writeout, METH_VARARGS,   pyfileh_dirty_writeout_doc},
-    {"dirty_discard",   pyfileh_dirty_discard,  METH_VARARGS,   pyfileh_dirty_discard_doc},
-    {"isdirty",         pyfileh_isdirty,        METH_VARARGS,   pyfileh_isdirty_doc},
-    {"invalidate_page", pyfileh_invalidate_page,METH_VARARGS,   pyfileh_invalidate_page_doc},
+    {"mmap",              pyfileh_mmap,              METH_VARARGS,  pyfileh_mmap_doc},
+    {"dirty_writeout",    pyfileh_dirty_writeout,    METH_VARARGS,  pyfileh_dirty_writeout_doc},
+    {"dirty_discard",     pyfileh_dirty_discard,     METH_VARARGS,  pyfileh_dirty_discard_doc},
+    {"isdirty",           pyfileh_isdirty,           METH_VARARGS,  pyfileh_isdirty_doc},
+    {"invalidate_page",   pyfileh_invalidate_page,   METH_VARARGS,  pyfileh_invalidate_page_doc},
+    {"uses_mmap_overlay", pyfileh_uses_mmap_overlay, METH_VARARGS,  pyfileh_uses_mmap_overlay_doc},
     {NULL}
 };
 
@@ -955,10 +969,42 @@ out:
 }
 
 
+/* PyBigFile: mmap methods.
+ * They redirect op X to type.blkmmapper.X without going to Python level */
+
+static int
+pybigfile_mmap_setup_read(VMA *vma, BigFile *file0, blk_t blk, size_t blklen)
+{
+    PyBigFile *file = container_of(file0, PyBigFile, file);
+    ASSERT(file->blkmmap_ops != NULL);
+    return file->blkmmap_ops->mmap_setup_read(vma, file0, blk, blklen);
+}
+
+static int
+pybigfile_remmap_blk_read(VMA *vma, BigFile *file0, blk_t blk)
+{
+    PyBigFile *file = container_of(file0, PyBigFile, file);
+    ASSERT(file->blkmmap_ops != NULL);
+    return file->blkmmap_ops->remmap_blk_read(vma, file0, blk);
+}
+
+static int
+pybigfile_munmap(VMA *vma, BigFile *file0)
+{
+    PyBigFile *file = container_of(file0, PyBigFile, file);
+    ASSERT(file->blkmmap_ops != NULL);
+    return file->blkmmap_ops->munmap(vma, file0);
+}
+
+
 static const struct bigfile_ops pybigfile_ops = {
     .loadblk    = pybigfile_loadblk,
     .storeblk   = pybigfile_storeblk,
     //.release    =
+
+    .mmap_setup_read    = pybigfile_mmap_setup_read,
+    .remmap_blk_read    = pybigfile_remmap_blk_read,
+    .munmap             = pybigfile_munmap,
 };
 
 
@@ -972,16 +1018,23 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
     RAM *ram = ram_get_default(NULL);   // TODO get ram from args
     int err;
 
-
-    if (!PyArg_ParseTuple(args, ""))
+    int mmap_overlay = -1; /* -1 means None; https://bugs.python.org/issue14705 */
+    if (!PyArg_ParseTuple(args, "|i", &mmap_overlay))
         return NULL;
+
+    if (mmap_overlay == -1)
+        mmap_overlay = (pyfile->blkmmap_ops != NULL ? 1 : 0);
+    if (mmap_overlay && pyfile->blkmmap_ops == NULL)
+        return PyErr_Format(PyExc_TypeError,
+                "%s type does not provide blkmmapper", pyfile0->ob_type->tp_name);
 
     pyfileh = PyType_New(PyBigFileH, &PyBigFileH_Type, NULL);
     if (!pyfileh)
         return NULL;
 
     Py_INCREF(pyfile);
-    err = fileh_open(&pyfileh->fileh, &pyfile->file, ram, DONT_MMAP_OVERLAY);
+    err = fileh_open(&pyfileh->fileh, &pyfile->file, ram,
+                        mmap_overlay ? MMAP_OVERLAY : DONT_MMAP_OVERLAY);
     if (err) {
         XPyErr_SetFromErrno();
         Py_DECREF(pyfile);
@@ -998,6 +1051,7 @@ pyfile_traverse(PyObject *pyfile0, visitproc visit, void *arg)
 {
     PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
 
+    Py_VISIT(pyfile->blkmmapper);
     return 0;
 }
 
@@ -1006,6 +1060,7 @@ pyfile_clear(PyObject *pyfile0)
 {
     PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
 
+    Py_CLEAR(pyfile->blkmmapper);
     return 0;
 }
 
@@ -1022,6 +1077,8 @@ pyfile_dealloc(PyObject *pyfile0)
 
     PyBigFile  *pyfile = container_of(pyfile0, PyBigFile, pyobj);
 
+    pyfile->blkmmap_ops = NULL;
+
     pyfile_clear(&pyfile->pyobj);
     pyfile->pyobj.ob_type->tp_free(&pyfile->pyobj);
 }
@@ -1030,11 +1087,52 @@ pyfile_dealloc(PyObject *pyfile0)
 static PyObject *
 pyfile_new(PyTypeObject *type, PyObject *args, PyObject *kw)
 {
-    PyBigFile *self;
+    PyBigFile    *self;
+    PyObject     *blkmmapper;
+    bigfile_ops  *blkmmap_ops = NULL;
+
+    /* try to get type.blkmmapper and verify it provides IBlkMMapper interface */
+    blkmmapper = PyObject_GetAttrString((PyObject*)type, "blkmmapper");
+    PyErr_Clear(); /* GetAttr raises exception if there is no attribute */
+    if (blkmmapper) {
+        if (!PyCapsule_IsValid(blkmmapper, "wendelin.bigfile.IBlkMMapper")) {
+            Py_DECREF(blkmmapper);
+            return PyErr_Format(PyExc_TypeError,
+                "%s: .blkmmapper is not a valid pycapsule with mmap methods", type->tp_name);
+        }
+
+        blkmmap_ops = PyCapsule_GetPointer(blkmmapper, "wendelin.bigfile.IBlkMMapper");
+        if (blkmmap_ops == NULL) { /* just in case - must not fail */
+            Py_DECREF(blkmmapper);
+            return NULL;
+        }
+
+        if (blkmmap_ops->loadblk ||
+            blkmmap_ops->storeblk)
+        {
+            Py_DECREF(blkmmapper);
+            return PyErr_Format(PyExc_TypeError,
+                "%s: .blkmmapper: !mmap methods present", type->tp_name);
+        }
+
+        if (!(blkmmap_ops->mmap_setup_read &&
+              blkmmap_ops->remmap_blk_read &&
+              blkmmap_ops->munmap))
+        {
+            Py_DECREF(blkmmapper);
+            return PyErr_Format(PyExc_TypeError,
+                "%s: .blkmmapper: not all mmap methods present", type->tp_name);
+        }
+    }
 
     self = (PyBigFile *)PyType_GenericNew(type, args, kw);
-    if (!self)
+    if (!self) {
+        Py_XDECREF(blkmmapper);
         return NULL;
+    }
+
+    self->blkmmapper  = blkmmapper;
+    self->blkmmap_ops = blkmmap_ops;
 
     // FIXME "k" = unsigned long - we need size_t
     static char *kw_list[] = {"blksize", NULL};
@@ -1054,7 +1152,7 @@ static PyMemberDef pyfile_members[] = {
 };
 
 static /*const*/ PyMethodDef pyfile_methods[] = {
-    {"fileh_open",  pyfileh_open,   METH_VARARGS,   "fileh_open(ram=None) -> new file handle"},
+    {"fileh_open",  pyfileh_open,   METH_VARARGS,   "fileh_open(ram=None, mmap_overlay=None) -> new file handle"},
     {NULL}
 };
 
