@@ -28,7 +28,13 @@
 from golang cimport pychan, pyerror, nil
 from golang cimport io
 
-from ZODB.utils import p64
+cdef extern from *:
+    ctypedef bint cbool "bool"
+
+from ZODB.utils import p64, u64
+from cpython cimport PyBuffer_FillInfo
+from libcpp.unordered_map cimport unordered_map
+
 
 cdef class PyWCFS:
 
@@ -38,6 +44,130 @@ cdef class PyWCFS:
         def __set__(PyWCFS pywc, string v):
             pywc.wc.mountpoint = v
 
+    def connect(PyWCFS pywc, pyat): # -> PyConn
+        cdef Tid at = u64(pyat)
+        with nogil:
+            _ = wcfs_connect_pyexc(&pywc.wc, at)
+            wconn = _.first
+            err   = _.second
+
+        if err != nil:
+            raise pyerr(err)
+
+        cdef PyConn pywconn = PyConn.__new__(PyConn)
+        pywconn.wconn = wconn
+        pywconn.wc    = pywc
+        return pywconn
+
+
+cdef class PyConn:
+
+    def __dealloc__(PyConn pywconn):
+        pywconn.wconn = nil
+
+    def at(PyConn pywconn):
+        with nogil:
+            at = wconn_at_pyexc(pywconn.wconn)
+        return p64(at)
+
+    def close(PyConn pywconn):
+        with nogil:
+            err = wconn_close_pyexc(pywconn.wconn)
+        if err != nil:
+            raise pyerr(err)
+
+    def open(PyConn pywconn, pyfoid): # -> FileH
+        cdef Oid foid = u64(pyfoid)
+        with nogil:
+            _ = wconn_open_pyexc(pywconn.wconn, foid)
+            wfileh = _.first
+            err    = _.second
+        if err != nil:
+            raise pyerr(err)
+
+        cdef PyFileH pywfileh = PyFileH.__new__(PyFileH)
+        pywfileh.wfileh = wfileh
+        return pywfileh
+
+    def resync(PyConn pywconn, pyat):
+        cdef Tid at = u64(pyat)
+        with nogil:
+            err = wconn_resync_pyexc(pywconn.wconn, at)
+        if err != nil:
+            raise pyerr(err)
+
+
+cdef class PyFileH:
+
+    def __dealloc__(PyFileH pywfileh):
+        pywfileh.wfileh = nil
+
+    def close(PyFileH pywfileh):
+        with nogil:
+            err = wfileh_close_pyexc(pywfileh.wfileh)
+        if err != nil:
+            raise pyerr(err)
+
+    def mmap(PyFileH pywfileh, int64_t blk_start, int64_t blk_len):
+        with nogil:
+            _ = wfileh_mmap_pyexc(pywfileh.wfileh, blk_start, blk_len)
+            wmmap = _.first
+            err   = _.second
+        if err != nil:
+            raise pyerr(err)
+
+        assert wmmap.fileh .eq (pywfileh.wfileh)
+
+        cdef PyMapping pywmmap = PyMapping.__new__(PyMapping)
+        pywmmap.wmmap = wmmap
+        pywmmap.fileh = pywfileh
+        return pywmmap
+
+    property blksize:
+        def __get__(PyFileH pywfileh):
+            return pywfileh.wfileh.blksize
+
+    # XXX for tests
+    property pinned:
+        def __get__(PyFileH pywfileh):
+            # XXX cast: needed for cython to automatically convert to py dict
+            cdef dict p = <unordered_map[int64_t, Tid]> _tfileh_pinned(pywfileh.wfileh)
+            for blk in p:
+                p[blk] = p64(p[blk])    # rev(int64) -> rev(bytes)
+            return p
+
+
+cdef class PyMapping:
+
+    def __dealloc__(PyMapping pywmmap):
+        # unmap just in case (double unmap is ok)
+        with nogil:
+            err = wmmap_unmap_pyexc(pywmmap.wmmap)
+        pywmmap.wmmap = nil
+        if err != nil:
+            raise pyerr(err)
+
+    property blk_start:
+        def __get__(PyMapping pywmmap):
+            return pywmmap.wmmap.blk_start
+    property blk_stop:
+        def __get__(PyMapping pywmmap):
+            return pywmmap.wmmap.blk_stop()
+
+    def __getbuffer__(PyMapping pywmmap, Py_buffer *view, int flags):
+        PyBuffer_FillInfo(view, pywmmap, pywmmap.wmmap.mem_start,
+            pywmmap.wmmap.mem_stop - pywmmap.wmmap.mem_start, readonly=1, flags=flags)
+    property mem:
+        def __get__(PyMapping pywmmap) -> memoryview:
+            return memoryview(pywmmap)
+
+    def unmap(PyMapping pywmmap):
+        with nogil:
+            err = wmmap_unmap_pyexc(pywmmap.wmmap)
+        if err != nil:
+            raise pyerr(err)
+
+# ----------------------------------------
 
 cdef class PyWatchLink:
 
@@ -152,6 +282,30 @@ cdef nogil:
 
     pair[WatchLink, error] wcfs_openwatch_pyexc(WCFS *wcfs)     except +topyexc:
         return wcfs._openwatch()
+
+    pair[Conn, error] wcfs_connect_pyexc(WCFS *wcfs, Tid at)    except +topyexc:
+        return wcfs.connect(at)
+
+    Tid wconn_at_pyexc(Conn wconn)                              except +topyexc:
+        return wconn.at()
+
+    error wconn_close_pyexc(Conn wconn)                         except +topyexc:
+        return wconn.close()
+
+    pair[FileH, error] wconn_open_pyexc(Conn wconn, Oid foid)   except +topyexc:
+        return wconn.open(foid)
+
+    error wconn_resync_pyexc(Conn wconn, Tid at)                except +topyexc:
+        return wconn.resync(at)
+
+    error wfileh_close_pyexc(FileH wfileh)                      except +topyexc:
+        return wfileh.close()
+
+    pair[Mapping, error] wfileh_mmap_pyexc(FileH wfileh, int64_t blk_start, int64_t blk_len)   except +topyexc:
+        return wfileh.mmap(blk_start, blk_len)
+
+    error wmmap_unmap_pyexc(Mapping wmmap)                      except +topyexc:
+        return wmmap.unmap()
 
     error wlink_close_pyexc(WatchLink wlink)                    except +topyexc:
         return wlink.close()

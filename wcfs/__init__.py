@@ -28,6 +28,27 @@ represents filesystem-level connection to joined wcfs server. If wcfs server
 for zurl is not yet running, it will be automatically started if join is given
 `autostart=True` option.
 
+The rest of wcfs.py merely wraps C++ wcfs client package:
+
+- `WCFS` represents filesystem-level connection to wcfs server.
+- `Conn` represents logical connection that provides view of data on wcfs
+  filesystem as of particular database state.
+- `FileH` represent isolated file view under Conn.
+- `Mapping` represents one memory mapping of FileH.
+
+A path from WCFS to Mapping is as follows:
+
+    WCFS.connect(at)                    -> Conn
+    Conn.open(foid)                     -> FileH
+    FileH.mmap([blk_start +blk_len))    -> Mapping
+
+Classes in wcfs.py logically mirror classes in ZODB:
+
+    wcfs.WCFS   <->  ZODB.DB
+    wcfs.Conn   <->  ZODB.Connection
+
+Please see wcfs/client/wcfs.h for more thorough overview and further details.
+
 
 Environment variables
 ---------------------
@@ -79,6 +100,10 @@ class Server:
 # WCFS represents filesystem-level connection to wcfs server.
 #
 # Use join to create it.
+#
+# The primary way to access wcfs is to open logical connection viewing on-wcfs
+# data as of particular database state, and use that logical connection to create
+# base-layer mappings. See .connect and Conn in C++ API for details.
 #
 # Raw files on wcfs can be accessed with ._path/._read/._stat/._open .
 #

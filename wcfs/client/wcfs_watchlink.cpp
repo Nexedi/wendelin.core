@@ -63,6 +63,10 @@ pair<WatchLink, error> WCFS::_openwatch() {
 
     wlink->rx_eof     = makechan<structZ>();
 
+    os::RegisterAfterFork(newref(
+        static_cast<os::_IAfterFork*>( wlink._ptr() )
+    ));
+
     context::Context serveCtx;
     tie(serveCtx, wlink->_serveCancel) = context::with_cancel(context::background());
     wlink->_serveWG = sync::NewWorkGroup(serveCtx);
@@ -96,7 +100,22 @@ error _WatchLink::close() {
     if (err == nil)
         err = err3;
 
+    os::UnregisterAfterFork(newref(
+        static_cast<os::_IAfterFork*>( &wlink )
+    ));
+
     return E(err);
+}
+
+// afterFork detaches from wcfs in child process right after fork.
+void _WatchLink::afterFork() {
+    _WatchLink& wlink = *this;
+
+    // in child right after fork we are the only thread to run; in particular
+    // _serveRX is not running. Just release the file handle, that fork
+    // duplicated, to make sure that child cannot send anything to wcfs and
+    // interfere into parent-wcfs exchange.
+    wlink._f->close(); // ignore err
 }
 
 // closeWrite closes send half of the link.

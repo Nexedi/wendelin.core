@@ -143,6 +143,16 @@ cdef unsigned char _read_exfault(const unsigned char *p) nogil except +topyexc:
     return b
 
 
+def read_mustfault(const unsigned char[::1] mem not None):
+    try:
+        read_exfault_nogil(mem)
+    except SegmentationFault:
+        # ok
+        pass
+    else:
+        raise AssertionError("not faulted")
+
+
 # --------
 
 

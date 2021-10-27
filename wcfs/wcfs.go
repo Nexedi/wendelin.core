@@ -31,11 +31,17 @@
 // head/bigfile/<bigfileX> which represents always latest bigfile data.
 // Clients that want to get isolation guarantee should subscribe for
 // invalidations and re-mmap invalidated regions to file with pinned bigfile revision for
-// the duration of their transaction. See "Isolation protocol" for details.
+// the duration of their transaction. See "Isolation protocol" for details(*).
 //
 // In the usual situation when bigfiles are big, and there are O(1)/δt updates,
 // there should be no need for any cache besides shared kernel cache of latest
 // bigfile data.
+//
+// --------
+//
+// (*) wcfs servers comes accompanied by Python and C++ client packages that
+// take care about isolation protocol details and provide to clients simple
+// interface similar to regular files.
 //
 //
 // Filesystem organization

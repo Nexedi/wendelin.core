@@ -70,7 +70,7 @@ static_assert(sizeof(rxPkt) == 256, "rxPkt miscompiled"); // NOTE 128 is too low
 //
 // It is safe to use WatchLink from multiple threads simultaneously.
 typedef refptr<class _WatchLink> WatchLink;
-class _WatchLink : public object {
+class _WatchLink : public os::_IAfterFork, object {
     WCFS            *_wc;
     os::File        _f;      // head/watch file handle
     string          _rxbuf;  // buffer for data already read from _f
@@ -122,6 +122,8 @@ private:
     error _write(const string &pkt);
     StreamID _nextReqID();
     tuple<chan<rxPkt>, error> _sendReq(context::Context ctx, StreamID stream, const string &req);
+
+    void afterFork();
 
     friend error _twlinkwrite(WatchLink wlink, const string &pkt);
 };

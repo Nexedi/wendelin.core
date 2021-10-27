@@ -61,6 +61,9 @@ namespace golang {
 // os::
 namespace os {
 
+extern global<error> ErrClosed;
+
+
 // os::File mimics os.File from Go.
 // its operations return error with full file context.
 typedef refptr<class _File> File;
@@ -104,8 +107,43 @@ tuple<File, error> open(const string &path, int flags = O_RDONLY,
                       S_IRGRP | S_IWGRP | S_IXGRP |
                       S_IROTH | S_IWOTH | S_IXOTH);
 
+
+// afterfork
+
+// IAfterFork is the interface that objects must implement to be notified after fork.
+typedef refptr<struct _IAfterFork> IAfterFork;
+struct _IAfterFork : public _interface {
+    // afterFork is called in just forked child process for objects that
+    // were previously registered in parent via RegisterAfterFork.
+    virtual void afterFork() = 0;
+};
+
+// RegisterAfterFork registers obj so that obj.afterFork is run after fork in
+// the child process.
+void RegisterAfterFork(IAfterFork obj);
+
+// UnregisterAfterFork undoes RegisterAfterFork.
+// It is noop if obj was not registered.
+void UnregisterAfterFork(IAfterFork obj);
+
 }   // os::
 
+// mm::
+namespace mm {
+    tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t size);
+    error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset);
+    error unmap(void *addr, size_t size);
+
+}   // mm::
+
+
+// io::ioutil::
+namespace io {
+namespace ioutil {
+
+tuple<string, error> ReadFile(const string& path);
+
+}}  // io::ioutil::
 
 // ---- misc ----
 

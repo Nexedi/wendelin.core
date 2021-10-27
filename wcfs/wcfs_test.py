@@ -18,6 +18,9 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 """wcfs_test.py tests wcfs filesystem from outside as python client process.
+
+Virtmem layer provided by wcfs client package is unit-tested by
+wcfs/client/client_test.py .
 """
 
 from __future__ import print_function, absolute_import

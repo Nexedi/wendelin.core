@@ -23,12 +23,13 @@
 
 # Package _wcfs provides Python-wrappers for C++ wcfs client package.
 #
-# It wraps WCFS and WatchLink.
+# It wraps WCFS/Conn/FileH/Mapping and WatchLink to help client_test.py unit-test
+# WCFS base-layer mmap functionality.
 
 from golang cimport chan, structZ, string, error, refptr
-from golang cimport context
+from golang cimport context, cxx
 
-from libc.stdint cimport int64_t, uint64_t
+from libc.stdint cimport int64_t, uint64_t, uint8_t
 from libcpp.utility cimport pair
 from libcpp.vector cimport vector
 
@@ -78,12 +79,70 @@ cdef extern from "wcfs/client/wcfs.h" namespace "wcfs" nogil:
         string  mountpoint
 
         pair[WatchLink, error] _openwatch()
+        pair[Conn, error]      connect(Tid at)
+
+    cppclass _Conn:
+        Tid                 at()
+        pair[FileH, error]  open(Oid foid)
+        error               close()
+        error               resync(Tid at)
+
+    cppclass Conn (refptr[_Conn]):
+        # Conn.X = Conn->X in C++
+        Tid                 at          "_ptr()->at"        ()
+        pair[FileH, error]  open        "_ptr()->open"      (Oid foid)
+        error               close       "_ptr()->close"     ()
+        error               resync      "_ptr()->resync"    (Tid at)
+
+    cppclass _FileH:
+        size_t               blksize
+        error                close()
+        pair[Mapping, error] mmap(int64_t blk_start, int64_t blk_len)   # `VMA *vma=nil` not exposed
+
+    cppclass FileH (refptr[_FileH]):
+        # FileH.X = FileH->X in C++
+        size_t               blksize    "_ptr()->blksize"
+        error                close      "_ptr()->close"     ()
+        pair[Mapping, error] mmap       "_ptr()->mmap"      (int64_t blk_start, int64_t blk_len)
+
+    cppclass _Mapping:
+        FileH   fileh
+        int64_t blk_start
+        int64_t blk_stop()  const
+        uint8_t *mem_start
+        uint8_t *mem_stop
+
+        error   unmap()
+
+    cppclass Mapping (refptr[_Mapping]):
+        # Mapping.X = Mapping->X in C++
+        FileH   fileh           "_ptr()->fileh"
+        int64_t blk_start       "_ptr()->blk_start"
+        int64_t blk_stop        "_ptr()->blk_stop"      ()  const
+        uint8_t *mem_start      "_ptr()->mem_start"
+        uint8_t *mem_stop       "_ptr()->mem_stop"
+
+        error   unmap           "_ptr()->unmap"         ()
+
+
+    cxx.dict[int64_t, Tid] _tfileh_pinned(FileH wfileh)
 
 
 # ---- python bits ----
 
 cdef class PyWCFS:
     cdef WCFS wc
+
+cdef class PyConn:
+    cdef Conn wconn
+    cdef readonly PyWCFS wc # PyWCFS that was used to create this PyConn
+
+cdef class PyFileH:
+    cdef FileH wfileh
+
+cdef class PyMapping:
+    cdef Mapping wmmap
+    cdef readonly PyFileH fileh
 
 cdef class PyWatchLink:
     cdef WatchLink wlink
