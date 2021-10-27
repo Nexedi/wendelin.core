@@ -39,6 +39,143 @@ part of Linux 5.2:
   https://git.kernel.org/linus/ad2ba64dd489
 
 
+Invalidations to wcfs clients are delayed until block access
+============================================================
+
+Initially it was planned that wcfs would send invalidation messages to its
+clients right after receiving invalidation message from ZODB at transaction
+boundary time. That simplifies logic but requires that for a particular file,
+wcfs has to send to clients whole range of where the file was changed.
+
+Emitting whole δR right at transaction-boundary time requires to keep whole
+ZBigFile.blktab index in RAM. Even though from space point of view it is
+somewhat acceptable (~ 0.01% of whole-file data size, i.e. ~ 128MB of index for
+~ 1TB of data), it is not good from time overhead point of view - initial open
+of a file this way would be potentially slow as full blktab scan - including
+Trees _and_ Buckets nodes - would be required.
+
+-> we took the approach where we send invalidation to client about a block
+lazily only when the block is actually accessed.
+
+
+Rejected alternative:
+
+Building δFtail lazily along serving FUSE reads during scope of one
+transaction is not trivial and would create concurrency bottlenecks if simple
+locking scheme is used. With the main difficulty being to populate tracking set
+of δBtree lazily. However as the first approach we could still build complete
+tracking set for a BTree at the time of file open: we need to scan through all
+trees but _not_ buckets: this way we'll know oid of all tree nodes: trees _and_
+buckets, while avoiding loading buckets makes this approach practical: with
+default LOBTree settings (1 bucket = 60·objects, 1 tree = 500·buckets) it will
+require ~ 20 trees to cover 1TB of data. And we can scan those trees very
+quickly even if doing so serially. For 1PB of data it will require to scan ~
+10⁴ trees. If RTT to load 1 object is ~1ms this will become 10 seconds if done
+serially. However if we load all those tree objects in parallel it will be
+much less. Still the number of trees to scan is linear to the amount of data.
+
+-> rejected: ΔFtail and ΔBtail were instead fixed to allow several Track and
+queries requests to run in parallel. See "Concurrency" section in ΔFtail/ΔBtail
+organization overview.
+
+
+Changing mmapping while under pagefault is possible
+===================================================
+
+We can change a mapping while a page from it is under pagefault:
+
+- the kernel, upon handling pagefault, queues read request to filesystem
+  server. As of Linux 4.20 this is done _with_ holding client->mm->mmap_sem:
+
+  kprobe:fuse_readpages (client->mm->mmap_sem.count: 1)
+         fuse_readpages+1
+         read_pages+109
+         __do_page_cache_readahead+401
+         filemap_fault+635
+         __do_fault+31
+         __handle_mm_fault+3403
+         handle_mm_fault+220
+         __do_page_fault+598
+         page_fault+30
+
+- however the read request is queued to be performed asynchronously -
+  the kernel does not wait for it in fuse_readpages, because
+
+  * git.kernel.org/linus/c1aa96a5,
+  * git.kernel.org/linus/9cd68455,
+  * and go-fuse initially negotiating CAP_ASYNC_READ to the kernel.
+
+- the kernel then _releases_ client->mm->mmap_sem and then waits
+  for to-read pages to become ready:
+
+  * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c?id=v4.20-rc3-83-g06e68fed3282#n2411
+  * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c?id=v4.20-rc3-83-g06e68fed3282#n2457
+  * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c?id=v4.20-rc3-83-g06e68fed3282#n1301
+
+- the filesystem server, upon receiving the read request, can manipulate
+  client's address space. This requires to write-lock client->mm->mmap_sem,
+  but we can be sure it won't deadlock because the kernel releases it
+  before waiting (see previous point).
+
+  in practice the manipulation is done by another client thread, because
+  on Linux it is not possible to change mm of another process. However
+  the main point here is that the manipulation is possible because
+  there will be no deadlock on client->mm->mmap_sem.
+
+For the reference here is how filesystem server reply looks under trace:
+
+  kprobe:fuse_readpages_end
+          fuse_readpages_end+1
+          request_end+188
+          fuse_dev_do_write+1921
+          fuse_dev_write+78
+          do_iter_readv_writev+325
+          do_iter_write+128
+          vfs_writev+152
+          do_writev+94
+          do_syscall_64+85
+          entry_SYSCALL_64_after_hwframe+68
+
+and a test program that demonstrates that it is possible to change
+mmapping while under pagefault to it:
+
+  https://lab.nexedi.com/kirr/go-fuse/commit/f822c9db
+
+Starting from Linux 5.1 mmap_sem should be generally released while doing any IO:
+
+  https://git.kernel.org/linus/6b4c9f4469
+
+but before that the analysis remains FUSE-specific.
+
+The property that changing mmapping while under pagefault is possible is
+verified by wcfs testsuite in `test_wcfs_remmap_on_pin` test.
+
+
+Client cannot be ptraced while under pagefault
+==============================================
+
+We cannot use ptrace to run code on client thread that is under pagefault:
+
+The kernel sends SIGSTOP to interrupt tracee, but the signal will be
+processed only when the process returns from kernel space, e.g. here
+
+     https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/common.c?id=v4.19-rc8-151-g23469de647c4#n160
+
+This way the tracer won't receive obligatory information that tracee
+stopped (via wait...) and even though ptrace(ATTACH) succeeds, all other
+ptrace commands will fail:
+
+     https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/ptrace.c?id=v4.19-rc8-151-g23469de647c4#n1140
+     https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/ptrace.c?id=v4.19-rc8-151-g23469de647c4#n207
+
+My original idea was to use ptrace to run code in process to change it's
+memory mappings, while the triggering process is under pagefault/read
+to wcfs, and the above shows it won't work - trying to ptrace the
+client from under wcfs will just block forever (the kernel will be
+waiting for read operation to finish for ptrace, and read will be first
+waiting on ptrace stopping to complete = deadlock)
+
+
 Kernel locks page on read/cache store/... - we have to be careful not to deadlock
 =================================================================================
 

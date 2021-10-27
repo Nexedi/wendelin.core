@@ -140,7 +140,9 @@ package xbtree
 //    from that job, it first waits for corresponding job(s) to complete.
 //
 // Explained rebuild organization allows non-overlapping queries/track-requests
-// to run simultaneously.
+// to run simultaneously. This property is essential to WCFS because otherwise
+// WCFS would not be able to serve several non-overlapping READ requests to one
+// file in parallel.
 //
 // --------
 //

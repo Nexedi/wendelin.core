@@ -282,6 +282,12 @@ libvirtmem_h = [
     'include/wendelin/utils.h',
 ]
 
+libwcfs_h = [
+    'wcfs/client/wcfs.h',
+    'wcfs/client/wcfs_misc.h',
+    'wcfs/client/wcfs_watchlink.h',
+]
+
 setup(
     name        = 'wendelin.core',
     version     = '0.13',
@@ -306,7 +312,13 @@ setup(
                      'lib/utils.c'],
                     depends = libvirtmem_h,
                     define_macros       = [('_GNU_SOURCE',None)],
-                    language = 'c')],
+                    language = 'c'),
+
+                   DSO('wendelin.wcfs.client.libwcfs',
+                    ['wcfs/client/wcfs.cpp',
+                     'wcfs/client/wcfs_watchlink.cpp',
+                     'wcfs/client/wcfs_misc.cpp'],
+                    depends = libwcfs_h)],
 
     ext_modules = [
                     PyGoExt('wendelin.bigfile._bigfile',
@@ -318,6 +330,11 @@ setup(
                         define_macros   = [('_GNU_SOURCE',None)],
                         language        = 'c',
                         dsos = ['wendelin.bigfile.libvirtmem']),
+
+                    PyGoExt('wendelin.wcfs.client._wcfs',
+                        ['wcfs/client/_wcfs.pyx'],
+                        depends = libwcfs_h,
+                        dsos = ['wendelin.wcfs.client.libwcfs']),
 
                     PyGoExt('wendelin.wcfs.internal.wcfs_test',
                         ['wcfs/internal/wcfs_test.pyx']),

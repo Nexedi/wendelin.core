@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | virtual memory tests
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -338,7 +338,8 @@ void test_file_access_synthetic(void)
     size_t PS, PSb;
     int err;
 
-    /* MUST_FAULT(code) - checks that code faults */
+    /* MUST_FAULT(code) - checks that code faults  */
+    /* somewhat dup in wcfs/internal/wcfs_test.pyx */
     sigjmp_buf    fault_jmp;
     volatile int  fault_expected = 0;
     void sigfault_handler(int sig) {

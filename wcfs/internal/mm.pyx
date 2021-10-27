@@ -144,6 +144,18 @@ def map_ro(int fd, off_t offset, size_t size):
 
     return <unsigned char[:size:1]>addr
 
+# map_into_ro is similar to map_ro, but mmaps fd[offset:...] into mem's memory.
+def map_into_ro(unsigned char[::1] mem not None, int fd, off_t offset):
+    cdef void   *addr = &mem[0]
+    cdef size_t size  = mem.shape[0]
+
+    addr = mman.mmap(addr, size, mman.PROT_READ, mman.MAP_FIXED |
+                                                 mman.MAP_SHARED, fd, offset)
+    if addr == mman.MAP_FAILED:
+        PyErr_SetFromErrno(OSError)
+
+    return
+
 # unmap unmaps memory covered by mem.
 def unmap(const unsigned char[::1] mem not None):
     cdef const void *addr = &mem[0]

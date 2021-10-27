@@ -60,6 +60,10 @@ from persistent import Persistent
 from zodbtools.util import ashex as h
 from six.moves.urllib.parse import urlsplit, urlunsplit
 
+from .client._wcfs import \
+    PyWCFS          as _WCFS,       \
+    PyWatchLink     as WatchLink    \
+
 
 # Server represents running wcfs server.
 #
@@ -79,7 +83,7 @@ class Server:
 # Raw files on wcfs can be accessed with ._path/._read/._stat/._open .
 #
 # WCFS logically mirrors ZODB.DB .
-class WCFS:
+class WCFS(_WCFS):
     # .mountpoint   path to wcfs mountpoint
     # ._fwcfs       /.wcfs/zurl opened to keep the server from going away (at least cleanly)
     # ._njoin       this connection was returned for so many joins

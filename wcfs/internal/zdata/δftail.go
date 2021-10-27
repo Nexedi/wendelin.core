@@ -85,7 +85,9 @@ package zdata
 //    Track/queries requests for long.
 //
 // Combined this organization allows non-overlapping queries/track-requests
-// to run simultaneously.
+// to run simultaneously. This property is essential to WCFS because otherwise
+// WCFS would not be able to serve several non-overlapping READ requests to one
+// file in parallel.
 //
 // See also "Concurrency" in ΔBtail organization for more details.
 

@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -35,6 +37,8 @@ import (
 	"github.com/pkg/errors"
 
 	"lab.nexedi.com/kirr/go123/xio"
+
+	"lab.nexedi.com/kirr/neo/go/zodb"
 )
 
 // ---- FUSE ----
@@ -105,7 +109,7 @@ func err2LogStatus(err error) fuse.Status {
 // from any single node will make the kernel think that the filesystem does not
 // support Open at all.
 //
-// In wcfs we have dynamic files (e.g. upcoming /head/watch) and this way we have to
+// In wcfs we have dynamic files (e.g. /head/watch) and this way we have to
 // avoid returning ENOSYS on nodes, that do not need file handles.
 //
 // fsNode is like nodefs.defaultNode, but by default Open returns to kernel
@@ -423,6 +427,67 @@ func (f *skFile) Release() {
 	}
 }
 
+
+// ---- parsing ----
+
+// parseWatchFrame parses line going through /head/watch into (stream, msg)
+//
+//	<stream> <msg...>
+func parseWatchFrame(line string) (stream uint64, msg string, err error) {
+	sp := strings.IndexByte(line, ' ')
+	if sp == -1 {
+		return 0, "", fmt.Errorf("invalid frame: %q", line)
+	}
+
+	stream, err = strconv.ParseUint(line[:sp], 10, 64)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid frame: %q (invalid stream)", line)
+	}
+
+	msg = strings.TrimSuffix(line[sp+1:], "\n")
+	return stream, msg, nil
+}
+
+// parseWatch parses watch request wcfs received over /head/watch.
+//
+//	watch <file> (@<at>|-)
+//
+// at="-" is returned as zodb.InvalidTid .
+func parseWatch(msg string) (oid zodb.Oid, at zodb.Tid, err error) {
+	defer func() {
+		if err != nil {
+			oid = zodb.InvalidOid
+			at  = zodb.InvalidTid
+			err = fmt.Errorf("bad watch: %s", err)
+		}
+	}()
+
+	if !strings.HasPrefix(msg, "watch ") {
+		return 0, 0, fmt.Errorf("not a watch request: %q", msg)
+	}
+	argv := strings.Split(msg[len("watch "):], " ")
+	if len(argv) != 2 {
+		return 0, 0, fmt.Errorf("expected 2 arguments, got %d", len(argv))
+	}
+	oid, err = zodb.ParseOid(argv[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid oid")
+	}
+
+	switch {
+	case argv[1] == "-":
+		at = zodb.InvalidTid
+	case strings.HasPrefix(argv[1], "@"):
+		at, err = zodb.ParseTid(argv[1][1:])
+	default:
+		err = fmt.Errorf("x") // just anything
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid at")
+	}
+
+	return oid, at, nil
+}
 
 // ---- make df happy (else it complains "function not supported") ----
 

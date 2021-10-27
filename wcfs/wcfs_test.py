@@ -32,20 +32,22 @@ from wendelin import wcfs
 import transaction
 from persistent import Persistent
 from persistent.timestamp import TimeStamp
+from ZODB.utils import z64, u64, p64
 
-import sys, os, os.path
+import sys, os, os.path, subprocess
 from thread import get_ident as gettid
 from time import gmtime
 from errno import EINVAL, ENOTCONN
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
-from golang import go, chan, select, func, defer, b
-from golang import context, time
+from golang import go, chan, select, func, defer, error, b
+from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
 import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
-from wendelin.wcfs.internal.wcfs_test import install_sigbus_trap
-from wendelin.wcfs import _is_mountpoint as is_mountpoint
+from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
+from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _ready as ready
 
 
 # setup:
@@ -285,7 +287,7 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
 # ---- infrastructure for data access tests ----
 #
-# Testing infrastructure consists of tDB and tFile that
+# Testing infrastructure consists of tDB, tFile, tWatch and tWatchLink that
 # jointly organize wcfs behaviour testing. See individual classes for details.
 
 # many tests need to be run with some reasonable timeout to detect lack of wcfs
@@ -296,6 +298,11 @@ def with_timeout(parent=context.background()):  # -> ctx, cancel
 def timeout(parent=context.background()):   # -> ctx
     ctx, _ = with_timeout()
     return ctx
+
+# tdelay is used in places where we need to delay a bit in order to e.g.
+# increase probability of a bug due to race condition.
+def tdelay():
+    time.sleep(10*time.millisecond)
 
 
 # DF represents a change in files space.
@@ -321,18 +328,19 @@ class DFile:
 # Database root and wcfs connection are represented by .root and .wc correspondingly.
 # The database is initialized with one ZBigFile created and opened via ZODB connection as .zfile .
 #
-# The primary way to access wcfs is by opening BigFiles.
+# The primary way to access wcfs is by opening BigFiles and WatchLinks.
 # A BigFile   opened under tDB is represented as tFile      - see .open for details.
+# A WatchLink opened under tDB is represented as tWatchLink - see .openwatch for details.
 #
 # The database can be mutated (via !wcfs codepath) with .change + .commit .
 # Current database head is represented by .head .
 # The history of the changes is kept in .dFtail .
-# There are various helpers to query history (_blkDataAt, ...)
+# There are various helpers to query history (_blkDataAt, _pinnedAt, .iter_revv, ...)
 #
 # tDB must be explicitly closed once no longer used.
 #
 # TODO(?) print -> t.trace/debug() + t.verbose depending on py.test -v -v ?
-class tWCFS(object):
+class tWCFS(_tWCFS):
     @func
     def __init__(t):
         assert not os.path.exists(testmntpt)
@@ -348,27 +356,12 @@ class tWCFS(object):
         # cases, when wcfs, even after receiving `kill -9`, will be stuck in kernel.
         # ( git.kernel.org/linus/a131de0a482a makes in-kernel FUSE client to
         #   still wait for request completion even after fatal signal )
-        t._closed = chan()
-        t._wcfuseaborted = chan()
-        t._wcfuseabort = os.fdopen(os.dup(wc._wcsrv._fuseabort.fileno()), 'w')
-        go(t._abort_ontimeout, 10*time.second)  # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        nogilready = chan(dtype='C.structZ')
+        t._wcfuseabort = os.dup(wc._wcsrv._fuseabort.fileno())
+        go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
-    # _abort_ontimeout sends abort to fuse control file if timeout happens
-    # before tDB is closed.
-    def _abort_ontimeout(t, dt):
-        _, _rx = select(
-            time.after(dt).recv,    # 0
-            t._closed.recv,         # 1
-        )
-        if _ == 1:
-            return  # tDB closed = testcase completed
-
-        # timeout -> force-umount wcfs
-        eprint("\nC: test timed out after %.1fs" % (dt / time.second))
-        eprint("-> aborting wcfs fuse connection to unblock ...\n")
-        t._wcfuseabort.write(b"1\n")
-        t._wcfuseabort.flush()
-        t._wcfuseaborted.close()
+    # _abort_ontimeout is in wcfs_test.pyx
 
     # close closes connection to wcfs, unmounts the filesystem and makes sure
     # that wcfs server exits.
@@ -421,8 +414,13 @@ class tDB(tWCFS):
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
         t._wc_zheadv  = []
 
-        # tracked opened tFiles
+        # whether head/ ZBigFile(s) blocks were ever accessed via wcfs.
+        # this is updated only explicitly via ._blkheadaccess() .
+        t._blkaccessedViaHead = {} # ZBigFile -> set(blk)
+
+        # tracked opened tFiles & tWatchLinks
         t._files    = set()
+        t._wlinks   = set()
 
         # ID of the thread which created tDB
         # ( transaction plays dirty games with threading.local and we have to
@@ -438,7 +436,7 @@ class tDB(tWCFS):
     def head(t):
         return t.dFtail[-1].rev
 
-    # close closes test database as well as all tracked files and wcfs.
+    # close closes test database as well as all tracked files, watch links and wcfs.
     # it also prints change history to help developer overview current testcase.
     @func
     def close(t):
@@ -448,13 +446,21 @@ class tDB(tWCFS):
         defer(t.dump_history)
         for tf in t._files.copy():
             tf.close()
+        for tw in t._wlinks.copy():
+            tw.close()
         assert len(t._files)   == 0
+        assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
     def open(t, zf, at=None):   # -> tFile
         return tFile(t, zf, at=at)
+
+    # openwatch opens /head/watch on wcfs.
+    # see returned tWatchLink for details.
+    def openwatch(t):   # -> tWatchLink
+        return tWatchLink(t)
 
     # change schedules zf to be changed according to changeDelta at commit.
     #
@@ -540,6 +546,14 @@ class tDB(tWCFS):
 
         # head/at = last txn of whole db
         assert t.wc._read("head/at") == h(t.head)
+
+    # _blkheadaccess marks head/zf[blk] accessed.
+    def _blkheadaccess(t, zf, blk):
+        t._blkaccessed(zf).add(blk)
+
+    # _blkaccessed returns set describing which head/zf blocks were ever accessed.
+    def _blkaccessed(t, zf): # set(blk)
+        return t._blkaccessedViaHead.setdefault(zf, set())
 
 
 # tFile provides testing environment for one bigfile opened on wcfs.
@@ -670,8 +684,17 @@ class tFile:
     #
     # Expected data may be given with size < t.blksize. In such case the data
     # is implicitly appended with trailing zeros. Data can be both bytes and unicode.
+    #
+    # It also checks that file watches are properly notified on data access -
+    # - see "7.2) for all registered client@at watchers ..."
+    #
+    # pinokByWLink: {} tWatchLink -> {} blk -> at.
+    # pinokByWLink can be omitted - in that case it is computed only automatically.
+    #
+    # The automatic computation of pinokByWLink is verified against explicitly
+    # provided pinokByWLink when it is present.
     @func
-    def assertBlk(t, blk, dataok):
+    def assertBlk(t, blk, dataok, pinokByWLink=None):
         # TODO -> assertCtx('blk #%d' % blk)
         def _():
             assertCtx = 'blk #%d' % blk
@@ -684,10 +707,10 @@ class tFile:
         dataok = b(dataok)
         blkdata, _ = t.tdb._blkDataAt(t.zf, blk, t.at)
         assert blkdata == dataok, "computed vs explicit data"
-        t._assertBlk(blk, dataok)
+        t._assertBlk(blk, dataok, pinokByWLink)
 
     @func
-    def _assertBlk(t, blk, dataok):
+    def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None):
         assert len(dataok) <= t.blksize
         dataok += b'\0'*(t.blksize - len(dataok))   # tailing zeros
         assert blk < t._sizeinblk()
@@ -703,9 +726,92 @@ class tFile:
 
         cached = t.cached()[blk]
         assert cached in (0, 1) # every check accesses a block in full
+        shouldPin = False       # whether at least one wlink should receive a pin
 
+        # watches that must be notified if access goes to @head/file
+        wpin = {}   # tWatchLink -> pinok
+        blkrev = t.tdb._blkRevAt(t.zf, blk, t.at)
+        if t.at is None: # @head/...
+            for wlink in t.tdb._wlinks:
+                pinok = {}
+                w = wlink._watching.get(t.zf._p_oid)
+                if w is not None and w.at < blkrev:
+                    if cached == 1:
+                        # @head[blk].rev is after w.at - w[blk] must be already pinned
+                        assert blk in w.pinned
+                        assert w.pinned[blk] <= w.at
+                    else:
+                        assert cached == 0
+                        # even if @head[blk] is uncached, the block could be
+                        # already pinned by setup watch
+                        if blk not in w.pinned:
+                            pinok = {blk: t.tdb._blkRevAt(t.zf, blk, w.at)}
+                            shouldPin = True
+                wpin[wlink] = pinok
+
+        if pinokByWLink is not None:
+            assert wpin == pinokByWLink, "computed vs explicit pinokByWLink"
+        pinokByWLink = wpin
+
+        # doCheckingPin expects every wlink entry to also contain zf
+        for wlink, pinok in pinokByWLink.items():
+            pinokByWLink[wlink] = (t.zf, pinok)
+
+        # access 1 byte on the block and verify that wcfs sends us correct pins
         blkview = t._blk(blk)
         assert t.cached()[blk] == cached
+
+        def _(ctx, ev):
+            assert t.cached()[blk] == cached
+            ev.append('read pre')
+
+            # access data with released GIL so that the thread that reads data from
+            # head/watch can receive pin message. Be careful to handle cancellation,
+            # so that on error in another worker we don't get stuck and the
+            # error can be propagated to wait and reported.
+            #
+            # we handle cancellation by spawning read in another thread and
+            # waiting for either ctx cancel, or read thread to complete. This
+            # way on ctx cancel (e.g. assertion failure in another worker), the
+            # read thread can remain running even after _assertBlk returns, and
+            # in particular till the point where the whole test is marked as
+            # failed and shut down. But on test shutdown .fmmap is unmapped for
+            # all opened tFiles, and so read will hit SIGSEGV. Prepare to catch
+            # that SIGSEGV here.
+            have_read = chan(1)
+            def _():
+                try:
+                    b = read_exfault_nogil(blkview[0:1])
+                except SegmentationFault:
+                    b = 'FAULT'
+                t._blkaccess(blk)
+                have_read.send(b)
+            go(_)
+            _, _rx = select(
+                ctx.done().recv,    # 0
+                have_read.recv,     # 1
+            )
+            if _ == 0:
+                raise ctx.err()
+            b = _rx
+
+            ev.append('read ' + b)
+        ev = doCheckingPin(_, pinokByWLink, pinfunc)
+
+        # XXX hack - wlinks are notified and emit events simultaneously - we
+        # check only that events begin and end with read pre/post and that pins
+        # are inside (i.e. read is stuck until pins are acknowledged).
+        # Better do explicit check in tracetest style.
+        assert ev[0]  == 'read pre', ev
+        assert ev[-1] == 'read ' + dataok[0], ev
+        ev = ev[1:-1]
+        if not shouldPin:
+            assert ev == []
+        else:
+            assert 'pin rx' in ev
+            assert 'pin ack pre' in ev
+
+        assert t.cached()[blk] > 0
 
         # verify full data of the block
         # TODO(?) assert individually for every block's page? (easier debugging?)
@@ -740,6 +846,268 @@ class tFile:
         t.assertCache(cachev)
 
 
+# tWatch represents watch for one file setup on a tWatchLink.
+class tWatch:
+    def __init__(w, foid):
+        w.foid   = foid
+        w.at     = z64  # not None - always concrete
+        w.pinned = {}   # blk -> rev
+
+# tWatchLink provides testing environment for /head/watch link opened on wcfs.
+#
+# .watch() setups/adjusts a watch for a file and verifies that wcfs correctly sends initial pins.
+class tWatchLink(wcfs.WatchLink):
+
+    def __init__(t, tdb):
+        super(tWatchLink, t).__init__(tdb.wc)
+        t.tdb = tdb
+        tdb._wlinks.add(t)
+
+        # this tWatchLink currently watches the following files at particular state.
+        t._watching = {}    # {} foid -> tWatch
+
+    def close(t):
+        t.tdb._wlinks.remove(t)
+        super(tWatchLink, t).close()
+
+        # disable all established watches
+        for w in t._watching.values():
+            w.at     = z64
+            w.pinned = {}
+        t._watching = {}
+
+
+# ---- infrastructure: watch setup/adjust ----
+
+# watch sets up or adjusts a watch for file@at.
+#
+# During setup it verifies that wcfs sends correct initial/update pins.
+#
+# pinok: {} blk -> rev
+# pinok can be omitted - in that case it is computed automatically.
+#
+# The automatic computation of pinok is verified against explicitly provided
+# pinok when it is present.
+@func(tWatchLink)
+def watch(twlink, zf, at, pinok=None): # -> tWatch
+    foid = zf._p_oid
+    t = twlink.tdb
+    w = twlink._watching.get(foid)
+    if w is None:
+        w = twlink._watching[foid] = tWatch(foid)
+        at_prev = None
+    else:
+        at_prev = w.at  # we were previously watching zf @at_prev
+
+    at_from = ''
+    if at_prev is not None:
+        at_from = '(%s ->) ' % at_prev
+    print('\nC: setup watch f<%s> %s%s' % (h(foid), at_from, at))
+
+    accessed    = t._blkaccessed(zf)
+    lastRevOf   = lambda blk: t._blkRevAt(zf, blk, t.head)
+
+    pin_prev = {}
+    if at_prev is not None:
+        assert at_prev <= at, 'TODO %s -> %s' % (at_prev, at)
+        pin_prev = t._pinnedAt(zf, at_prev)
+    assert w.pinned == pin_prev
+
+    pin = t._pinnedAt(zf, at)
+
+    if at_prev != at and at_prev is not None:
+        print('# pin@old: %s\n# pin@new: %s' % (t.hpin(pin_prev), t.hpin(pin)))
+
+    for blk in set(pin_prev.keys()).union(pin.keys()):
+        # blk ∉ pin_prev,   blk ∉ pin       -> cannot happen
+        assert (blk in pin_prev) or (blk in pin)
+
+        # blk ∉ pin_prev,   blk ∈ pin       -> cannot happen, except on first start
+        if blk not in pin_prev and blk in pin:
+            if at_prev is not None:
+                fail('#%d pinned %s; not pinned %s' % (blk, at_prev, at))
+
+            # blk ∈ pin     -> blk is tracked; has rev > at
+            # (see criteria in _pinnedAt)
+            assert blk in accessed
+            assert at  <  lastRevOf(blk)
+
+        # blk ∈ pin_prev,   blk ∉ pin       -> unpin to head
+        elif blk in pin_prev and blk not in pin:
+            # blk ∈ pin_prev -> blk is tracked; has rev > at_prev
+            assert blk in accessed
+            assert at_prev < lastRevOf(blk)
+
+            # blk ∉ pin      -> last blk revision is ≤ at
+            assert lastRevOf(blk) <= at
+
+            pin[blk] = None     # @head
+
+        # blk ∈ pin_prev,   blk ∈ pin       -> if rev different: use pin
+        elif blk in pin_prev and blk in pin:
+            # blk ∈ pin_prev, pin   -> blk is tracked; has rev > at_prev, at
+            assert blk in accessed
+            assert at_prev < lastRevOf(blk)
+            assert at      < lastRevOf(blk)
+
+            assert pin_prev[blk] <= pin[blk]
+            if pin_prev[blk] == pin[blk]:
+                del pin[blk]    # would need to pin to what it is already pinned
+
+    #print('-> %s' % t.hpin(pin))
+
+    # {} blk -> at that have to be pinned.
+    if pinok is not None:
+        assert pin == pinok,    "computed vs explicit pinok"
+    pinok = pin
+    print('#  pinok: %s' % t.hpin(pinok))
+
+    # send watch request and check that we receive pins for tracked (previously
+    # accessed at least once) blocks changed > at.
+    twlink._watch(zf, at, pinok, "ok")
+
+    w.at = at
+
+    # `watch ... -> at_i -> at_j`  must be the same as  `watch ø -> at_j`
+    assert w.pinned == t._pinnedAt(zf, at)
+
+    return w
+
+
+# stop_watch instructs wlink to stop watching the file.
+@func(tWatchLink)
+def stop_watch(twlink, zf):
+    foid = zf._p_oid
+    assert foid in twlink._watching
+    w = twlink._watching.pop(foid)
+
+    twlink._watch(zf, b"-", {}, "ok")
+    w.at = z64
+    w.pinned = {}
+
+
+# _watch sends watch request for zf@at, expects initial pins specified by pinok and final reply.
+#
+# at also can be b"-" which means "stop watching"
+#
+# pinok: {} blk -> at that have to be pinned.
+# if replyok ends with '…' only reply prefix until the dots is checked.
+@func(tWatchLink)
+def _watch(twlink, zf, at, pinok, replyok):
+    if at == b"-":
+        xat = at
+    else:
+        xat = b"@%s" % h(at)
+
+    def _(ctx, ev):
+        reply = twlink.sendReq(ctx, b"watch %s %s" % (h(zf._p_oid), xat))
+        if replyok.endswith('…'):
+            rok = replyok[:-len('…')]
+            assert reply[:len(rok)] == rok
+        else:
+            assert reply == replyok
+
+    doCheckingPin(_, {twlink: (zf, pinok)})
+
+
+# doCheckingPin calls f and verifies that wcfs sends expected pins during the
+# time f executes.
+#
+# f(ctx, eventv)
+# pinokByWLink: {} tWatchLink -> (zf, {} blk -> at).
+# pinfunc(wlink, foid, blk, at) | None.
+#
+# pinfunc is called after pin request is received from wcfs, but before pin ack
+# is replied back. Pinfunc must not block.
+def doCheckingPin(f, pinokByWLink, pinfunc=None): # -> []event(str)
+    # call f and check that we receive pins as specified.
+    # Use timeout to detect wcfs replying less pins than expected.
+    #
+    # XXX detect not sent pins via ack'ing previous pins as they come in (not
+    # waiting for all of them) and then seeing that we did not received expected
+    # pin when f completes?
+    ctx, cancel = with_timeout()
+    wg = sync.WorkGroup(ctx)
+    ev = []
+
+    for wlink, (zf, pinok) in pinokByWLink.items():
+        def _(ctx, wlink, zf, pinok):
+            w = wlink._watching.get(zf._p_oid)
+            if len(pinok) > 0:
+                assert w is not None
+
+            pinv = wlink._expectPin(ctx, zf, pinok)
+            if len(pinv) > 0:
+                ev.append('pin rx')
+
+            # increase probability to receive erroneous extra pins
+            tdelay()
+
+            if len(pinv) > 0:
+                if pinfunc is not None:
+                    for p in pinv:
+                        pinfunc(wlink, p.foid, p.blk, p.at)
+                ev.append('pin ack pre')
+                for p in pinv:
+                    assert w.foid == p.foid
+                    if p.at is None:    # unpin to @head
+                        assert p.blk in w.pinned    # must have been pinned before
+                        del w.pinned[p.blk]
+                    else:
+                        w.pinned[p.blk] = p.at
+
+                    #p.reply(b"ack")
+                    wlink.replyReq(ctx, p, b"ack")
+
+            # check that we don't get extra pins before f completes
+            try:
+                req = wlink.recvReq(ctx)
+            except Exception as e:
+                if errors.Is(e, context.canceled):
+                    return # cancel is expected after f completes
+                raise
+
+            fail("extra pin message received: %r" % req.msg)
+        wg.go(_, wlink, zf, pinok)
+
+    def _(ctx):
+        f(ctx, ev)
+        # cancel _expectPin waiting upon completing f
+        # -> error that missed pins were not received.
+        cancel()
+    wg.go(_)
+
+    wg.wait()
+    return ev
+
+
+# _expectPin asserts that wcfs sends expected pin messages.
+#
+# expect is {} blk -> at
+# returns [] of received pin requests.
+@func(tWatchLink)
+def _expectPin(twlink, ctx, zf, expect): # -> []SrvReq
+    expected = set()    # of expected pin messages
+    for blk, at in expect.items():
+        hat = h(at) if at is not None else 'head'
+        msg = b"pin %s #%d @%s" % (h(zf._p_oid), blk, hat)
+        assert msg not in expected
+        expected.add(msg)
+
+    reqv = []   # of received requests
+    while len(expected) > 0:
+        try:
+            req = twlink.recvReq(ctx)
+        except Exception as e:
+            raise RuntimeError("%s\nnot all pin messages received - pending:\n%s" % (e, expected))
+        assert req is not None  # channel not closed
+        assert req.msg in expected
+        expected.remove(req.msg)
+        reqv.append(req)
+
+    return reqv
+
+
 # ---- infrastructure: helpers to query dFtail/accessed history ----
 
 # _blkDataAt returns expected zf[blk] data and its revision as of @at database state.
@@ -768,11 +1136,58 @@ def _blkDataAt(t, zf, blk, at): # -> (data, rev)
     assert rev <= at
     return data, rev
 
+# _blkRevAt returns expected zf[blk] revision as of @at database state.
+@func(tDB)
+def _blkRevAt(t, zf, blk, at): # -> rev
+    _, rev = t._blkDataAt(zf, blk, at)
+    return rev
+
+
+# _pinnedAt returns which blocks need to be pinned for zf@at compared to zf@head
+# according to wcfs isolation protocol.
+#
+# Criteria for when blk must be pinned as of @at view:
+#
+#   blk ∈ pinned(at)   <=>   1) ∃ r = rev(blk): at < r  ; blk was changed after at
+#                            2) blk ∈ tracked           ; blk was accessed at least once
+#                                                       ; (and so is tracked by wcfs)
+@func(tDB)
+def _pinnedAt(t, zf, at):  # -> pin = {} blk -> rev
+    # all changes to zf
+    vdf = [_.byfile[zf] for _ in t.dFtail if zf in _.byfile]
+
+    # {} blk -> at for changes ∈ (at, head]
+    pin = {}
+    for df in [_ for _ in vdf if _.rev > at]:
+        for blk in df.ddata:
+            if blk in pin:
+                continue
+            if blk in t._blkaccessed(zf):
+                pin[blk] = t._blkRevAt(zf, blk, at)
+
+    return pin
+
+# iter_revv iterates through all possible at_i -> at_j -> at_k ... sequences.
+# at_i < at_j       NOTE all sequences go till head.
+@func(tDB)
+def iter_revv(t, start=z64, level=0):
+    dFtail = [_ for _ in t.dFtail if _.rev > start]
+    #print(' '*level, 'iter_revv', start, [_.rev for _ in dFtail])
+    if len(dFtail) == 0:
+        yield []
+        return
+
+    for dF in dFtail:
+        #print(' '*level, 'QQQ', dF.rev)
+        for tail in t.iter_revv(start=dF.rev, level=level+1):
+            #print(' '*level, 'zzz', tail)
+            yield ([dF.rev] + tail)
+
 
 # -------------------------------------
 # ---- actual tests to access data ----
 
-# exercise wcfs functionality
+# exercise wcfs functionality without wcfs isolation protocol.
 # plain data access + wcfs handling of ZODB invalidations.
 @func
 def test_wcfs_basic():
@@ -899,6 +1314,502 @@ def test_wcfs_basic_read_aftertail():
     assert _(100*blksize)   == b''
 
 
+
+# ---- verify wcfs functionality that depends on isolation protocol ----
+
+# verify that watch setup is robust to client errors/misbehaviour.
+@func
+def test_wcfs_watch_robust():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    # sysread(/head/watch) can be interrupted
+    p = subprocess.Popen(["%s/testprog/wcfs_readcancel.py" %
+                                os.path.dirname(__file__), t.wc.mountpoint])
+    procwait(timeout(), p)
+
+
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+
+    # file not yet opened on wcfs
+    wl = t.openwatch()
+    assert wl.sendReq(timeout(), b"watch %s @%s" % (h(zf._p_oid), h(at1))) == \
+        "error setup watch f<%s> @%s: " % (h(zf._p_oid), h(at1)) + \
+        "file not yet known to wcfs or is not a ZBigFile"
+    wl.close()
+
+    # closeTX/bye cancels blocked pin handlers
+    f = t.open(zf)
+    f.assertBlk(2, 'c2')
+    f.assertCache([0,0,1])
+
+    wl = t.openwatch()
+    wg = sync.WorkGroup(timeout())
+    def _(ctx):
+        # TODO clarify what wcfs should do if pin handler closes wlink TX:
+        #   - reply error + close, or
+        #   - just close
+        # t = when reviewing WatchLink.serve in wcfs.go
+        #assert wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1))) == \
+        #        "error setup watch f<%s> @%s: " % (h(zf._p_oid), h(at1)) + \
+        #        "pin #%d @%s: context canceled" % (2, h(at1))
+        #with raises(error, match="unexpected EOF"):
+        with raises(error, match="recvReply: link is down"):
+            wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+
+    wg.go(_)
+    def _(ctx):
+        req = wl.recvReq(ctx)
+        assert req is not None
+        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+        # don't reply to req - close instead
+        wl.closeWrite()
+    wg.go(_)
+    wg.wait()
+    wl.close()
+    # NOTE if wcfs.go does not fully cleanup this canceled watch and leaves it
+    # in half-working state, it will break on further commit, as pin to the
+    # watch won't be handled.
+    at3 = t.commit(zf, {2:'c3'})
+
+    # invalid requests -> wcfs replies error
+    wl = t.openwatch()
+    assert wl.sendReq(timeout(), b'bla bla') ==  \
+            b'error bad watch: not a watch request: "bla bla"'
+
+    # invalid request not following frame structure -> fatal + wcfs must close watch link
+    assert wl.fatalv == []
+    _twlinkwrite(wl, b'zzz hello\n')
+    _, _rx = select(
+        timeout().done().recv,
+        wl.rx_eof.recv,
+    )
+    if _ == 0:
+        raise RuntimeError("%s: did not rx EOF after bad frame " % wl)
+    assert wl.fatalv == [b'error: invalid frame: "zzz hello\\n" (invalid stream)']
+    wl.close()
+
+    # watch with @at < δtail.tail -> rejected
+    wl = t.openwatch()
+    atpast = p64(u64(t.tail)-1)
+    wl._watch(zf, atpast, {}, "error setup watch f<%s> @%s: too far away back from"
+            " head/at (@%s); …" % (h(zf._p_oid), h(atpast), h(t.head)))
+    wl.close()
+
+# verify that `watch file @at` -> error, for @at when file did not existed.
+@func
+def test_wcfs_watch_before_create():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    zf2 = t.root['zfile2'] = ZBigFile(blksize)  # zf2 created @at2
+    at2 = t.commit()
+    at3 = t.commit(zf2, {1:'β3'})
+
+    # force wcfs to access/know zf2
+    f2 = t.open(zf2)
+    f2.assertData(['','β3'])
+
+    wl = t.openwatch()
+    assert wl.sendReq(timeout(), b"watch %s @%s" % (h(zf2._p_oid), h(at1))) == \
+        "error setup watch f<%s> @%s: " % (h(zf2._p_oid), h(at1)) + \
+        "file epoch detected @%s in between (at,head=@%s]" % (h(at2), h(t.head))
+    wl.close()
+
+
+# verify that watch @at_i -> @at_j ↓ is rejected
+# TODO(?) we might want to allow going back in history later.
+@func
+def test_wcfs_watch_going_back():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+    f = t.open(zf)
+    f.assertData(['','','c2'])
+
+    wl = t.openwatch()
+    wl.watch(zf, at2, {})
+    wl.sendReq(timeout(), b"watch %s @%s" % (h(zf._p_oid), h(at1))) == \
+        "error setup watch f<%s> @%s: " % (h(zf._p_oid), h(at1)) + \
+        "going back in history is forbidden"
+    wl.close()
+
+
+# verify that wcfs kills slow/faulty client who does not reply to pin in time.
+@xfail  # protection against faulty/slow clients
+@func
+def test_wcfs_pintimeout_kill():
+    # adjusted wcfs timeout to kill client who is stuck not providing pin reply
+    tkill = 3*time.second
+    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+    f = t.open(zf)
+    f.assertData(['','','c2'])
+
+    # XXX move into subprocess not to kill whole testing
+    ctx, _ = context.with_timeout(context.background(), 2*tkill)
+
+    wl = t.openwatch()
+    wg = sync.WorkGroup(ctx)
+    def _(ctx):
+        # send watch. The pin handler won't be replying -> we should never get reply here.
+        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+        fail("watch request completed (should not as pin handler is stuck)")
+    wg.go(_)
+    def _(ctx):
+        req = wl.recvReq(ctx)
+        assert req is not None
+        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+
+        # sleep > wcfs pin timeout - wcfs must kill us
+        _, _rx = select(
+            ctx.done().recv,        # 0
+            time.after(tkill).recv, # 1
+        )
+        if _ == 0:
+            raise ctx.err()
+        fail("wcfs did not killed stuck client")
+    wg.go(_)
+    wg.wait()
+
+
+# watch with @at > head - must wait for head to become >= at.
+# TODO(?) too far ahead - reject?
+@func
+def test_wcfs_watch_setup_ahead():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    f = t.open(zf)
+    at1 = t.commit(zf, {2:'c1'})
+    f.assertData(['','x','c1'])     # NOTE #1 not accessed for watch @at1 to receive no pins
+
+    wg = sync.WorkGroup(timeout())
+    dt = 100*time.millisecond
+    committing = chan() # becomes ready when T2 starts to commit
+
+    # T1: watch @(at1+1·dt)
+    @func
+    def _(ctx):
+        wl = t.openwatch()
+        defer(wl.close)
+
+        wat = tidfromtime(tidtime(at1) + 1*dt)  # > at1, but < at2
+        rx = wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(wat)))
+        assert ready(committing)
+        assert rx == b"ok"
+    wg.go(_)
+
+    # T2: sleep(10·dt); commit
+    @func
+    def _(ctx):
+        # reopen connection to database as we are committing from another thread
+        conn = t.root._p_jar.db().open()
+        defer(conn.close)
+        root = conn.root()
+        zf = root['zfile']
+
+        time.sleep(10*dt)
+        committing.close()
+        at2 = t.commit(zf, {1:'b2'})
+        assert tidtime(at2) - tidtime(at1) >= 10*dt
+    wg.go(_)
+
+    wg.wait()
+
+
+# verify that watch setup/update sends correct pins.
+@func
+def test_wcfs_watch_setup():
+    t = tDB(); zf = t.zfile; at0=t.at0
+    defer(t.close)
+
+    f = t.open(zf)
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2', 3:'d2', 4:'e2', 5:'f2'})
+    at3 = t.commit(zf, {0:'a3', 2:'c3', 5:'f3'})
+
+    f.assertData(['a3','','c3','d2','x','f3'])  # access everything except e as of @at3
+    f.assertCache([1,1,1,1,0,1])
+
+    # change again, but don't access e and f
+    at4 = t.commit(zf, {2:'c4', 4:'e4', 5:'f4'})
+    at5 = t.commit(zf, {3:'d5', 5:'f5'})
+    f.assertData(['a3','','c4','d5','x','x'])
+    f.assertCache([1,1,1,1,0,0])
+
+    # some watch setup/update requests with explicit pinok (also partly
+    # verifies how tWatchLink.watch computes automatic pinok)
+
+    # new watch setup ø -> at
+    def assertNewWatch(at, pinok):
+        wl = t.openwatch()
+        wl.watch(zf, at, pinok)
+        wl.close()
+    assertNewWatch(at1, {0:at0,  2:at1,  3:at0,  5:at0})
+    assertNewWatch(at2, {0:at0,  2:at2,  3:at2,  5:at2})
+    assertNewWatch(at3, {        2:at3,  3:at2,  5:at3})    # f(5) is pinned, even though it was not
+    assertNewWatch(at4, {                3:at2,  5:at4})    # accessed after at3
+    assertNewWatch(at5, {                             })
+
+    # new watch + update at_i -> at_j
+    wl = t.openwatch()
+    # XXX check @at0 ?
+    wl.watch(zf, at1, {0:at0,  2:at1,  3:at0,  5:at0})  #     -> at1 (new watch)    XXX at0 -> ø?
+    wl.watch(zf, at2, {        2:at2,  3:at2,  5:at2})  # at1 -> at2
+    wl.watch(zf, at3, {0:None, 2:at3,          5:at3})  # at2 -> at3
+    wl.watch(zf, at4, {        2:None,         5:at4})  # at3 -> at4 f(5) pinned even it was not accessed >=4
+    wl.watch(zf, at5, {                3:None, 5:None}) # at4 -> at5 (current head)
+    wl.close()
+
+    # all valid watch setup/update requests going at_i -> at_j -> ... with automatic pinok
+    for zf in t.zfiles():
+        for revv in t.iter_revv():
+            print('\n--------')
+            print(' -> '.join(['%s' % _ for _ in revv]))
+            wl = t.openwatch()
+            wl.watch(zf, revv[0])
+            wl.watch(zf, revv[0])    # verify at_i -> at_i
+            for at in revv[1:]:
+                wl.watch(zf, at)
+            wl.close()
+
+
+# verify that already setup watch(es) receive correct pins on block access.
+@func
+def test_wcfs_watch_vs_access():
+    t = tDB(); zf = t.zfile; at0=t.at0
+    defer(t.close)
+
+    f = t.open(zf)
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2', 3:'d2', 5:'f2'})
+    at3 = t.commit(zf, {0:'a3', 2:'c3', 5:'f3'})
+
+    f.assertData(['a3','','c3','d2','x','x'])
+    f.assertCache([1,1,1,1,0,0])
+
+    # watched + commit -> read -> receive pin messages.
+    # read vs pin ordering is checked by assertBlk.
+    #
+    # f(5) is kept not accessed to check later how wcfs.go handles δFtail
+    # rebuild after it sees not yet accessed ZBlk that has change history.
+    wl3  = t.openwatch();  w3 = wl3.watch(zf, at3);  assert at3 == t.head
+    assert w3.at     == at3
+    assert w3.pinned == {}
+
+    wl3_ = t.openwatch();  w3_ = wl3_.watch(zf, at3)
+    assert w3_.at     == at3
+    assert w3_.pinned == {}
+
+    wl2  = t.openwatch();  w2 = wl2.watch(zf, at2)
+    assert w2.at     == at2
+    assert w2.pinned == {0:at0, 2:at2}
+
+    # w_assertPin asserts on state of .pinned for {w3,w3_,w2}
+    def w_assertPin(pinw3, pinw3_, pinw2):
+        assert w3.pinned   == pinw3
+        assert w3_.pinned  == pinw3_
+        assert w2.pinned   == pinw2
+
+    f.assertCache([1,1,1,1,0,0])
+    at4 = t.commit(zf, {1:'b4', 2:'c4', 5:'f4', 6:'g4'})
+    f.assertCache([1,0,0,1,0,0,0])
+
+    f.assertBlk(0, 'a3', {wl3: {},                     wl3_: {},                     wl2: {}})
+    w_assertPin(               {},                           {},                          {0:at0, 2:at2})
+
+    f.assertBlk(1, 'b4', {wl3: {1:at0},                wl3_: {1:at0},                wl2: {1:at0}})
+    w_assertPin(               {1:at0},                      {1:at0},                     {0:at0, 1:at0, 2:at2})
+
+    f.assertBlk(2, 'c4', {wl3: {2:at3},                wl3_: {2:at3},                wl2: {}})
+    w_assertPin(               {1:at0, 2:at3},               {1:at0, 2:at3},              {0:at0, 1:at0, 2:at2})
+
+    f.assertBlk(3, 'd2', {wl3: {},                     wl3_: {},                     wl2: {}})
+    w_assertPin(               {1:at0, 2:at3},               {1:at0, 2:at3},              {0:at0, 1:at0, 2:at2})
+
+    # blk4 is hole @head - the same as at earlier db view - not pinned
+    f.assertBlk(4, '',   {wl3: {},                     wl3_: {},                     wl2: {}})
+    w_assertPin(               {1:at0, 2:at3},               {1:at0, 2:at3},              {0:at0, 1:at0, 2:at2})
+
+    # f(5) is kept unaccessed (see ^^^)
+    assert f.cached()[5] == 0
+
+    f.assertBlk(6, 'g4', {wl3: {6:at0},                wl3_: {6:at0},                wl2: {6:at0}}) # XXX at0->ø?
+    w_assertPin(               {1:at0, 2:at3, 6:at0},        {1:at0, 2:at3, 6:at0},       {0:at0, 1:at0, 2:at2, 6:at0})
+
+    # commit again:
+    # - c(2) is already pinned  -> wl3 not notified
+    # - watch stopped (wl3_)    -> watch no longer notified
+    # - wlink closed (wl2)      -> watch no longer notified
+    # - f(5) is still kept unaccessed (see ^^^)
+    f.assertCache([1,1,1,1,1,0,1])
+    at5 = t.commit(zf, {2:'c5', 3:'d5', 5:'f5'})
+    f.assertCache([1,1,0,0,1,0,1])
+
+    wl3_.stop_watch(zf) # w3_ should not be notified
+    wl2.close()         # wl2:* should not be notified
+    def w_assertPin(pinw3):
+        assert w3.pinned   == pinw3
+        assert w3_.pinned  == {}; assert w3_.at == z64  # wl3_ unsubscribed from zf
+        assert w2.pinned   == {}; assert w2.at  == z64  # wl2 closed
+
+    f.assertBlk(0, 'a3', {wl3: {},                          wl3_: {}})  # no change
+    w_assertPin(               {1:at0, 2:at3, 6:at0})
+
+    f.assertBlk(1, 'b4', {wl3: {},                          wl3_: {}})
+    w_assertPin(               {1:at0, 2:at3, 6:at0})
+
+    f.assertBlk(2, 'c5', {wl3: {},                          wl3_: {}})  # c(2) already pinned on wl3
+    w_assertPin(               {1:at0, 2:at3, 6:at0})
+
+    f.assertBlk(3, 'd5', {wl3: {3:at2},                     wl3_: {}})  # d(3) was not pinned on wl3; wl3_ not notified
+    w_assertPin(               {1:at0, 2:at3, 3:at2, 6:at0})
+
+    f.assertBlk(4, '',   {wl3: {},                          wl3_: {}})
+    w_assertPin(               {1:at0, 2:at3, 3:at2, 6:at0})
+
+    # f(5) is kept still unaccessed (see ^^^)
+    assert f.cached()[5] == 0
+
+    f.assertBlk(6, 'g4', {wl3: {},                          wl3_: {}})
+    w_assertPin(               {1:at0, 2:at3, 3:at2, 6:at0})
+
+
+    # advance watch - receives new pins/unpins to @head.
+    # this is also tested ^^^ in `at_i -> at_j -> ...` watch setup/adjust.
+    # NOTE f(5) is not affected because it was not pinned previously.
+    wl3.watch(zf, at4, {1:None, 2:at4, 6:None}) # at3 -> at4
+    w_assertPin(       {2:at4, 3:at2})
+
+    # access f(5) -> wl3 should be correctly pinned
+    assert f.cached() == [1,1,1,1,1,0,1]  # f(5) was not yet accessed
+    f.assertBlk(5, 'f5', {wl3: {5:at4},                 wl3_: {}})
+    w_assertPin(               {2:at4, 3:at2, 5:at4})
+
+    # advance watch again
+    wl3.watch(zf, at5, {2:None, 3:None, 5:None})    # at4 -> at5
+    w_assertPin(       {})
+
+    wl3.close()
+
+
+# verify that on pin message, while under pagefault, we can mmap @at/f[blk]
+# into where head/f[blk] was mmaped; the result of original pagefaulting read
+# must be from newly inserted mapping.
+#
+# TODO same with two mappings to the same file, but only one changing blk mmap
+#      -> one read gets changed data, one read gets data from @head.
+@func
+def test_wcfs_remmap_on_pin():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'hello'})
+    at2 = t.commit(zf, {2:'world'})
+
+    f  = t.open(zf)
+    f1 = t.open(zf, at=at1)
+    wl = t.openwatch()
+    wl.watch(zf, at1, {})
+
+    f.assertCache([0,0,0])
+    def _(wlink, foid, blk, at):
+        assert wlink is wl
+        assert foid  == zf._p_oid
+        assert blk   == 2
+        assert at    == at1
+        mm.map_into_ro(f._blk(blk), f1.f.fileno(), blk*f.blksize)
+
+    f._assertBlk(2, 'hello', {wl: {2:at1}}, pinfunc=_)     # NOTE not world
+
+
+# verify that pin message is not sent for the same blk@at twice.
+@func
+def test_wcfs_no_pin_twice():
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    f = t.open(zf)
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+    wl = t.openwatch()
+    w = wl.watch(zf, at1, {})
+    f.assertCache([0,0,0])
+
+    f.assertBlk(2, 'c2', {wl: {2:at1}})
+    f.assertCache([0,0,1])
+    assert w.pinned == {2:at1}
+
+    # drop file[blk] from cache, access again -> no pin message sent the second time
+    #
+    # ( we need both madvise(DONTNEED) and fadvise(DONTNEED) - given only one of
+    #   those the kernel won't release the page from pagecache; madvise does
+    #   not work without munlock. )
+    mm.unlock(f._blk(2))
+    mm.advise(f._blk(2), mm.MADV_DONTNEED)
+    fadvise_dontneed(f.f.fileno(), 2*blksize, 1*blksize)
+    f.assertCache([0,0,0])
+
+    f.assertBlk(2, 'c2', {wl: {}})
+    f.assertCache([0,0,1])
+
+
+# verify watching for 2 files over single watch link.
+@func
+def test_wcfs_watch_2files():
+    t = tDB(); zf1 = t.zfile
+    defer(t.close)
+
+    t.root['zfile2'] = zf2 = ZBigFile(blksize)
+    t.commit()
+
+    t.change(zf1, {0:'a2', 2:'c2'})
+    t.change(zf2, {1:'β2', 3:'δ2'})
+    at2 = t.commit()
+
+    t.change(zf1, {0:'a3', 2:'c3'})
+    t.change(zf2, {1:'β3', 3:'δ3'})
+    at3 = t.commit()
+
+    f1 = t.open(zf1)
+    f2 = t.open(zf2)
+
+    f1.assertData(['a3', '',   'x'    ])
+    f2.assertData(['',   'β3', '', 'x'])
+
+    wl = t.openwatch()
+    w1 = wl.watch(zf1, at2, {0:at2})
+    w2 = wl.watch(zf2, at2, {1:at2})
+
+    def w_assertPin(pinw1, pinw2):
+        assert w1.pinned == pinw1
+        assert w2.pinned == pinw2
+
+    w_assertPin(               {0:at2},             {1:at2})
+    f1.assertBlk(2, 'c3', {wl: {2:at2}})
+    w_assertPin(               {0:at2, 2:at2},      {1:at2})
+    f2.assertBlk(3, 'δ3', {wl:                      {3:at2}})
+    w_assertPin(               {0:at2, 2:at2},      {1:at2, 3:at2})
+
+    wl.watch(zf1, at3, {0:None, 2:None})
+    w_assertPin(               {},                  {1:at2, 3:at2})
+    wl.watch(zf2, at3, {1:None, 3:None})
+    w_assertPin(               {},                  {})
+
+
+
+# TODO new watch request while previous watch request is in progress (over the same /head/watch handle)
+# TODO @revX/ is automatically removed after some time
+
+
 # ---- misc ---
 
 # readfile reads file @ path.
@@ -974,6 +1885,18 @@ class tAt(bytes):
                     return "@at%d (%s)" % (i, h(at))
         return "@" + h(at)
     __str__ = __repr__
+
+# hpin returns human-readable representation for {}blk->rev.
+@func(tDB)
+def hpin(t, pin):
+    pinv = []
+    for blk in sorted(pin.keys()):
+        if pin[blk] is None:
+            s = '@head'
+        else:
+            s = '%s' % pin[blk]
+        pinv.append('%d: %s' % (blk, s))
+    return '{%s}' % ', '.join(pinv)
 
 
 # zfiles returns ZBigFiles that were ever changed under t.
