@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | tests for real faults leading to crash
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -109,7 +109,7 @@ void fault_in_loadblk()
         .file_ops   = &faulty_ops,
     };
 
-    err = fileh_open(&fh, &f, ram);
+    err = fileh_open(&fh, &f, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
 
     err = fileh_mmap(vma, &fh, 0, 2);
@@ -164,7 +164,7 @@ void fault_in_storeblk()
         .file_ops   = &faulty_ops,
     };
 
-    err = fileh_open(&fh, &f, ram);
+    err = fileh_open(&fh, &f, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
 
     err = fileh_mmap(vma, &fh, 0, 2);

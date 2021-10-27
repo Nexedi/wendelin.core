@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2020  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -981,7 +981,7 @@ pyfileh_open(PyObject *pyfile0, PyObject *args)
         return NULL;
 
     Py_INCREF(pyfile);
-    err = fileh_open(&pyfileh->fileh, &pyfile->file, ram);
+    err = fileh_open(&pyfileh->fileh, &pyfile->file, ram, DONT_MMAP_OVERLAY);
     if (err) {
         XPyErr_SetFromErrno();
         Py_DECREF(pyfile);

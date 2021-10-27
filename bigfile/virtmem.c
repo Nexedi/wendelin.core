@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2020  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -138,10 +138,25 @@ static void sigsegv_restore(const sigset_t *save_sigset)
  * OPEN / CLOSE *
  ****************/
 
-int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
+int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram, FileHOpenFlags flags)
 {
     int err = 0;
     sigset_t save_sigset;
+    const bigfile_ops *fops = file->file_ops;
+
+    if (!(flags == 0 || flags == MMAP_OVERLAY || flags == DONT_MMAP_OVERLAY))
+        return -EINVAL;
+    if (flags == 0)
+        flags = fops->mmap_setup_read ? MMAP_OVERLAY : DONT_MMAP_OVERLAY;
+    if (flags & MMAP_OVERLAY && flags & DONT_MMAP_OVERLAY)
+        return -EINVAL;
+    if (flags == MMAP_OVERLAY) {
+        ASSERT(fops->mmap_setup_read);
+        ASSERT(fops->remmap_blk_read);
+        ASSERT(fops->munmap);
+    }
+    if (flags == DONT_MMAP_OVERLAY)
+        ASSERT(fops->loadblk);
 
     sigsegv_block(&save_sigset);
     virt_lock();
@@ -158,6 +173,8 @@ int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram)
     INIT_LIST_HEAD(&fileh->dirty_pages);
     fileh->writeout_inprogress = 0;
     pagemap_init(&fileh->pagemap, ilog2_exact(ram->pagesize));
+
+    fileh->mmap_overlay = (flags == MMAP_OVERLAY);
 
 out:
     virt_unlock();
@@ -212,8 +229,9 @@ void fileh_close(BigFileH *fileh)
 
 int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
 {
-    void *addr;
     size_t len = pglen * fileh->ramh->ram->pagesize;
+    BigFile *file = fileh->file;
+    const bigfile_ops *fops = file->file_ops;
     int err = 0;
     sigset_t save_sigset;
 
@@ -230,15 +248,40 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
     if (!vma->page_ismappedv)
         goto fail;
 
-    /* allocate address space somewhere */
-    addr = mem_valloc(NULL, len);
-    if (!addr)
-        goto fail;
+    if (fileh->mmap_overlay) {
+        /* wcfs: mmap(base, READ)
+         * vma->addr_{start,stop} are initialized by mmap_setup_read */
+        TODO (file->blksize != fileh->ramh->ram->pagesize);
+        err = fops->mmap_setup_read(vma, file, pgoffset, pglen);
+        if (err)
+            goto fail;
+    } else {
+        /* !wcfs: allocate address space somewhere */
+        void *addr = mem_valloc(NULL, len);
+        if (!addr)
+            goto fail;
+        /* vma address range known */
+        vma->addr_start  = (uintptr_t)addr;
+        vma->addr_stop   = vma->addr_start + len;
+    }
+
+    /* wcfs: mmap(fileh->dirty_pages) over base */
+    if (fileh->mmap_overlay) {
+        Page* page;
+        struct list_head *hpage;
+
+        list_for_each(hpage, &fileh->dirty_pages) {
+            page = list_entry(hpage, typeof(*page), in_dirty);
+            BUG_ON(page->state != PAGE_DIRTY);
+
+            if (!vma_page_infilerange(vma, page))
+                continue; /* page is out of requested mmap coverage */
+
+            vma_mmap_page(vma, page);
+        }
+    }
 
     /* everything allocated - link it up */
-    vma->addr_start  = (uintptr_t)addr;
-    vma->addr_stop   = vma->addr_start + len;
-
 
     // XXX need to init vma->virt_list first?
     /* hook vma to fileh->mmaps */
@@ -282,7 +325,12 @@ void vma_unmap(VMA *vma)
 
     /* unmap whole vma at once - the kernel unmaps each mapping in turn.
      * NOTE error here would mean something is broken */
-    xmunmap((void *)vma->addr_start, len);
+    if (fileh->mmap_overlay) {
+        int err = fileh->file->file_ops->munmap(vma, fileh->file);
+        BUG_ON(err);
+    } else {
+        xmunmap((void *)vma->addr_start, len);
+    }
 
     /* scan through mapped-to-this-vma pages and release them */
     for (i=0; i < pglen; ++i) {
@@ -384,14 +432,46 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
                 goto out;
         }
 
-        /* page.state -> PAGE_LOADED and correct mappings RW -> R */
+        /* wcfs:  remmap RW pages to base layer
+         * !wcfs: page.state -> PAGE_LOADED and correct mappings RW -> R
+         *
+         * NOTE for transactional storage (ZODB and ZBigFile) storeblk creates
+         * new transaction on database side, but does not update current DB
+         * connection to view that transaction. Thus if loadblk will be loaded
+         * with not-yet-resynced DB connection, it will return old - not stored
+         * - data. For !wcfs case this is partly mitigated by the fact that
+         * stored pages are kept as PAGE_LOADED in ram, but it cannot be
+         * relied as ram_reclaim can drop those pages and read access to them
+         * will trigger loadblk from database which will return old data.
+         * For wcfs case remapping to base layer will always return old data
+         * until wcfs mapping is updated to view database at newer state.
+         *
+         * In general it is a bug to access data pages in between transactions,
+         * so we accept those corner case difference in between wcfs and !wcfs.
+         */
         if (flags & WRITEOUT_MARKSTORED) {
             page->state = PAGE_LOADED;
             list_del_init(&page->in_dirty);
 
             list_for_each(hmmap, &fileh->mmaps) {
                 VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
-                vma_page_ensure_notmappedrw(vma, page);
+                if (fileh->mmap_overlay) {
+                    /* wcfs:  RW -> base layer */
+                    vma_page_ensure_unmapped(vma, page);
+                } else {
+                    /* !wcfs: RW -> R*/
+                    vma_page_ensure_notmappedrw(vma, page);
+                }
+            }
+
+            /* wcfs:  all vmas are using base layer now - drop page completely
+             *        without unnecessarily growing RSS and relying on reclaim.
+             * !wcfs: keep the page in RAM cache, even if it is not mapped anywhere */
+            if (fileh->mmap_overlay) {
+                ASSERT(page->refcnt == 0);
+                pagemap_del(&fileh->pagemap, page->f_pgoffset);
+                page_drop_memory(page);
+                page_del(page);
             }
         }
     }
@@ -428,6 +508,11 @@ void fileh_dirty_discard(BigFileH *fileh)
         BUG_ON(page->state != PAGE_DIRTY);
 
         page_drop_memory(page);
+        // TODO consider doing pagemap_del + page_del unconditionally
+        if (fileh->mmap_overlay) {
+            pagemap_del(&fileh->pagemap, page->f_pgoffset);
+            page_del(page);
+        }
     }
 
     BUG_ON(!list_empty(&fileh->dirty_pages));
@@ -451,6 +536,15 @@ void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset)
 
     /* it's an error to invalidate fileh while writeout is in progress */
     BUG_ON(fileh->writeout_inprogress);
+
+    /* wcfs: even though the operation to invalidate a page is well defined (it
+     * is subset of discard), we forbid it since wcfs handles invalidations
+     * from ZODB by itself inside wcfs server.
+     *
+     * It was kind of mistake to expose in 92bfd03e (bigfile: ZODB -> BigFileH
+     * invalidate propagation) fileh_invalidate_page as public API, since such
+     * invalidation should be handled by a BigFile instance internally. */
+    BUG_ON(fileh->mmap_overlay);
 
     page = pagemap_get(&fileh->pagemap, pgoffset);
     if (page) {
@@ -588,6 +682,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     pgoff_t pagen;
     Page *page;
     BigFileH *fileh;
+    struct list_head *hmmap;
 
     /* continuing on_pagefault() - see (1) there ... */
 
@@ -595,8 +690,51 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     fileh = vma->fileh;
     pagen = vma_addr_fpgoffset(vma, addr);
 
+    /* wcfs: we should get into SIGSEGV handler only on write access */
+    if (fileh->mmap_overlay)
+        BUG_ON(!write);
+
     /* (3) fileh, pagen -> page  (via pagemap) */
     page = pagemap_get(&fileh->pagemap, pagen);
+
+    /* wcfs: all dirty pages are mmapped when vma is created.
+     *       thus here, normally, if page is present in pagemap, it can be only either
+     *       - a page we just loaded for dirtying, or
+     *       - a page that is in progress of being loaded.
+     *
+     *       however it can be also a *dirty* page due to simultaneous write
+     *       access from 2 threads:
+     *
+     *            T1                                   T2
+     *
+     *         write pagefault                      write pagefault
+     *         virt_lock
+     *         page.state = PAGE_LOADING
+     *         virt_unlock
+     *         # start loading the page
+     *         ...
+     *         # loading completed
+     *         virt_lock
+     *         page.state = PAGE_LOADED_FOR_WRITE
+     *         virt_unlock
+     *         return VM_RETRY
+     *                                              virt_lock
+     *                                              # sees page.state = PAGE_LOADED_FOR_WRITE
+     *                                              page.state = PAGE_DIRTY
+     *                                              virt_unlock
+     *
+     *         # retrying
+     *         virt_lock
+     *         # sees page.state = PAGE_DIRTY  <--
+     *
+     *
+     * ( PAGE_LOADED_FOR_WRITE is used only to verify that in wcfs mode we
+     *   always keep all dirty pages mmapped on fileh_open and so pagefault
+     *   handler must not see a PAGE_LOADED page. )
+     */
+    if (fileh->mmap_overlay && page)
+        ASSERT(page->state == PAGE_LOADED_FOR_WRITE || page->state == PAGE_LOADING ||
+               page->state == PAGE_DIRTY);
 
     /* (4) no page found - allocate new from ram */
     while (!page) {
@@ -666,27 +804,36 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         pageram = page_mmap(page, NULL, PROT_READ | PROT_WRITE);
         TODO(!pageram); // XXX err
 
-        /* loadblk() -> pageram memory */
+        /* load block -> pageram memory */
         blk = page->f_pgoffset;     // NOTE because blksize = pagesize
 
-        /* mark page as loading and unlock virtmem before calling loadblk()
+        /* mark page as loading and unlock virtmem before doing actual load via
+         * loadblk() or wcfs.
          *
-         * that call is potentially slow and external code can take other
+         * both calls are potentially slow and external code can take other
          * locks. If that "other locks" are also taken before external code
          * calls e.g. fileh_invalidate_page() in different codepath a deadlock
          * can happen. (similar to storeblk case) */
         page->state = PAGE_LOADING;
         virt_unlock();
 
-        err = file->file_ops->loadblk(file, blk, pageram);
+        if (fileh->mmap_overlay) {
+            /* wcfs: copy block data from read-only base mmap.
+             * NOTE we'll get SIGBUG here if wcfs returns EIO when loading block data */
+            memcpy(pageram, vma_page_addr(vma, page), page_size(page));
+        }
+        else {
+            /* !wcfs: call loadblk */
+            err = file->file_ops->loadblk(file, blk, pageram);
 
-        /* TODO on error -> try to throw exception somehow to the caller, so
-         *      that it can abort current transaction, but not die.
-         *
-         * NOTE for analogue situation when read for mmaped file fails, the
-         *      kernel sends SIGBUS
-         */
-        TODO (err);
+            /* TODO on error -> try to throw exception somehow to the caller, so
+             *      that it can abort current transaction, but not die.
+             *
+             * NOTE for analogue situation when read for mmaped file fails, the
+             *      kernel sends SIGBUS
+             */
+            TODO (err);
+        }
 
         /* relock virtmem */
         virt_lock();
@@ -703,7 +850,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
 
         /* else just mark the page as loaded ok */
         else
-            page->state = PAGE_LOADED;
+            page->state = (write ? PAGE_LOADED_FOR_WRITE : PAGE_LOADED);
 
         /* we have to retry the whole fault, because the vma could have been
          * changed while we were loading page with virtmem lock released */
@@ -736,7 +883,7 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     /* (6) page data ready. Mmap it atomically into vma address space, or mprotect
      * appropriately if it was already mmaped. */
     PageState newstate = PAGE_LOADED;
-    if (write || page->state == PAGE_DIRTY) {
+    if (write || page->state == PAGE_DIRTY || page->state == PAGE_LOADED_FOR_WRITE) {
         newstate = PAGE_DIRTY;
     }
 
@@ -750,6 +897,19 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
     page->state = max(page->state, newstate);
 
     vma_mmap_page(vma, page);
+    /* wcfs: also mmap the page to all wcfs-backed vmas. If we don't, the
+     * memory on those vmas will read with stale data */
+    if (fileh->mmap_overlay) {
+        list_for_each(hmmap, &fileh->mmaps) {
+            VMA *vma2 = list_entry(hmmap, typeof(*vma2), same_fileh);
+            if (vma2 == vma)
+                continue;
+            if (!vma_page_infilerange(vma2, page))
+                continue; /* page is out of vma2 file-range coverage */
+
+            vma_mmap_page(vma2, page);
+        }
+    }
 
     /* mark page as used recently */
     // XXX = list_move_tail()
@@ -785,8 +945,16 @@ static int __ram_reclaim(RAM *ram)
         scanned++;
 
         /* can release ram only from loaded non-dirty pages
-         * NOTE PAGE_LOADING pages are not dropped - they just continue to load */
-        if (page->state == PAGE_LOADED) {
+         * NOTE PAGE_LOADING pages are not dropped - they just continue to load
+         *
+         * NOTE PAGE_LOADED_FOR_WRITE are dropped too - even if normally they
+         * are going to be dirtied in a moment, due to VM_RETRY logic and so
+         * VMA might be changing simultaneously to pagefault handling, a
+         * page might remain in pagemap in PAGE_LOADED_FOR_WRITE state
+         * indefinitely unused and without actually being dirtied.
+         *
+         * TODO drop PAGE_LOADED_FOR_WRITE only after all PAGE_LOADED have been reclaimed. */
+        if (page->state == PAGE_LOADED || page->state == PAGE_LOADED_FOR_WRITE) {
             page_drop_memory(page);
             batch--;
         }
@@ -934,6 +1102,7 @@ static void vma_mmap_page(VMA *vma, Page *page) {
     pgoff_t pgoff_invma;
     int prot = (page->state == PAGE_DIRTY ? PROT_READ|PROT_WRITE : PROT_READ);
 
+    // NOTE: PAGE_LOADED_FOR_WRITE not passed here
     ASSERT(page->state == PAGE_LOADED || page->state == PAGE_DIRTY);
     ASSERT(vma->f_pgoffset <= page->f_pgoffset &&
                               page->f_pgoffset < vma_addr_fpgoffset(vma, vma->addr_stop));
@@ -980,8 +1149,19 @@ static void vma_page_ensure_unmapped(VMA *vma, Page *page)
     if (!vma_page_ismapped(vma, page))
         return;
 
-    /* mmap empty PROT_NONE address space instead of page memory */
-    mem_xvalloc(vma_page_addr(vma, page), page_size(page));
+    if (vma->fileh->mmap_overlay) {
+        /* wcfs: remmap readonly to base image */
+        BigFile *file = vma->fileh->file;
+        int err;
+
+        TODO (file->blksize != page_size(page));
+        err = file->file_ops->remmap_blk_read(vma, file, /* blk = */page->f_pgoffset);
+        BUG_ON(err); /* must not fail */
+    }
+    else {
+        /* !wcfs: mmap empty PROT_NONE address space instead of page memory */
+        mem_xvalloc(vma_page_addr(vma, page), page_size(page));
+    }
 
     bitmap_clear_bit(vma->page_ismappedv, page->f_pgoffset - vma->f_pgoffset);
     page_decref(page);
@@ -1002,6 +1182,21 @@ static void vma_page_ensure_notmappedrw(VMA *vma, Page *page)
     // XXX PROT_READ always? (it could be mmaped with PROT_NONE before without
     // first access) - then it should not be mapped in page_ismappedv -> ok.
     xmprotect(vma_page_addr(vma, page), page_size(page), PROT_READ);
+}
+
+/* __fileh_page_isdirty returns whether fileh page is dirty or not.
+ *
+ * must be called under virtmem lock.
+ */
+bool __fileh_page_isdirty(BigFileH *fileh, pgoff_t pgoffset)
+{
+    Page *page;
+
+    page = pagemap_get(&fileh->pagemap, pgoffset);
+    if (!page)
+        return false;
+
+    return (page->state == PAGE_DIRTY);
 }
 
 

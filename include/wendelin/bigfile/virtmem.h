@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_VIRTMEM_H_
 
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -29,9 +29,24 @@
  * Read access to mapped pages cause their on-demand loading, and write access
  * marks modified pages as dirty. Dirty pages then can be on request either
  * written out back to file or discarded.
+ *
+ *
+ * Mmap overlaying
+ *
+ * A particular BigFile implementation can optionally provide functionality to
+ * mmap its data into memory. For BigFile handles opened in such mode, virtmem
+ * does not allocate RAM for read access and will only allocate RAM when pages
+ * are dirtied. The mode in which BigFile handle is opened is specified via
+ * fileh_open(flags=...).
+ *
+ * The primary user of "mmap overlay" functionality will be wcfs - virtual
+ * filesystem that provides access to ZBigFile data via OS-level files(*).
+ *
+ * (*) see wcfs/client/wcfs.h and wcfs/wcfs.go
  */
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <wendelin/list.h>
 #include <wendelin/bigfile/types.h>
 #include <wendelin/bigfile/pagemap.h>
@@ -77,6 +92,13 @@ struct BigFileH {
 
     /* whether writeout is currently in progress */
     int writeout_inprogress;
+
+    /* whether base data for all VMAs of this fileh are taken as base-layer mmap
+     *
+     * ( we require all VMAs under one fileh to be of the same kind to easily
+     *   make decision whether after writeout to keep a page in RAM or to
+     *   completely drop it not to waste RSS unnecessarily ) */
+    unsigned    mmap_overlay : 1;
 };
 typedef struct BigFileH BigFileH;
 
@@ -89,7 +111,9 @@ enum PageState {
                     = 2, /* file content              loading was in progress
                             while request to invalidate the page came in */
     PAGE_LOADED     = 3, /* file content has     been loaded and was not modified */
-    PAGE_DIRTY      = 4, /* file content has     been loaded and was     modified */
+    PAGE_LOADED_FOR_WRITE
+                    = 4, /* file content has     been loaded and is going to be modified */
+    PAGE_DIRTY      = 5, /* file content has     been loaded and was     modified */
 };
 typedef enum PageState PageState;
 
@@ -142,6 +166,16 @@ struct VMA {
 
     /* whether corresponding to pgoffset-f_offset page is mapped in this VMA */
     bitmap      *page_ismappedv;    /* len ~ Δaddr / pagesize */
+
+    /* BigFile-specific field used when VMA was created from fileh opened with
+     * MMAP_OVERLAY flag. bigfile_ops.mmap_setup_read can initialize this to
+     * object pointer specific to serving created base overlay mapping.
+     *
+     * For example WCFS will use this to link VMA -> wcfs.Mapping to know which
+     * wcfs-specific mapping is serving particular virtmem VMA.
+     *
+     * NULL for VMAs created from under DONT_MMAP_OVERLAY fileh. */
+    void        *mmap_overlay_server;
 };
 
 
@@ -149,15 +183,34 @@ struct VMA {
  *      API for clients      *
  *****************************/
 
+/* flags for fileh_open */
+enum FileHOpenFlags {
+    /* use "mmap overlay" mode for base file data of all mappings created
+     * for this fileh.
+     *
+     * The file must have .mmap_setup_read & friends != NULL in file_ops.
+     */
+    MMAP_OVERLAY        = 1 << 0,
+
+    /* don't use "mmap overlay" mode */
+    DONT_MMAP_OVERLAY   = 1 << 1,
+
+    /* NOTE: if both MMAP_OVERLAY and DONT_MMAP_OVERLAY are not given,
+     * the behaviour is to use mmap overlay if .mmap_* fops != NULL and
+     * regular loads otherwise. */
+};
+typedef enum FileHOpenFlags FileHOpenFlags;
+
 /* open handle for a BigFile
  *
  * @fileh[out]  BigFileH handle to initialize for this open
  * @file
  * @ram         RAM that will back created fileh mappings
+ * @flags       flags for this open - see FileHOpenFlags
  *
  * @return  0 - ok, !0 - fail
  */
-int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram);
+int fileh_open(BigFileH *fileh, BigFile *file, RAM *ram, FileHOpenFlags flags);
 
 
 /* close fileh
@@ -201,8 +254,9 @@ enum WriteoutFlags {
 
     /* mark dirty pages as stored to file ok
      *
-     * pages state becomes PAGE_LOADED and all mmaps are updated to map pages as
-     * R/O to track further writes.
+     * wcfs:  all mmaps are updated to map read-only to base layer.
+     * !wcfs: pages state becomes PAGE_LOADED and all mmaps are updated to map
+     *        pages as R/O to track further writes.
      */
     WRITEOUT_MARKSTORED     = 1 << 1,
 };
@@ -252,7 +306,7 @@ void fileh_dirty_discard(BigFileH *fileh);
  *   file was changed externally )
  *
  * it's an error to call fileh_invalidate_page() while writeout for fileh is in
- * progress.
+ * progress, or for fileh opened in MMAP_OVERLAY mode.
  */
 void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset);
 
@@ -332,6 +386,7 @@ typedef struct VirtGilHooks VirtGilHooks;
 
 void virt_lock_hookgil(const VirtGilHooks *gilhooks);
 
+bool __fileh_page_isdirty(BigFileH *fileh, pgoff_t pgoff);
 
 // XXX is this needed? think more
 /* what happens on out-of-memory */

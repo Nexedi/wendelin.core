@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | virtual memory benchmarks
- * Copyright (C) 2017-2019  Nexedi SA and Contributors.
+ * Copyright (C) 2017-2021  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -80,7 +80,7 @@ void bench_pagefault() {
     };
 
     /* setup f mapping */
-    err = fileh_open(fh, &f, ram);
+    err = fileh_open(fh, &f, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
 
     err = fileh_mmap(vma, fh, 0, npage);

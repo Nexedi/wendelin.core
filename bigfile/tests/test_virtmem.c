@@ -393,7 +393,7 @@ void test_file_access_synthetic(void)
         .file_ops   = &x_ops,
     };
 
-    err = fileh_open(fh, &fileid, ram);
+    err = fileh_open(fh, &fileid, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
     ok1(list_empty(&fh->mmaps));
 
@@ -955,7 +955,7 @@ void test_file_access_pagefault()
         .file_ops   = &fileid_ops,
     };
 
-    err = fileh_open(fh, &fileid, ram);
+    err = fileh_open(fh, &fileid, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
 
 /* implicitly use fileh=fh */
@@ -1083,7 +1083,7 @@ void test_pagefault_savestate()
         .file_ops   = &badfile_ops,
     };
 
-    err = fileh_open(fh, &f, ram);
+    err = fileh_open(fh, &f, ram, DONT_MMAP_OVERLAY);
     ok1(!err);
 
     err = fileh_mmap(vma, fh, 0, 1);
@@ -1109,6 +1109,544 @@ void test_pagefault_savestate()
     free(ram);
 }
 
+/* ---------------------------------------- */
+
+/* test access to file mappings with file having .mmap* instead of .loadblk
+ *
+ * "mmap overlay" is virtmem mode used with wcfs: RAM pages are used only for
+ * dirtied data and everything else comes as read-only mmap from wcfs file.
+ */
+
+/* BigFileMMap is BigFile that mmaps blkdata for read from a regular file.
+ *
+ * Store, contrary to load, is done via regular file writes. */
+struct BigFileMMap {
+    BigFile;
+    int fd;         /* fd of file to mmap */
+    int nstoreblk;  /* number of times storeblk         called  */
+    int nremmapblk; /* ----//----      remmap_blk_read  called  */
+    int nmunmap;    /* ----//----      munmap           called  */
+};
+typedef struct BigFileMMap BigFileMMap;
+
+void mmapfile_release(BigFile *file) {
+    BigFileMMap *f = upcast(BigFileMMap*, file);
+    int err;
+
+    err = close(f->fd);
+    BUG_ON(err);
+}
+
+int mmapfile_storeblk(BigFile *file, blk_t blk, const void *buf) {
+    BigFileMMap *f = upcast(BigFileMMap*, file);
+    size_t n = f->blksize;
+    off_t at = blk*f->blksize;
+
+    f->nstoreblk++;
+
+    while (n > 0) {
+        ssize_t wrote;
+        wrote = pwrite(f->fd, buf, n, at);
+        if (wrote == -1)
+            return -1;
+
+        BUG_ON(wrote > n);
+        n -= wrote;
+        buf += wrote;
+        at  += wrote;
+    }
+
+    return 0;
+}
+
+int mmapfile_mmap_setup_read(VMA *vma, BigFile *file, blk_t blk, size_t blklen) {
+    BigFileMMap *f = upcast(BigFileMMap*, file);
+    size_t len = blklen*f->blksize;
+    void *addr;
+
+    addr = mmap(NULL, len, PROT_READ, MAP_SHARED, f->fd, blk*f->blksize);
+    if (addr == MAP_FAILED)
+        return -1;
+
+    vma->addr_start = (uintptr_t)addr;
+    vma->addr_stop  = vma->addr_start + len;
+    return 0;
+}
+
+int mmapfile_remmap_blk_read(VMA *vma, BigFile *file, blk_t blk) {
+    BigFileMMap *f = upcast(BigFileMMap*, file);
+    TODO (f->blksize != vma->fileh->ramh->ram->pagesize);
+    ASSERT(vma->f_pgoffset <= blk && blk < vma_addr_fpgoffset(vma, vma->addr_stop));
+    pgoff_t pgoff_invma = blk - vma->f_pgoffset;
+    uintptr_t addr = vma->addr_start + pgoff_invma*f->blksize;
+    void *mapped;
+
+    f->nremmapblk++;
+    mapped = mmap((void *)addr, 1*f->blksize, PROT_READ, MAP_SHARED | MAP_FIXED, f->fd, blk*f->blksize);
+    if (mapped == MAP_FAILED)
+        return -1;
+
+    ASSERT(mapped == (void *)addr);
+    return 0;
+}
+
+int mmapfile_munmap(VMA *vma, BigFile *file) {
+    BigFileMMap *f = upcast(BigFileMMap*, file);
+    size_t len = vma->addr_stop - vma->addr_start;
+
+    f->nmunmap++;
+    xmunmap((void *)vma->addr_start, len);
+    return 0;
+}
+
+static const struct bigfile_ops mmapfile_ops = {
+    .loadblk            = NULL,
+    .storeblk           = mmapfile_storeblk,
+    .mmap_setup_read    = mmapfile_mmap_setup_read,
+    .remmap_blk_read    = mmapfile_remmap_blk_read,
+    .munmap             = mmapfile_munmap,
+    .release            = mmapfile_release,
+};
+
+
+/* verify virtmem behaviour when it is given BigFile with .mmap_* to handle data load. */
+void test_file_access_mmapoverlay(void)
+{
+    RAM *ram;
+    BigFileH fh_struct, *fh = &fh_struct;
+    VMA vma_struct, *vma = &vma_struct;
+    VMA vma2_struct, *vma2 = &vma2_struct;
+    Page *page0, *page2, *page3;
+    blk_t *b0, *b2;
+    size_t PS, PSb;
+    int fd, err;
+
+    diag("Testing file access (mmap base)");
+
+    // XXX save/restore sigaction ?
+    ok1(!pagefault_init());
+
+    ram = ram_new(NULL, NULL);
+    ok1(ram);
+    PS = ram->pagesize;
+    PSb = PS / sizeof(blk_t);   /* page size in blk_t units */
+
+/* implicitly use ram=ram */
+#define CHECK_MRU(...)  __CHECK_MRU(ram, __VA_ARGS__)
+
+    /* ensure we are starting from new ram */
+    CHECK_MRU(/*empty*/);
+
+    /* setup mmaped file */
+    char path[] = "/tmp/bigfile_mmap.XXXXXX";
+    fd = mkstemp(path);
+    ok1(fd != -1);
+    err = unlink(path);
+    ok1(!err);
+
+    BigFileMMap file = {
+        .blksize    = ram->pagesize,    /* artificially blksize = pagesize */
+        .file_ops   = &mmapfile_ops,
+        .fd         = fd,
+        .nstoreblk  = 0,
+        .nremmapblk = 0,
+        .nmunmap    = 0,
+    };
+
+    /* fstore stores data into file[blk] */
+    void fstore(blk_t blk, blk_t data) {
+        blk_t *buf;
+        int i;
+        buf = malloc(file.blksize);
+        BUG_ON(!buf);
+        for (i=0; i < file.blksize/sizeof(*buf); i++)
+            buf[i] = data;
+        err = file.file_ops->storeblk(&file, blk, buf);
+        BUG_ON(err);
+        free(buf);
+    }
+
+    /* initialize file[100 +4) */
+    fstore(100, 100);
+    fstore(101, 101);
+    fstore(102, 102);
+    fstore(103, 103);
+
+
+    err = fileh_open(fh, &file, ram, MMAP_OVERLAY);
+    ok1(!err);
+
+/* implicitly use fileh=fh */
+#define CHECK_PAGE(page, pgoffset, pgstate, pgrefcnt)   \
+                __CHECK_PAGE(page, fh, pgoffset, pgstate, pgrefcnt)
+#define CHECK_NOPAGE(pgoffset)  __CHECK_NOPAGE(fh, pgoffset)
+#define CHECK_DIRTY(...)        __CHECK_DIRTY(fh, __VA_ARGS__)
+
+    err = fileh_mmap(vma, fh, 100, 4);
+    ok1(!err);
+
+    ok1(fh->mmaps.next == &vma->same_fileh);
+    ok1(vma->same_fileh.next == &fh->mmaps);
+
+    /* all pages initially unmapped */
+    ok1(!M(vma, 0));    CHECK_NOPAGE(       100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(       101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(       102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(       103                      );
+
+    CHECK_MRU   (/*empty*/);
+    CHECK_DIRTY (/*empty*/);
+
+    /* read page[0] - served from base mmap and no RAM page is loaded */
+    ok1(B(vma, 0*PSb + 0) == 100);
+    ok1(B(vma, 0*PSb + 1) == 100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(       100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(       101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(       102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(       103                      );
+
+    CHECK_MRU   (/*empty*/);
+    CHECK_DIRTY (/*empty*/);
+
+    /* write to page[2] - page2 is copy-on-write created in RAM */
+    B(vma, 2*PSb) = 12;
+
+    page2 = pagemap_get(&fh->pagemap, 102);
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    ok1(B(vma, 2*PSb + 0) ==  12); /* set by write */
+    ok1(B(vma, 2*PSb + 1) == 102);
+    ok1(B(vma, 2*PSb + PSb - 1) == 102);
+
+    CHECK_MRU   (page2);
+    CHECK_DIRTY (page2);
+
+    /* read page[3] - served from base mmap */
+    ok1(B(vma, 3*PSb + 0) == 103);
+    ok1(B(vma, 3*PSb + 1) == 103);
+    ok1(B(vma, 3*PSb + PSb - 1) == 103);
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (page2);
+    CHECK_DIRTY (page2);
+
+    /* write to page[0] - page COW'ed into RAM */
+    B(vma, 0*PSb) = 10;
+
+    page0 = pagemap_get(&fh->pagemap, 100);
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    ok1(B(vma, 0*PSb + 0) ==  10); /* set by write */
+    ok1(B(vma, 0*PSb + 1) == 100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    CHECK_MRU   (page0, page2);
+    CHECK_DIRTY (page0, page2);
+
+
+    /* unmap vma - dirty pages should stay in fh->pagemap and memory should
+     * not be forgotten */
+    diag("vma_unmap");
+    vma_unmap(vma);
+
+    ok1(list_empty(&fh->mmaps));
+
+    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     0);
+    CHECK_NOPAGE(         101                      );
+    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     0);
+    CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (page0, page2);
+    CHECK_DIRTY (page0, page2);
+
+    b0 = page_mmap(page0, NULL, PROT_READ); ok1(b0);
+    b2 = page_mmap(page2, NULL, PROT_READ); ok1(b2);
+
+    ok1(b0[0] ==  10);
+    ok1(b0[1] == 100);
+    ok1(b0[PSb - 1] == 100);
+    ok1(b2[0] ==  12);
+    ok1(b2[1] == 102);
+    ok1(b2[PSb - 1] == 102);
+
+    xmunmap(b0, PS);
+    xmunmap(b2, PS);
+
+
+    /* map vma back - dirty pages should be there _and_ mapped to vma.
+     * (this differs from !wcfs case which does not mmap dirty pages until access) */
+    diag("vma mmap again");
+    err = fileh_mmap(vma, fh, 100, 4);
+    ok1(!err);
+
+    ok1(fh->mmaps.next == &vma->same_fileh);
+    ok1(vma->same_fileh.next == &fh->mmaps);
+
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (page0, page2);
+    CHECK_DIRTY (page0, page2);
+
+    /* dirtying a page in one mapping should automatically mmap the dirty page
+     * in all other wcfs mappings */
+    diag("dirty page in vma2 -> dirties vma1");
+    err = fileh_mmap(vma2, fh, 100, 4);
+    ok1(!err);
+
+    ok1(fh->mmaps.next == &vma->same_fileh);
+    ok1(vma->same_fileh.next == &vma2->same_fileh);
+    ok1(vma2->same_fileh.next == &fh->mmaps);
+
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     2);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     2);
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    ok1( M(vma2, 0));
+    ok1(!M(vma2, 1));
+    ok1( M(vma2, 2));
+    ok1(!M(vma2, 3));
+
+    CHECK_MRU   (page0, page2);
+    CHECK_DIRTY (page0, page2);
+
+    B(vma2, 3*PSb) = 13;    /* write to page[3] via vma2 */
+
+    page3 = pagemap_get(&fh->pagemap, 103);
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     2);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     2);
+    ok1( M(vma, 3));    CHECK_PAGE  (page3,   103,    PAGE_DIRTY,     2);
+
+    ok1( M(vma2, 0));
+    ok1(!M(vma2, 1));
+    ok1( M(vma2, 2));
+    ok1( M(vma2, 3));
+
+    ok1(B(vma,  3*PSb + 0) ==  13); /* set by write */
+    ok1(B(vma,  3*PSb + 1) == 103);
+    ok1(B(vma,  3*PSb + PSb - 1) == 103);
+
+    ok1(B(vma2, 3*PSb + 0) ==  13); /* set by write */
+    ok1(B(vma2, 3*PSb + 1) == 103);
+    ok1(B(vma2, 3*PSb + PSb - 1) == 103);
+
+    CHECK_MRU   (page3, page0, page2);
+    CHECK_DIRTY (page3, page0, page2);
+
+    /* unmap vma2 */
+    diag("unmap vma2");
+    vma_unmap(vma2);
+
+    ok1(fh->mmaps.next == &vma->same_fileh);
+    ok1(vma->same_fileh.next == &fh->mmaps);
+
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1( M(vma, 2));    CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     1);
+    ok1( M(vma, 3));    CHECK_PAGE  (page3,   103,    PAGE_DIRTY,     1);
+
+    CHECK_MRU   (page3, page0, page2);
+    CHECK_DIRTY (page3, page0, page2);
+
+
+    /* discard - changes should go away */
+    diag("discard");
+    ok1(file.nremmapblk == 0);
+    fileh_dirty_discard(fh);
+    ok1(file.nremmapblk == 3); /* 3 previously dirty pages remmaped from base layer */
+
+    CHECK_NOPAGE(         100                      );
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(         102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (/*empty*/);
+    CHECK_DIRTY (/*empty*/);
+
+    /* discarded pages should read from base layer again */
+    ok1(B(vma, 0*PSb + 0) == 100);
+    ok1(B(vma, 0*PSb + 1) == 100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    ok1(B(vma, 2*PSb + 0) == 102);
+    ok1(B(vma, 2*PSb + 1) == 102);
+    ok1(B(vma, 2*PSb + PSb - 1) == 102);
+
+    ok1(B(vma, 3*PSb + 0) == 103);
+    ok1(B(vma, 3*PSb + 1) == 103);
+    ok1(B(vma, 3*PSb + PSb - 1) == 103);
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(         102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(         103                      );
+
+    /* writeout in 3 variants - STORE, MARK, STORE+MARK */
+    diag("writeout");
+
+    /* mkdirty2 prepares state with 2 dirty pages only 1 of which is mapped */
+    void mkdirty2(int gen) {
+        vma_unmap(vma);
+        CHECK_NOPAGE(         100                      );
+        CHECK_NOPAGE(         101                      );
+        CHECK_NOPAGE(         102                      );
+        CHECK_NOPAGE(         103                      );
+        page0 = page2 = page3 = NULL;
+
+        err = fileh_mmap(vma, fh, 100, 4);
+        ok1(!err);
+
+        B(vma, 2*PSb) = gen + 2;
+        B(vma, 0*PSb) = gen + 0;
+        vma_unmap(vma);
+        page0 = pagemap_get(&fh->pagemap, 100); ok1(page0);
+        page2 = pagemap_get(&fh->pagemap, 102); ok1(page2);
+
+        err = fileh_mmap(vma, fh, 100, 2); /* note - only 2 pages */
+        ok1(!err);
+
+        ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
+        ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+                            CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     0);
+                            CHECK_NOPAGE(         103                      );
+
+        CHECK_MRU   (page0, page2);
+        CHECK_DIRTY (page0, page2);
+    }
+
+    diag("writeout (store)");
+    file.nstoreblk  = 0;
+    file.nremmapblk = 0;
+    mkdirty2(10);
+    ok1(!fileh_dirty_writeout(fh, WRITEOUT_STORE));
+    ok1(file.nstoreblk  == 2);
+    ok1(file.nremmapblk == 0);
+
+    ok1( M(vma, 0));    CHECK_PAGE  (page0,   100,    PAGE_DIRTY,     1);
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+                        CHECK_PAGE  (page2,   102,    PAGE_DIRTY,     0);
+                        CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (page0, page2);
+    CHECK_DIRTY (page2, page0); /* note becomes sorted by f_pgoffset */
+
+    ok1(B(vma, 0*PSb + 0) ==  10);
+    ok1(B(vma, 0*PSb + 1) == 100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    b0 = page_mmap(page0, NULL, PROT_READ); ok1(b0);
+    b2 = page_mmap(page2, NULL, PROT_READ); ok1(b2);
+
+    ok1(b0[0] ==  10);
+    ok1(b0[1] == 100);
+    ok1(b0[PSb - 1] == 100);
+    ok1(b2[0] ==  12);
+    ok1(b2[1] == 102);
+    ok1(b2[PSb - 1] == 102);
+
+    xmunmap(b0, PS);
+    xmunmap(b2, PS);
+
+    diag("writeout (mark)");
+    file.nstoreblk  = 0;
+    file.nremmapblk = 0;
+    ok1(!fileh_dirty_writeout(fh, WRITEOUT_MARKSTORED));
+    ok1(file.nstoreblk  == 0);
+    ok1(file.nremmapblk == 1); /* only 1 (not 2) page was mmaped */
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+                        CHECK_NOPAGE(         102                      );
+                        CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (/*empty*/);
+    CHECK_DIRTY (/*empty*/);
+
+    vma_unmap(vma);
+    err = fileh_mmap(vma, fh, 100, 4);
+
+    /* data saved; served from base layer */
+    ok1(B(vma, 0*PSb + 0) ==  10);
+    ok1(B(vma, 0*PSb + 1) == 100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    ok1(B(vma, 2*PSb + 0) ==  12);
+    ok1(B(vma, 2*PSb + 1) == 102);
+    ok1(B(vma, 2*PSb + PSb - 1) == 102);
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(       100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(       101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(       102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(       103                      );
+
+    diag("writeout (store+mark)");
+    mkdirty2(1000);
+    file.nstoreblk  = 0;
+    file.nremmapblk = 0;
+    ok1(!fileh_dirty_writeout(fh, WRITEOUT_STORE | WRITEOUT_MARKSTORED));
+    ok1(file.nstoreblk  == 2);
+    ok1(file.nremmapblk == 1); /* only 1 (not 2) page was mmaped */
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(         100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(         101                      );
+                        CHECK_NOPAGE(         102                      );
+                        CHECK_NOPAGE(         103                      );
+
+    CHECK_MRU   (/*empty*/);
+    CHECK_DIRTY (/*empty*/);
+
+    vma_unmap(vma);
+    err = fileh_mmap(vma, fh, 100, 4);
+
+    /* data saved; served from base layer */
+    ok1(B(vma, 0*PSb + 0) == 1000);
+    ok1(B(vma, 0*PSb + 1) ==  100);
+    ok1(B(vma, 0*PSb + PSb - 1) == 100);
+
+    ok1(B(vma, 2*PSb + 0) == 1002);
+    ok1(B(vma, 2*PSb + 1) ==  102);
+    ok1(B(vma, 2*PSb + PSb - 1) == 102);
+
+    ok1(!M(vma, 0));    CHECK_NOPAGE(       100                      );
+    ok1(!M(vma, 1));    CHECK_NOPAGE(       101                      );
+    ok1(!M(vma, 2));    CHECK_NOPAGE(       102                      );
+    ok1(!M(vma, 3));    CHECK_NOPAGE(       103                      );
+
+    /* no invalidation - fileh_invalidate_page is forbidden for "mmap overlay" mode */
+
+
+    /* free resources */
+    file.nmunmap = 0;
+    vma_unmap(vma);
+    ok1(file.nmunmap == 1);
+
+    fileh_close(fh);
+    ram_close(ram);
+    free(ram);
+
+#undef  CHECK_MRU
+#undef  CHECK_PAGE
+#undef  CHECK_NOPAGE
+#undef  CHECK_DIRTY
+}
 
 
 // TODO test for loadblk that returns -1
@@ -1121,5 +1659,6 @@ int main()
     test_file_access_synthetic();
     test_file_access_pagefault();
     test_pagefault_savestate();
+    test_file_access_mmapoverlay();
     return 0;
 }
