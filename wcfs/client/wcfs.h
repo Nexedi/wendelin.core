@@ -17,7 +17,7 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
-// Package wcfs provides WCFS client.
+// Package wcfs provides WCFS client integrated with user-space virtual memory manager.
 //
 // This client package takes care about WCFS isolation protocol details and
 // provides to clients simple interface to isolated view of bigfile data on
@@ -46,6 +46,31 @@
 // to maintain X@at data view according to WCFS isolation protocol(*).
 //
 //
+// Integration with wendelin.core virtmem layer
+//
+// This client package can be used standalone, but additionally provides
+// integration with wendelin.core userspace virtual memory manager: when a
+// Mapping is created, it can be associated as serving base layer for a
+// particular virtmem VMA via FileH.mmap(vma=...). In that case, since virtmem
+// itself adds another layer of dirty pages over read-only base provided by
+// Mapping(+)
+//
+//                  ┌──┐                      ┌──┐
+//                  │RW│                      │RW│    ← virtmem VMA dirty pages
+//                  └──┘                      └──┘
+//                            +
+//                                                    VMA base = X@at view provided by Mapping:
+//
+//                                           ___        /@revA/bigfile/X
+//         __                                           /@revB/bigfile/X
+//                _                                     /@revC/bigfile/X
+//                            +                         ...
+//      ───  ───── ──────────────────────────   ─────   /head/bigfile/X
+//
+// the Mapping will interact with virtmem layer to coordinate
+// updates to mapping virtual memory.
+//
+//
 // API overview
 //
 //  - `WCFS` represents filesystem-level connection to wcfs server.
@@ -67,6 +92,8 @@
 // --------
 //
 // (*) see wcfs.go documentation for WCFS isolation protocol overview and details.
+// (+) see bigfile_ops interface (wendelin/bigfile/file.h) that gives virtmem
+//     point of view on layering.
 
 #ifndef _NXD_WCFS_H_
 #define _NXD_WCFS_H_
@@ -79,6 +106,12 @@
 #include <utility>
 
 #include "wcfs_misc.h"
+#include <wendelin/bug.h>
+
+// from wendelin/bigfile/virtmem.h
+extern "C" {
+struct VMA;
+}
 
 
 // wcfs::
@@ -230,7 +263,7 @@ public:
 
 public:
     error close();
-    pair<Mapping, error> mmap(int64_t blk_start, int64_t blk_len);
+    pair<Mapping, error> mmap(int64_t blk_start, int64_t blk_len, VMA *vma=nil);
     string String() const;
 
     error _open();
@@ -252,16 +285,18 @@ struct _Mapping : object {
     // protected by fileh._mmapMu
     uint8_t  *mem_start;    // mmapped memory [mem_start, mem_stop)
     uint8_t  *mem_stop;
+    VMA      *vma;          // mmapped under this virtmem VMA | nil if created standalone from virtmem
     bool     efaulted;      // y after mapping was switched to be invalid (gives SIGSEGV on access)
 
     int64_t blk_stop() const {
-        if (!((mem_stop - mem_start) % fileh->blksize == 0))
-            panic("len(mmap) % fileh.blksize != 0");
+        ASSERT((mem_stop - mem_start) % fileh->blksize == 0);
         return blk_start + (mem_stop - mem_start) / fileh->blksize;
     }
 
+    error remmap_blk(int64_t blk); // for virtmem-only
     error unmap();
 
+    void  _assertVMAOk();
     error _remmapblk(int64_t blk, zodb::Tid at);
     error __remmapAsEfault();
     error __remmapBlkAsEfault(int64_t blk);
@@ -270,7 +305,7 @@ struct _Mapping : object {
 private:
     _Mapping();
     ~_Mapping();
-    friend pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len);
+    friend pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len, VMA *vma);
 public:
     void decref();
 

@@ -17,7 +17,7 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
-// Package wcfs provides WCFS client.
+// Package wcfs provides WCFS client integrated with user-space virtual memory manager.
 // See wcfs.h for package overview.
 
 
@@ -56,8 +56,9 @@
 // points like Conn.open, Conn.resync and FileH.close.
 //
 // Every FileH maintains fileh._pinned {} with currently pinned blk -> rev. This
-// dict is updated by pinner driven by pin messages, and is used when
-// new fileh Mapping is created (FileH.mmap).
+// dict is updated by pinner driven by pin messages, and is used when either
+// new fileh Mapping is created (FileH.mmap) or refreshed due to request from
+// virtmem (Mapping.remmap_blk, see below).
 //
 // In wendelin.core a bigfile has semantic that it is infinite in size and
 // reads as all zeros beyond region initialized with data. Memory-mapping of
@@ -69,6 +70,40 @@
 // if/when wendelin.core adds bigfile truncation. Wcfs client restats
 // wcfs/head/f at every transaction boundary (Conn.resync) and remembers f.size
 // in FileH._headfsize for use during one transaction(%).
+//
+//
+// Integration with wendelin.core virtmem layer
+//
+// Wcfs client integrates with virtmem layer to support virtmem handle
+// dirtying pages of read-only base-layer that wcfs client provides via
+// isolated Mapping. For wcfs-backed bigfiles every virtmem VMA is interlinked
+// with Mapping:
+//
+//       VMA     -> BigFileH -> ZBigFile -----> Z
+//        ↑↓                                    O
+//      Mapping  -> FileH    -> wcfs server --> DB
+//
+// When a page is write-accessed, virtmem mmaps in a page of RAM in place of
+// accessed virtual memory, copies base-layer content provided by Mapping into
+// there, and marks that page as read-write.
+//
+// Upon receiving pin message, the pinner consults virtmem, whether
+// corresponding page was already dirtied in virtmem's BigFileH (call to
+// __fileh_page_isdirty), and if it was, the pinner does not remmap Mapping
+// part to wcfs/@revX/f and just leaves dirty page in its place, remembering
+// pin information in fileh._pinned.
+//
+// Once dirty pages are no longer needed (either after discard/abort or
+// writeout/commit), virtmem asks wcfs client to remmap corresponding regions
+// of Mapping in its place again via calls to Mapping.remmap_blk for previously
+// dirtied blocks.
+//
+// The scheme outlined above does not need to split Mapping upon dirtying an
+// inner page.
+//
+// See bigfile_ops interface (wendelin/bigfile/file.h) that explains base-layer
+// and overlaying from virtmem point of view. For wcfs this interface is
+// provided by small wcfs client wrapper in bigfile/file_zodb.cpp.
 //
 // --------
 //
@@ -126,18 +161,27 @@
 // Note that FileH.mmapMu is regular - not RW - mutex, since nothing in wcfs
 // client calls into wcfs server via watchlink with mmapMu held.
 //
+// To synchronize with virtmem layer, wcfs client takes and releases big
+// virtmem lock around places that touch virtmem (calls to virt_lock and
+// virt_unlock). Also virtmem calls several wcfs client entrypoints with
+// virtmem lock already taken. Thus, to avoid AB-BA style deadlocks, wcfs
+// client needs to take virtmem lock as the first lock, whenever it needs to
+// take both virtmem lock, and another lock - e.g. atMu(%).
+//
 // The ordering of locks is:
 //
-//      Conn.atMu > Conn.filehMu > FileH.mmapMu
+//      virt_lock > Conn.atMu > Conn.filehMu > FileH.mmapMu
 //
 // The pinner takes the following locks:
 //
+//      - virt_lock
 //      - wconn.atMu.R
 //      - wconn.filehMu.R
 //      - fileh.mmapMu (to read .mmaps  +  write .pinned)
 //
 //
 // (*) see "Wcfs locking organization" in wcfs.go
+// (%) see related comment in Conn.__pin1 for details.
 
 
 // Handling of fork
@@ -163,6 +207,9 @@
 #include "wcfs_misc.h"
 #include "wcfs.h"
 #include "wcfs_watchlink.h"
+
+#include <wendelin/bigfile/virtmem.h>
+#include <wendelin/bigfile/ram.h>
 
 #include <golang/errors.h>
 #include <golang/fmt.h>
@@ -195,10 +242,6 @@ namespace ioutil = io::ioutil;
 // trace with op prefix taken from E.
 #define etrace(format, ...) trace("%s", v(E(fmt::errorf(format, ##__VA_ARGS__))))
 
-#define ASSERT(expr) do {               \
-    if (!(expr))                        \
-        panic("assert failed: " #expr); \
-} while(0)
 
 // wcfs::
 namespace wcfs {
@@ -301,6 +344,15 @@ error _Conn::close() {
     // NOTE keep in sync with Conn.afterFork
     _Conn& wconn = *this;
 
+    // lock virtmem early. TODO more granular virtmem locking (see __pin1 for
+    // details and why virt_lock currently goes first)
+    virt_lock();
+    bool virtUnlocked = false;
+    defer([&]() {
+        if (!virtUnlocked)
+            virt_unlock();
+    });
+
     wconn._atMu.RLock();
     defer([&]() {
         wconn._atMu.RUnlock();
@@ -356,6 +408,7 @@ error _Conn::close() {
         }
 
         // force fileh close.
+        // - virt_lock
         // - wconn.atMu.R
         // - wconn.filehMu unlocked
         err = f->_closeLocked(/*force=*/true);
@@ -369,6 +422,10 @@ error _Conn::close() {
     }
 
     // close wlink and signal to pinner to stop.
+    // we have to release virt_lock, to avoid deadlocking with pinner.
+    virtUnlocked = true;
+    virt_unlock();
+
     err = wconn._wlink->close();
     if (err != nil)
         reterr1(err);
@@ -501,6 +558,31 @@ error _Conn::__pin1(PinReq *req) {
     FileH f;
     bool  ok;
 
+    // lock virtmem first.
+    //
+    // The reason we do it here instead of closely around call to
+    // mmap->_remmapblk() is to avoid deadlocks: virtmem calls FileH.mmap,
+    // Mapping.remmap_blk and Mapping.unmap under virt_lock locked. In those
+    // functions the order of locks is
+    //
+    //      virt_lock, wconn.atMu.R, fileh.mmapMu
+    //
+    // So if we take virt_lock right around mmap._remmapblk(), the order of
+    // locks in pinner would be
+    //
+    //      wconn.atMu.R, wconn.filehMu.R, fileh.mmapMu, virt_lock
+    //
+    // which means there is AB-BA deadlock possibility.
+    //
+    // TODO try to take virt_lock only around virtmem-associated VMAs and with
+    // better granularity. NOTE it is possible to teach virtmem to call
+    // FileH.mmap and Mapping.unmap without virtmem locked. However reworking
+    // virtmem to call Mapping.remmap_blk without virt_lock is not so easy.
+    virt_lock();
+    defer([&]() {
+        virt_unlock();
+    });
+
     wconn._atMu.RLock();
     defer([&]() {
         wconn._atMu.RUnlock();
@@ -541,7 +623,27 @@ error _Conn::__pin1(PinReq *req) {
 
         trace("\tremmapblk %d @%s", req->blk, (req->at == TidHead ? "head" : v(req->at)));
 
-        error err = mmap->_remmapblk(req->blk, req->at);
+        // pin only if virtmem did not dirtied page corresponding to this block already
+        // if virtmem dirtied the page - it will ask us to remmap it again after commit or abort.
+        bool do_pin= true;
+        error err;
+        if (mmap->vma != nil) {
+            mmap->_assertVMAOk();
+
+            // see ^^^ about deadlock
+            //virt_lock();
+
+            BigFileH *virt_fileh = mmap->vma->fileh;
+            TODO (mmap->fileh->blksize != virt_fileh->ramh->ram->pagesize);
+            do_pin = !__fileh_page_isdirty(virt_fileh, req->blk);
+        }
+
+        if (do_pin)
+            err = mmap->_remmapblk(req->blk, req->at);
+
+        // see ^^^ about deadlock
+        //if (mmap->vma != nil)
+        //    virt_unlock();
 
         // on error don't need to continue with other mappings - all fileh and
         // all mappings become marked invalid on pinner failure.
@@ -894,6 +996,13 @@ error _FileH::close() {
     _FileH& fileh = *this;
     Conn    wconn = fileh.wconn;
 
+    // lock virtmem early. TODO more granular virtmem locking (see __pin1 for
+    // details and why virt_lock currently goes first)
+    virt_lock();
+    defer([&]() {
+        virt_unlock();
+    });
+
     wconn->_atMu.RLock();
     defer([&]() {
         wconn->_atMu.RUnlock();
@@ -905,6 +1014,7 @@ error _FileH::close() {
 // _closeLocked serves FileH.close and Conn.close.
 //
 // Must be called with the following locks held by caller:
+// - virt_lock
 // - wconn.atMu
 error _FileH::_closeLocked(bool force) {
     // NOTE keep in sync with FileH._afterFork
@@ -1017,9 +1127,13 @@ void _FileH::_afterFork() {
 }
 
 // mmap creates file mapping representing file[blk_start +blk_len) data as of wconn.at database state.
-pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len) {
+//
+// If vma != nil, created mapping is associated with that vma of user-space virtual memory manager:
+// virtmem calls FileH::mmap under virtmem lock when virtmem fileh is mmapped into vma.
+pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len, VMA *vma) {
     _FileH& f = *this;
 
+    // NOTE virtmem lock is held by virtmem caller
     f.wconn->_atMu.RLock();     // e.g. f._headfsize
     f.wconn->_filehMu.RLock();  // f._state  TODO -> finer grained (currently too coarse)
     f._mmapMu.lock();           // f._pinned, f._mmaps
@@ -1080,6 +1194,7 @@ pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len) {
     mmap->blk_start = blk_start;
     mmap->mem_start = mem_start;
     mmap->mem_stop  = mem_stop;
+    mmap->vma       = vma;
     mmap->efaulted  = false;
 
     for (auto _ : f._pinned) {  // TODO keep f._pinned ↑blk and use binary search
@@ -1090,6 +1205,18 @@ pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len) {
         err = mmap->_remmapblk(blk, rev);
         if (err != nil)
             return make_pair(nil, E(err));
+    }
+
+    if (vma != nil) {
+        if (vma->mmap_overlay_server != nil)
+            panic("vma is already associated with overlay server");
+        if (!(vma->addr_start == 0 && vma->addr_stop == 0))
+            panic("vma already covers !nil virtual memory area");
+        mmap->incref(); // vma->mmap_overlay_server is keeping ref to mmap
+        vma->mmap_overlay_server = mmap._ptr();
+        vma->addr_start = (uintptr_t)mmap->mem_start;
+        vma->addr_stop  = (uintptr_t)mmap->mem_stop;
+        mmap->_assertVMAOk(); // just in case
     }
 
     f._mmaps.push_back(mmap);   // TODO keep f._mmaps ↑blk_start
@@ -1105,6 +1232,7 @@ pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len) {
 // correct f@at data view.
 //
 // Must be called with the following locks held by caller:
+// - virt_lock
 // - fileh.mmapMu
 error _Mapping::__remmapAsEfault() {
     _Mapping& mmap = *this;
@@ -1138,10 +1266,14 @@ error _Mapping::__remmapBlkAsEfault(int64_t blk) {
 // unmap releases mapping memory from address space.
 //
 // After call to unmap the mapping must no longer be used.
+// The association in between mapping and linked virtmem VMA is reset.
+//
+// Virtmem calls Mapping.unmap under virtmem lock when VMA is unmapped.
 error _Mapping::unmap() {
     Mapping mmap = newref(this); // newref for std::remove
     FileH f = mmap->fileh;
 
+    // NOTE virtmem lock is held by virtmem caller
     f->wconn->_atMu.RLock();
     f->_mmapMu.lock();
     defer([&]() {
@@ -1155,6 +1287,16 @@ error _Mapping::unmap() {
     // double unmap = ok
     if (mmap->mem_start == nil)
         return nil;
+
+    if (mmap->vma != nil) {
+        mmap->_assertVMAOk();
+        VMA *vma = mmap->vma;
+        vma->mmap_overlay_server = nil;
+        mmap->decref(); // vma->mmap_overlay_server was holding a ref to mmap
+        vma->addr_start = 0;
+        vma->addr_stop  = 0;
+        mmap->vma = nil;
+    }
 
     error err = mm::unmap(mmap->mem_start, mmap->mem_stop - mmap->mem_start);
     mmap->mem_start = nil;
@@ -1171,6 +1313,7 @@ error _Mapping::unmap() {
 // _remmapblk remmaps mapping memory for file[blk] to be viewing database as of @at state.
 //
 // at=TidHead means unpin to head/ .
+// NOTE this does not check whether virtmem already mapped blk as RW.
 //
 // _remmapblk must not be called after Mapping is switched to efault.
 //
@@ -1228,6 +1371,50 @@ error _Mapping::_remmapblk(int64_t blk, zodb::Tid at) {
         if (err != nil)
             return E(err);
     }
+
+    return nil;
+}
+
+// remmap_blk remmaps file[blk] in its place again.
+//
+// Virtmem calls Mapping.remmap_blk under virtmem lock to remmap a block after
+// RW dirty page was e.g. discarded or committed.
+error _Mapping::remmap_blk(int64_t blk) {
+    _Mapping& mmap = *this;
+    FileH f = mmap.fileh;
+
+    error err;
+
+    // NOTE virtmem lock is held by virtmem caller
+    f->wconn->_atMu.RLock();
+    f->_mmapMu.lock();
+    defer([&]() {
+        f->_mmapMu.unlock();
+        f->wconn->_atMu.RUnlock();
+    });
+
+    xerr::Contextf E("%s: %s: %s: remmapblk #%ld", v(f->wconn), v(f), v(mmap), blk);
+    etrace("");
+
+    if (!(mmap.blk_start <= blk && blk < mmap.blk_stop()))
+        panic("remmap_blk: blk out of Mapping range");
+
+    // it should not happen, but if, for a efaulted mapping, virtmem asks us to
+    // remmap base-layer blk memory in its place again, we reinject efault into it.
+    if (mmap.efaulted) {
+        log::Warnf("%s: remmapblk called for already-efaulted mapping", v(mmap));
+        return E(mmap.__remmapBlkAsEfault(blk));
+    }
+
+    // blkrev = rev | @head
+    zodb::Tid blkrev; bool ok;
+    tie(blkrev, ok) = f->_pinned.get_(blk);
+    if (!ok)
+        blkrev = TidHead;
+
+    err = mmap._remmapblk(blk, blkrev);
+    if (err != nil)
+        return E(err);
 
     return nil;
 }
@@ -1298,6 +1485,25 @@ static tuple<uint8_t*, error> mmap_ro(os::File f, off_t offset, size_t size) {
 // The mapping is created with MAP_SHARED.
 static error mmap_into_ro(void *addr, size_t size, os::File f, off_t offset) {
     return mm::map_into(addr, size, PROT_READ, MAP_SHARED, f, offset);
+}
+
+
+// _assertVMAOk() verifies that mmap and vma are related to each other and cover
+// exactly the same virtual memory range.
+//
+// It panics if mmap and vma do not exactly relate to each other or cover
+// different virtual memory range.
+void _Mapping::_assertVMAOk() {
+    _Mapping* mmap = this;
+    VMA *vma = mmap->vma;
+
+    if (!(vma->mmap_overlay_server == static_cast<void*>(mmap)))
+        panic("BUG: mmap and vma do not link to each other");
+    if (!(vma->addr_start == uintptr_t(mmap->mem_start) &&
+          vma->addr_stop  == uintptr_t(mmap->mem_stop)))
+        panic("BUG: mmap and vma cover different virtual memory ranges");
+
+    // verified ok
 }
 
 

@@ -39,7 +39,7 @@
  * are dirtied. The mode in which BigFile handle is opened is specified via
  * fileh_open(flags=...).
  *
- * The primary user of "mmap overlay" functionality will be wcfs - virtual
+ * The primary user of "mmap overlay" functionality is wcfs - virtual
  * filesystem that provides access to ZBigFile data via OS-level files(*).
  *
  * (*) see wcfs/client/wcfs.h and wcfs/wcfs.go
@@ -171,7 +171,7 @@ struct VMA {
      * MMAP_OVERLAY flag. bigfile_ops.mmap_setup_read can initialize this to
      * object pointer specific to serving created base overlay mapping.
      *
-     * For example WCFS will use this to link VMA -> wcfs.Mapping to know which
+     * For example WCFS uses this to link VMA -> wcfs.Mapping to know which
      * wcfs-specific mapping is serving particular virtmem VMA.
      *
      * NULL for VMAs created from under DONT_MMAP_OVERLAY fileh. */

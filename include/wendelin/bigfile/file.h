@@ -94,7 +94,7 @@ struct bigfile_ops {
      * dirtied pages that are layed over base data layer provided by the
      * mappings.
      *
-     * The primary user of this functionality will be wcfs - virtual filesystem that
+     * The primary user of this functionality is wcfs - virtual filesystem that
      * provides access to ZBigFile data via OS-level files(*). The layering can
      * be schematically depicted as follows
      *

@@ -318,7 +318,8 @@ setup(
                     ['wcfs/client/wcfs.cpp',
                      'wcfs/client/wcfs_watchlink.cpp',
                      'wcfs/client/wcfs_misc.cpp'],
-                    depends = libwcfs_h)],
+                    depends = libvirtmem_h + libwcfs_h,
+                    dsos = ['wendelin.bigfile.libvirtmem'])],
 
     ext_modules = [
                     PyGoExt('wendelin.bigfile._bigfile',
@@ -333,14 +334,14 @@ setup(
 
                     PyGoExt('wendelin.wcfs.client._wcfs',
                         ['wcfs/client/_wcfs.pyx'],
-                        depends = libwcfs_h,
+                        depends = libwcfs_h + libvirtmem_h,
                         dsos = ['wendelin.wcfs.client.libwcfs']),
 
                     PyGoExt('wendelin.wcfs.client._wczsync',
                         ['wcfs/client/_wczsync.pyx'],
                         depends = [
                          'wcfs/client/_wcfs.pxd',
-                        ] + libwcfs_h,
+                        ] + libwcfs_h + libvirtmem_h,
                         dsos = ['wendelin.wcfs.client.libwcfs']),
 
                     PyGoExt('wendelin.wcfs.internal.wcfs_test',

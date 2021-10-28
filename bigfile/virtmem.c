@@ -60,8 +60,7 @@ static int      __ram_reclaim(RAM *ram);
 
 /* global lock which protects manipulating virtmem data structures
  *
- * NOTE not scalable, but this is temporary solution - as we are going to move
- * memory management back into the kernel, where it is done properly. */
+ * NOTE not scalable. */
 static pthread_mutex_t virtmem_lock = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 static const VirtGilHooks *virtmem_gilhooks;
 
