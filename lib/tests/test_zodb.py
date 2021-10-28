@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -236,7 +236,6 @@ def test_deactivate_btree():
 
 
 # verify that zconn_at gives correct answer.
-@xfail(zmajor < 5, reason="zconn_at is TODO for ZODB4")
 @func
 def test_zconn_at():
     stor = testdb.getZODBStorage()

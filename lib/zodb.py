@@ -156,18 +156,18 @@ def zconn_at(zconn): # -> tid
 
     # ZODB4
     #
-    # Connection:
-    #     .before     !None for historic connections
-    #
-    #     ._txn_time  - if !None - set to tid of _next_ transaction
-    #                   XXX set to None initially - what to do?
-    #
-    #     # XXX do something like that ZODB5 is doing:
-    #     zconn._start = zconn._storage.lastTransaction() + 1
-    #     # XXX _and_ check out queued invalidations
+    # We rely on our patch in 4-nxd branch that reworks ZODB.Connection to
+    # implement MVCC via always calling loadBefore(zconn._txn_time) to load objects.
     elif zmajor == 4:
-        raise AssertionError("zconn_at: TODO: add support for ZODB4")
+        assert 'conn:MVCC-via-loadBefore-only' in ZODB.nxd_patches, \
+            "https://lab.nexedi.com/nexedi/ZODB/merge_requests/1"
 
+        if zconn._mvcc_storage:
+            raise NotImplementedError("Connection.at for IMVCCStorage is not implemented")
+        if zconn.before is not None:
+            return before2at(zconn.before)      # historical connection
+        else:
+            return before2at(zconn._txn_time)   # "current" connection
 
     # ZODB3
     else:
