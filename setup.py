@@ -336,6 +336,13 @@ setup(
                         depends = libwcfs_h,
                         dsos = ['wendelin.wcfs.client.libwcfs']),
 
+                    PyGoExt('wendelin.wcfs.client._wczsync',
+                        ['wcfs/client/_wczsync.pyx'],
+                        depends = [
+                         'wcfs/client/_wcfs.pxd',
+                        ] + libwcfs_h,
+                        dsos = ['wendelin.wcfs.client.libwcfs']),
+
                     PyGoExt('wendelin.wcfs.internal.wcfs_test',
                         ['wcfs/internal/wcfs_test.pyx']),
 
