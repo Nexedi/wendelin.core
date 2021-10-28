@@ -243,8 +243,6 @@ ZODB.Connection.Connection._onResyncCallbacks = None
 def Connection_onResyncCallback(self, f):
     if zmajor <= 3:
         raise AssertionError("onResyncCallback: ZODB3 is not supported anymore")
-    if zmajor == 4:
-        raise AssertionError("onResyncCallback: TODO: add support for ZODB4")
     if self._onResyncCallbacks is None:
         # NOTE WeakSet does not work for bound methods - they are always created
         # anew for each obj.method access, and thus will go away almost immediately
@@ -254,25 +252,43 @@ def Connection_onResyncCallback(self, f):
 assert not hasattr(ZODB.Connection.Connection, 'onResyncCallback')
 ZODB.Connection.Connection.onResyncCallback = Connection_onResyncCallback
 
+def Connection__callResyncCallbacks(self):
+    # FIXME method name hardcoded. Better not do it and allow f to be general
+    # callable, but that does not work with bound method - see above.
+    # ( Something like WeakMethod from py3 could help )
+    if self._onResyncCallbacks:
+        for f in self._onResyncCallbacks:
+            f.on_connection_resync()
+
+assert not hasattr(ZODB.Connection.Connection, '_callResyncCallbacks')
+ZODB.Connection.Connection._callResyncCallbacks = Connection__callResyncCallbacks
+
 # ZODB5: hook into Connection.newTransaction
 if zmajor >= 5:
     _orig_Connection_newTransaction = ZODB.Connection.Connection.newTransaction
     def _ZConnection_newTransaction(self, transaction, sync=True):
         _orig_Connection_newTransaction(self, transaction, sync)
-
-        # FIXME method name hardcoded. Better not do it and allow f to be general
-        # callable, but that does not work with bound method - see above.
-        # ( Something like WeakMethod from py3 could help )
-        if self._onResyncCallbacks:
-            for f in self._onResyncCallbacks:
-                f.on_connection_resync()
+        self._callResyncCallbacks()
 
     ZODB.Connection.Connection.newTransaction = _ZConnection_newTransaction
 
 
-# ZODB4: hook into Connection._storage_sync
+# ZODB4: hook into Connection._flush_invalidations and ._resetCache
 elif zmajor == 4:
-    pass    # raises in onResyncCallback
+    # ._flush_invalidations is called by both Connection.open and Connection._storage_sync
+    # however Connection.open might call ._resetCache instead if global reset is requested
+    _orig_Connection__flush_invalidations = ZODB.Connection.Connection._flush_invalidations
+    _orig_Connection__resetCache          = ZODB.Connection.Connection._resetCache
+
+    def _ZConnection__flush_invalidations(self):
+        _orig_Connection__flush_invalidations(self)
+        self._callResyncCallbacks()
+    def _ZConnection__resetCache(self):
+        _orig_Connection__resetCache(self)
+        self._callResyncCallbacks()
+
+    ZODB.Connection.Connection._flush_invalidations = _ZConnection__flush_invalidations
+    ZODB.Connection.Connection._resetCache          = _ZConnection__resetCache
 
 
 # ZODB3

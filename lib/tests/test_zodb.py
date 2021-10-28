@@ -312,7 +312,6 @@ def test_zconn_at():
 
 
 # verify that ZODB.Connection.onResyncCallback works
-@xfail(zmajor < 5, reason="ZODB.Connection.onResyncCallback is TODO for ZODB4")
 @func
 def test_zodb_onresync():
     stor = testdb.getZODBStorage()
