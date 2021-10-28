@@ -358,8 +358,8 @@ def test_zodb_onresync():
 
 # test that zurl does not change from one open to another storage open.
 def test_zurlstable():
-    if not isinstance(testdb, testing.TestDB_FileStorage):
-        pytest.xfail(reason="zstor_2zurl is TODO for ZEO and NEO")
+    if not isinstance(testdb, (testing.TestDB_FileStorage, testing.TestDB_ZEO, testing.TestDB_NEO)):
+        pytest.xfail(reason="zstor_2zurl is TODO for %r" % testdb)
     zurl0 = None
     for i in range(10):
         zstor = testdb.getZODBStorage()

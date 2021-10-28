@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Wendelin.bigfile | common ZODB-related helpers
 # Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
@@ -21,6 +22,7 @@
 
 import ZODB
 from ZODB.FileStorage import FileStorage
+from ZODB.DemoStorage import DemoStorage
 from ZODB import DB
 from ZODB import POSException
 from ZODB.utils import p64, u64
@@ -28,6 +30,7 @@ from persistent import Persistent
 import zodbtools.util
 from weakref import WeakSet
 import gc
+from six.moves.urllib import parse as urlparse
 
 import pkg_resources
 
@@ -290,5 +293,66 @@ def zstor_2zurl(zstor):
     if isinstance(zstor, FileStorage):
         return "file://%s" % (zstor._file_name,)
 
-    # TODO ZEO + NEO support
+    if isinstance(zstor, DemoStorage):
+        # demo:(base_zurl)/(δ_zurl)
+        return "demo:(%s)/(%s)" % (zstor_2zurl(zstor.base), zstor_2zurl(zstor.changes))
+
+    ztype = type(zstor).__module__ + "." + type(zstor).__name__
+
+    # ZEO
+    if ztype == "ZEO.ClientStorage.ClientStorage":
+        # zeo://(path|host:port)?storage=<storageID>
+        u = "zeo://"
+        _addr = zstor._addr
+        addr  = None
+        # ZEO4/3 for backward compatibility accept either a single "address" or single ("host", port) pair
+        # https://github.com/zopefoundation/ZEO/blob/4.2.0b1-49-g47d3fbe8/src/ZEO/zrpc/client.py#L179
+        if zmajor <= 4:
+            if isinstance(_addr, str):
+                addr = _addr
+            elif len(_addr) == 2 and isinstance(_addr[0], str) and isinstance(_addr[1], int):
+                addr = _addr
+        if addr is None:
+            if len(_addr) != 1:
+                raise NotImplementedError("ZEO client has multiple configured servers: %r" % (addr,))
+            addr = _addr[0]
+        # addr is either TCP (host,port) or UNIX path
+        if isinstance(addr, str):
+            u += addr
+        else:
+            host, port = addr
+            u += '%s:%d' % (host, port)
+
+        storage = zstor._storage
+        if storage != "1":
+            u += "?storage=%s" % storage
+
+        # TODO ssl
+        return u
+
+    # NEO
+    if ztype == "neo.client.Storage.Storage":
+        # neo(s)://[<credentials>@]<master>/<cluster>
+        app = zstor.app
+        if not app.ssl:
+            u = "neo://"
+        else:
+            q = urlparse.quote_plus
+            u = "neos://"
+            ca, cert, key = app.ssl_credentials # .ssl_credentials depend on kirr's patch
+            u += "ca=%s;cert=%s;key=%s@" % (q(ca), q(cert), q(key))
+
+        masterv = app.nm.getMasterList()
+        if len(masterv) == 0:
+            raise RuntimeError("%r has empty master list" % zstor)
+        if len(masterv) > 1:
+            raise NotImplementedError("NEO client has multiple configured masters: %r" % (masterv,))
+        master = masterv[0]
+        host, port = master.getAddress()
+        u += "%s:%s" % (host, port)
+
+        u += "/%s" % app.name
+
+        return u
+
     raise NotImplementedError("don't know how to extract zurl from %r" % zstor)
