@@ -296,6 +296,30 @@ else:
     raise AssertionError("ZODB3 is not supported anymore")
 
 
+# patch for ZODB.Connection to support callback on after database is closed
+ZODB.Connection.Connection._onShutdownCallbacks = None
+def Connection_onShutdownCallback(self, f):
+    if self._onShutdownCallbacks is None:
+        # NOTE WeakSet does not work for bound methods - they are always created
+        # anew for each obj.method access, and thus will go away almost immediately
+        self._onShutdownCallbacks = WeakSet()
+    self._onShutdownCallbacks.add(f)
+
+assert not hasattr(ZODB.Connection.Connection, 'onShutdownCallback')
+ZODB.Connection.Connection.onShutdownCallback = Connection_onShutdownCallback
+
+_orig_DB_close = ZODB.DB.close
+def _ZDB_close(self):
+    # the same code for ZODB3/4/5
+    @self._connectionMap
+    def _(conn):
+        if conn._onShutdownCallbacks:
+            for f in conn._onShutdownCallbacks:
+                f.on_connection_shutdown()
+    _orig_DB_close(self)
+
+ZODB.DB.close = _ZDB_close
+
 
 # zstor_2zurl converts a ZODB storage to URL to access it.
 def zstor_2zurl(zstor):

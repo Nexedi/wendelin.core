@@ -355,6 +355,40 @@ def test_zodb_onresync():
     conn.close()
 
 
+# verify that ZODB.Connection.onShutdownCallback works
+@func
+def test_zodb_onshutdown():
+    stor = testdb.getZODBStorage()
+    defer(stor.close)
+    db  = DB(stor)
+
+    class T:
+        def __init__(t):
+            t.nshutdown = 0
+        def on_connection_shutdown(t):
+            t.nshutdown += 1
+
+    t1 = T()
+    t2 = T()
+
+    # conn1 stays alive outside of db.pool
+    conn1 = db.open()
+    conn1.onShutdownCallback(t1)
+
+    # conn2 stays alive inside db.pool
+    conn2 = db.open()
+    conn2.onShutdownCallback(t2)
+    conn2.close()
+
+    assert t1.nshutdown == 0
+    assert t2.nshutdown == 0
+
+    # db.close triggers conn1 and conn2 shutdown
+    db.close()
+    assert t1.nshutdown == 1
+    assert t2.nshutdown == 1
+
+
 # test that zurl does not change from one open to another storage open.
 def test_zurlstable():
     if not isinstance(testdb, (testing.TestDB_FileStorage, testing.TestDB_ZEO, testing.TestDB_NEO)):
