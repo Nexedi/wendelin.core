@@ -22,6 +22,9 @@ from __future__ import print_function, absolute_import
 
 import pytest
 import transaction
+from golang import func, defer
+from functools import partial
+import gc
 
 # reset transaction synchronizers before every test run.
 #
@@ -58,3 +61,27 @@ def pytest_configure(config):
         # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-d -alsologtostderr -v=1" ?
         if config.option.verbose > 1:
             config.inicfg['log_cli_level'] = "INFO"
+
+
+# Before pytest exits, teardown WCFS server(s) that we automatically spawned
+# during test runs in bigfile/bigarray/...
+#
+# If we do not do this, spawned wcfs servers are left running _and_ connected
+# by stdout to nxdtest input - which makes nxdtest to wait for them to exit.
+@func
+def pytest_unconfigure(config):
+    # force collection of ZODB Connection(s) that were sitting in DB.pool(s)
+    # (DB should be closed)
+    gc.collect()
+
+    from wendelin import wcfs
+    for wc in wcfs._wcautostarted:
+        # NOTE: defer instead of direct call - to call all wc.close if there
+        # was multiple wc spawned, and proceeding till the end even if any
+        # particular call raises exception.
+        defer(partial(_wcclose_and_stop, wc))
+
+@func
+def _wcclose_and_stop(wc):
+    defer(wc._wcsrv.stop)
+    defer(wc.close)

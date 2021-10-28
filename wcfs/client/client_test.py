@@ -20,6 +20,9 @@
 """client_test.py unit-tests virtmem layer provided by wcfs client.
 
 WCFS filesystem itself is unit-tested by wcfs/wcfs_test.py .
+
+At functional level, the whole wendelin.core test suite is used to verify
+wcfs.py/wcfs.go while running tox tests in wcfs mode.
 """
 
 from __future__ import print_function, absolute_import

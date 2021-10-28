@@ -110,7 +110,7 @@ typedef struct PyBigFileH PyBigFileH;
  * mmapping data. To avoid deadlocks all mmap-related functionality must be
  * nogil and so cannot be implemented in Python.
  *
- * The primary user of .blkmmapper functionality will be _ZBigFile which uses WCFS
+ * The primary user of .blkmmapper functionality is _ZBigFile which uses WCFS
  * and mmaps files from it to provide memory mappings for ZBigFile data.
  */
 struct PyBigFile {

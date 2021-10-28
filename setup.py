@@ -332,6 +332,16 @@ setup(
                         language        = 'c',
                         dsos = ['wendelin.bigfile.libvirtmem']),
 
+                    PyGoExt('wendelin.bigfile._file_zodb',
+                        ['bigfile/_file_zodb.pyx',
+                         'bigfile/file_zodb.cpp'],
+                        depends = [
+                         'wcfs/client/_wcfs.pxd',
+                         'wcfs/client/_wczsync.pxd',
+                         'bigfile/_bigfile.h',
+                        ] + libwcfs_h + libvirtmem_h,
+                        dsos = ['wendelin.wcfs.client.libwcfs']),
+
                     PyGoExt('wendelin.wcfs.client._wcfs',
                         ['wcfs/client/_wcfs.pyx'],
                         depends = libwcfs_h + libvirtmem_h,

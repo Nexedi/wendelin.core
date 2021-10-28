@@ -26,10 +26,10 @@ for kind in ['t', 'fault', 'asan', 'tsan']:
 
     TestCase(t, ['make', t], envadj=envadj)  # TODO summaryf=TAP.summary
 
-# test.py/<stor> runs unit- and functional- tests for wendelin.core .
+# test.py/<stor>-!wcfs runs unit- and functional- tests for wendelin.core in non-wcfs mode.
 for stor in storv:
     TestCase('test.py/%s-!wcfs' % stor, ['make', 'test.py'],
-             envadj={'WENDELIN_CORE_TEST_DB': '<%s>' % stor},
+             envadj={'WENDELIN_CORE_TEST_DB': '<%s>' % stor, 'WENDELIN_CORE_VIRTMEM': 'rw:uvmm'},
              summaryf=PyTest.summary)
 
 
@@ -39,9 +39,15 @@ for nproc in gonprocv:
              envadj={'GOMAXPROCS': nproc})
 
 # test.wcfs/<stor> runs unit tests for WCFS
+# test.py/<stor>-wcfs runs unit- and functional- tests for wendelin.core in wcfs mode.
 for stor in storv:
     envdb = {'WENDELIN_CORE_TEST_DB': '<%s>' % stor}
 
     for nproc in gonprocv:
         TestCase('test.wcfs/%s:%s' % (stor, nproc), ['make', 'test.wcfs'],
                  envadj=dict(GOMAXPROCS=nproc, **envdb), summaryf=PyTest.summary)
+
+    for nproc in gonprocv:
+        TestCase('test.py/%s-wcfs:%s' % (stor, nproc), ['make', 'test.py'],
+                 envadj=dict(WENDELIN_CORE_VIRTMEM='r:wcfs+w:uvmm', GOMAXPROCS=nproc, **envdb),
+                 summaryf=PyTest.summary)

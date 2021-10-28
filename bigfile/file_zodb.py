@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigfile | BigFile ZODB backend
-# Copyright (C) 2014-2020  Nexedi SA and Contributors.
+# Copyright (C) 2014-2021  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -50,6 +50,30 @@ The primary user of ZBigFile is ZBigArray (see bigarray/__init__.py and
 bigarray/array_zodb.py), but ZBigFile itself can be used directly too.
 
 
+Operating mode
+--------------
+
+Two operating modes are provided: "local-cache" and "shared-cache".
+
+Local-cache is the mode wendelin.core was originally implemented with in 2015.
+In this mode ZBigFile data is loaded from ZODB directly via current ZODB connection.
+It was relatively straight-forward to implement, but cached file data become
+duplicated in between ZODB connections of current process and in between
+several client processes that use ZODB.
+
+In shared-cache mode file's data is accessed through special filesystem for
+which data cache is centrally maintained by OS kernel. This mode was added in
+2021 and reduces wendelin.core RAM consumption dramatically. Note that even
+though the cache is shared, isolation property is still fully provided. Please
+see wcfs/wcfs.go which describes the filesystem and shared-cache mode in detail.
+
+The mode of operation can be selected via environment variable::
+
+  $WENDELIN_CORE_VIRTMEM
+      rw:uvmm           local-cache     (i.e. !wcfs)    (default)
+      r:wcfs+w:uvmm     shared-cache    (i.e.  wcfs)
+
+
 Data format
 -----------
 
@@ -88,7 +112,7 @@ For "2" we have
     - low-overhead in terms of ZODB size (only part of a block is overwritten
       in DB on single change), but
     - high-overhead in terms of access time
-      (several objects need to be loaded for 1 block)
+      (several objects need to be loaded for 1 block(*))
 
 In general it is not possible to have low-overhead for both i) access-time, and
 ii) DB size, with approach where we do block objects representation /
@@ -98,6 +122,10 @@ On the other hand, if object management is moved to DB *server* side, it is
 possible to deduplicate them there and this way have low-overhead for both
 access-time and DB size with just client storing 1 object per file block. This
 will be our future approach after we teach NEO about object deduplication.
+
+
+(*) wcfs loads ZBlk1 subobjects in parallel, but today ZODB storage servers do
+    not scale well on such highly-concurrent access.
 """
 
 # ZBigFile organization
@@ -125,13 +153,12 @@ will be our future approach after we teach NEO about object deduplication.
 # between virtmem subsystem and ZODB, and virtmem->ZODB propagation happens only
 # at commit time.
 #
-# Since, for performance reasons, virtmem subsystem is going away and BigFiles
-# will be represented by real FUSE-based filesystem with virtual memory being
-# done by kernel, where we cannot get callback on a page-dirtying, it is more
-# natural to also use "2" here.
+# ZBigFile follows second scheme and synchronizes dirty RAM with ZODB at commit time.
+# See _ZBigFileH for details.
 
 
-from wendelin.bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED
+from wendelin.bigfile import WRITEOUT_STORE, WRITEOUT_MARKSTORED
+from wendelin.bigfile._file_zodb import _ZBigFile
 from wendelin.lib.mem import bzero, memcpy
 from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
@@ -464,23 +491,6 @@ if ZBlk_fmt_write not in ZBlk_fmt_registry:
 # ----------------------------------------
 
 
-# helper for ZBigFile - just redirect loadblk/storeblk back
-# (because it is not possible to inherit from both Persistent and BigFile at
-#  the same time - see below)
-class _ZBigFile(BigFile):
-    # .zself    - reference to ZBigFile
-
-    def __new__(cls, zself, blksize):
-        obj = BigFile.__new__(cls, blksize)
-        obj.zself = zself
-        return obj
-
-    # redirect load/store to main class
-    def loadblk(self, blk, buf):    return self.zself.loadblk(blk, buf)
-    def storeblk(self, blk, buf):   return self.zself.storeblk(blk, buf)
-
-
-
 # ZBigFile implements BigFile backend with data stored in ZODB.
 #
 # NOTE Can't inherit from Persistent and BigFile at the same time - both are C
@@ -510,7 +520,7 @@ class ZBigFile(LivePersistent):
 
     def __setstate__(self, state):
         self.blksize, self.blktab = state
-        self._v_file = _ZBigFile(self, self.blksize)
+        self._v_file = _ZBigFile._new(self, self.blksize)
         self._v_filehset = WeakSet()
 
 
@@ -560,16 +570,47 @@ class ZBigFile(LivePersistent):
     # invalidate data   .blktab[blk] invalidated -> invalidate page
     def invalidateblk(self, blk):
         for fileh in self._v_filehset:
+            # wcfs: there is no need to propagate ZODB -> fileh invalidation by
+            # client since WCFS handles invalidations from ZODB by itself.
+            #
+            # More: the algorythm to compute δ(ZODB) -> δ(blk) is more complex
+            # than 1-1 ZBlk <-> blk mapping: ZBlk could stay constant, but if
+            # ZBigFile.blktab topology is changed, affected file blocks have to
+            # be invalidated. Currently !wcfs codepath fails to handle that,
+            # while wcfs handles invalidations correctly. The plan is to make
+            # wcfs way the primary and to deprecate !wcfs.
+            #
+            # -> don't propagate ZODB -> WCFS invalidation by client to fully
+            # rely on and test wcfs subsystem.
+            if fileh.uses_mmap_overlay():
+                continue
             fileh.invalidate_page(blk)  # XXX assumes blksize == pagesize
 
 
     # fileh_open is bigfile-like method that creates new file-handle object
     # that is given to user for mmap.
-    def fileh_open(self):
-        fileh = _ZBigFileH(self)
+    #
+    # _use_wcfs is internal option and controls whether to use wcfs to access
+    # ZBigFile data:
+    #
+    # - True    -> use wcfs
+    # - False   -> don't use wcfs
+    # - not set -> behave according to global default
+    def fileh_open(self, _use_wcfs=None):
+        if _use_wcfs is None:
+            _use_wcfs = self._default_use_wcfs()
+
+        fileh = _ZBigFileH(self, _use_wcfs)
         self._v_filehset.add(fileh)
         return fileh
 
+
+    # _default_use_wcfs returns whether default virtmem setting is to use wcfs or not.
+    @staticmethod
+    def _default_use_wcfs():
+        virtmem = os.environ.get("WENDELIN_CORE_VIRTMEM", "rw:uvmm")    # unset -> !wcfs
+        virtmem = virtmem.lower()
+        return {"r:wcfs+w:uvmm": True, "rw:uvmm": False}[virtmem]
 
 
 
@@ -609,15 +650,18 @@ class ZBigFile(LivePersistent):
 # NOTE Bear in mind that after close, connection can be reopened in different
 #      thread - that's why we have to adjust registration to per-thread
 #      transaction_manager.
+#
+# See also _file_zodb.pyx -> ZSync which maintains and keeps zodb.Connection
+# and wcfs.Connection in sync.
 @implementer(IDataManager)
 @implementer(ISynchronizer)
 class _ZBigFileH(object):
     # .zfile        ZBigFile we were opened for
     # .zfileh       handle for ZBigFile in virtmem
 
-    def __init__(self, zfile):
+    def __init__(self, zfile, use_wcfs):
         self.zfile  = zfile
-        self.zfileh = zfile._v_file.fileh_open()
+        self.zfileh = zfile._v_file.fileh_open(use_wcfs)
 
         # FIXME zfile._p_jar could be None (ex. ZBigFile is newly created
         #       before first commit)
@@ -678,6 +722,9 @@ class _ZBigFileH(object):
 
     def invalidate_page(self, pgoffset):
         return self.zfileh.invalidate_page(pgoffset)
+
+    def uses_mmap_overlay(self):
+        return self.zfileh.uses_mmap_overlay()
 
 
     # ~~~~ ISynchronizer ~~~~

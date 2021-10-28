@@ -24,7 +24,8 @@
 # Package _wcfs provides Python-wrappers for C++ wcfs client package.
 #
 # It wraps WCFS/Conn/FileH/Mapping and WatchLink to help client_test.py unit-test
-# WCFS base-layer mmap functionality.
+# WCFS base-layer mmap functionality. At functional level WCFS client (and especially
+# pinner) is verified when running wendelin.core array tests in wcfs mode.
 
 from golang cimport chan, structZ, string, error, refptr
 from golang cimport context, cxx

@@ -159,6 +159,7 @@ def _open(wc, obj, mode='rb', at=None):
 
 _wcmu = sync.Mutex()
 _wcregistry    = {} # mntpt -> WCFS
+_wcautostarted = [] # of WCFS, with ._wcsrv != None, for wcfs we ever autostart'ed  (for tests)
 
 @func(WCFS)
 def __init__(wc, mountpoint, fwcfs, wcsrv):
@@ -221,6 +222,7 @@ def join(zurl, autostart=_default_autostart()): # -> WCFS
 
         wcsrv, fwcfs = _start(zurl, "-autoexit")
         wc = WCFS(mntpt, fwcfs, wcsrv)
+        _wcautostarted.append(wc)
         assert mntpt not in _wcregistry
         _wcregistry[mntpt] = wc
 

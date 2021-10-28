@@ -21,6 +21,9 @@
 
 Virtmem layer provided by wcfs client package is unit-tested by
 wcfs/client/client_test.py .
+
+At functional level, the whole wendelin.core test suite is used to verify
+wcfs.py/wcfs.go while running tox tests in wcfs mode.
 """
 
 from __future__ import print_function, absolute_import
@@ -495,7 +498,7 @@ class tDB(tWCFS):
         for zf, zfDelta in t._changed.items():
             dfile = DFile()
             zconns.add(zf._p_jar)
-            zfh = zf.fileh_open()   # NOTE does not use wcfs
+            zfh = zf.fileh_open(_use_wcfs=False)
             for blk, data in zfDelta.iteritems():
                 dfile.ddata[blk] = data
                 data += b'\0'*(zf.blksize - len(data))  # trailing \0

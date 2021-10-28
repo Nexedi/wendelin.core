@@ -240,7 +240,7 @@
 // process, do not see changes made to the first mapping.
 //
 // Since wendelin.core needs to provide coherency in between different slices
-// of the same array, this is the mode wendelin.core will actually use.
+// of the same array, this is the mode wendelin.core actually uses.
 //
 // 3. write to wcfs
 //

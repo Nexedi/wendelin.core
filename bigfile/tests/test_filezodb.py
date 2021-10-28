@@ -75,6 +75,8 @@ def Blk(vma, i):
     return ndarray(blksize32, offset=i*blksize, buffer=vma, dtype=uint32)
 
 def test_bigfile_filezodb():
+    ram_reclaim_all()   # reclaim pages allocated by previous tests
+
     root = dbopen()
     root['zfile'] = f = ZBigFile(blksize)
     transaction.commit()
@@ -137,7 +139,11 @@ def test_bigfile_filezodb():
     # evict all loaded pages and test loading them again
     # (verifies ZBlk.loadblkdata() & loadblk logic when loading data the second time)
     reclaimed = ram_reclaim_all()
-    assert reclaimed >= blen    # XXX assumes pagesize=blksize
+    if fh.uses_mmap_overlay():
+        # in mmap-overlay mode no on-client RAM is allocated for read data
+        assert reclaimed == 0
+    else:
+        assert reclaimed >= blen    # XXX assumes pagesize=blksize
 
     for i in xrange(blen):
         assert array_equal(Blk(vma, i), dataX(i))
@@ -500,7 +506,7 @@ def _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache):
 
 def test_bigfile_filezodb_vs_cache_invalidation():
     _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache=lambda conn: None)
-@xfail
+@xfail  # NOTE passes with wcfs
 def test_bigfile_filezodb_vs_cache_invalidation_with_cache_pressure():
     _test_bigfile_filezodb_vs_cache_invalidation(_drop_cache=lambda conn: conn._cache.minimize())
 
