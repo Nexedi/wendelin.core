@@ -159,8 +159,8 @@ def zconn_at(zconn): # -> tid
     # We rely on our patch in 4-nxd branch that reworks ZODB.Connection to
     # implement MVCC via always calling loadBefore(zconn._txn_time) to load objects.
     elif zmajor == 4:
-        assert 'conn:MVCC-via-loadBefore-only' in ZODB.nxd_patches, \
-            "https://lab.nexedi.com/nexedi/ZODB/merge_requests/1"
+        _zassertHasNXDPatch('conn:MVCC-via-loadBefore-only',
+            "https://lab.nexedi.com/nexedi/ZODB/merge_requests/1")
 
         if zconn._mvcc_storage:
             raise NotImplementedError("Connection.at for IMVCCStorage is not implemented")
@@ -179,6 +179,14 @@ def zconn_at(zconn): # -> tid
 def before2at(before): # -> at
     return p64(u64(before) - 1)
 
+
+# _zassertHasNXDPatch asserts that ZODB is patched with specified Nexedi-provided patch.
+def _zassertHasNXDPatch(patch, details_link):
+    nxd_patches = getattr(ZODB, 'nxd_patches', set())
+    if patch not in nxd_patches:
+        raise AssertionError(
+            "ZODB%s is not patched with required Nexedi patch %r\n\tSee %s for details" %
+            (zmajor, patch, details_link))
 
 # _zversion returns ZODB version object
 def _zversion():
