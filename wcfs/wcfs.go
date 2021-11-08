@@ -954,7 +954,7 @@ retry:
 	for sk := range gdebug.zheadSockTab {
 		_, err := fmt.Fprintf(xio.BindCtxW(sk, ctx), "%s\n", δZ.Tid)
 		if err != nil {
-			log.Errorf("zhead: %s: write: %s  (detaching reader)", sk, err)
+			log.Errorf("zhead: %s: write: %s  (detaching reader)", sk.file, err)
 			sk.Close()
 			delete(gdebug.zheadSockTab, sk)
 		}
