@@ -182,6 +182,21 @@ def map_zero_ro(size_t size):
 
     return <unsigned char[:size:1]>addr
 
+# map_zero_into_ro is similar to map_zero_ro, but mmaps zeros into mem's memory.
+def map_zero_into_ro(unsigned char[::1] mem not None):
+    cdef void   *addr = &mem[0]
+    cdef size_t size  = mem.shape[0]
+
+    f = open("/dev/zero", "rb")
+    addr = mman.mmap(addr, size, mman.PROT_READ, mman.MAP_FIXED |
+                                                 mman.MAP_SHARED | mman.MAP_NORESERVE, f.fileno(), 0)
+    f.close()
+    if addr == mman.MAP_FAILED:
+        PyErr_SetFromErrno(OSError)
+        return
+
+    return
+
 
 # advise advises kernel about use of mem's memory.
 #
@@ -205,6 +220,20 @@ def protect(const unsigned char[::1] mem not None, int prot):
     cdef size_t      size = mem.shape[0]
 
     cdef err = mman.mprotect(<void *>addr, size, prot)
+    if err:
+        PyErr_SetFromErrno(OSError)
+
+    return
+
+
+# sync asks the kernel to synchronize the file with a memory map.
+#
+# see msync(2) for details.
+def sync(const unsigned char[::1] mem not None, int flags):
+    cdef const void *addr = &mem[0]
+    cdef size_t      size = mem.shape[0]
+
+    cdef err = mman.msync(<void *>addr, size, flags)
     if err:
         PyErr_SetFromErrno(OSError)
 
