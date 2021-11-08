@@ -851,11 +851,6 @@ retry:
         return make_pair(nil, E(err));
     }
 
-    // TODO ensure f<foid>@ wconn.at exists - else we get pins to non-existing
-    //      state from wcfs, pinner replies nak, wcfs sends SIGBUS.
-    // TODO -> better teach wcfs to reject "watch <foid> @at" for @at where f did not existed.
-    //      (see test_wcfs_watch_before_create)
-
     FileH f; bool ok;
     tie(f, ok) = wconn._filehTab.get_(foid);
     if (ok) {
