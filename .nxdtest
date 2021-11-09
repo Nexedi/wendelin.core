@@ -41,13 +41,21 @@ for nproc in gonprocv:
 # test.wcfs/<stor> runs unit tests for WCFS
 # test.py/<stor>-wcfs runs unit- and functional- tests for wendelin.core in wcfs mode.
 for stor in storv:
-    envdb = {'WENDELIN_CORE_TEST_DB': '<%s>' % stor}
+    env = {
+        'WENDELIN_CORE_TEST_DB': '<%s>' % stor,
+        # run in verbose mode and don't capture output in the early days of WCFS
+        #
+        # non-capture is needed because if WCFS gets stuck somehow on testnode, we
+        # still want to see some test output instead of full silence and pytest
+        # being killed after 4 hours of timeout.
+        'PYTEST_ADDOPTS': '-vs',
+    }
 
     for nproc in gonprocv:
         TestCase('test.wcfs/%s:%s' % (stor, nproc), ['make', 'test.wcfs'],
-                 envadj=dict(GOMAXPROCS=nproc, **envdb), summaryf=PyTest.summary)
+                 envadj=dict(GOMAXPROCS=nproc, **env), summaryf=PyTest.summary)
 
     for nproc in gonprocv:
         TestCase('test.py/%s-wcfs:%s' % (stor, nproc), ['make', 'test.py'],
-                 envadj=dict(WENDELIN_CORE_VIRTMEM='r:wcfs+w:uvmm', GOMAXPROCS=nproc, **envdb),
+                 envadj=dict(WENDELIN_CORE_VIRTMEM='r:wcfs+w:uvmm', GOMAXPROCS=nproc, **env),
                  summaryf=PyTest.summary)
