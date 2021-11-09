@@ -246,11 +246,11 @@ def git_lsfiles(dirname):
     # FIXME dirname is currently ignored
     # XXX non-ascii names, etc
     for _ in runcmd(['git', 'ls-files']).splitlines():
-        yield _.decode('utf8')  # XXX utf8 hardcoded
+        yield _
     # XXX recursive submodules
     for _ in runcmd(['git', 'submodule', 'foreach', '--quiet',  \
                 r'git ls-files | sed "s|\(.*\)\$|$path/\1|g"']).splitlines():
-        yield _.decode('utf8')  # XXX utf8 hardcoded
+        yield _
 
 # if we are in git checkout - inject git_lsfiles to setuptools.file_finders
 # entry-point on the fly.
