@@ -292,14 +292,17 @@ class TestDB_NEO(TestDB_Base):
     def __init__(self, dburi):
         super(TestDB_NEO, self).__init__(dburi)
         from neo.tests.functional import NEOCluster
-        self.cluster = NEOCluster(['1'], adapter='SQLite')
+        self.NEOCluster = NEOCluster
 
     def setup(self):
+        self.tmpd = mkdtemp('', 'testdb_neo.')
+        self.cluster = self.NEOCluster(['1'], temp_dir=self.tmpd, adapter='SQLite')
         self.cluster.start()
         self.cluster.expectClusterRunning()
 
     def _teardown(self):
         self.cluster.stop()
+        rmtree(self.tmpd)
 
     def getZODBStorage(self):
         return self.cluster.getZODBStorage()
