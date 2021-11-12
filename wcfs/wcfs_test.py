@@ -53,7 +53,7 @@ from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
-from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _ready as ready
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
 
 # setup:
@@ -106,8 +106,7 @@ def teardown_function(f):
     mounted = is_mountpoint(testmntpt)
     if mounted:
         fuse_unmount(testmntpt)
-    if os.path.exists(testmntpt):
-        os.rmdir(testmntpt)
+    rmdir_ifexists(testmntpt)
     with raises(KeyError):
         procmounts_lookup_wcfs(testzurl)
 
@@ -384,7 +383,6 @@ class tWCFS(_tWCFS):
             if is_mountpoint(t.wc.mountpoint):
                 fuse_unmount(t.wc.mountpoint)
             assert not is_mountpoint(t.wc.mountpoint)
-            os.rmdir(t.wc.mountpoint)
         defer(_)
         def _():
             def onstuck():

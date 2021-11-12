@@ -417,6 +417,15 @@ def __stop(wcsrv, ctx, _onstuck):
 
     # unmount and wait for wcfs to exit
     # kill wcfs and abort FUSE connection if clean unmount fails
+    # at the end make sure mountpoint directory is removed
+
+    def _():
+        # when stop runs:
+        # - wcsrv could be already `fusermount -u`'ed from outside
+        # - the mountpoint could be also already removed from outside
+        _rmdir_ifexists(wcsrv.mountpoint)
+    defer(_)
+
     def _():
         if wcsrv._fuseabort is not None:
             wcsrv._fuseabort.close()
@@ -520,6 +529,14 @@ def _mkdir_p(path, mode=0o777): # -> created(bool)
             raise
         return False
     return True
+
+# rmdir if path exists.
+def _rmdir_ifexists(path):
+    try:
+        os.rmdir(path)
+    except OSError as e:
+        if e.errno != ENOENT:
+            raise
 
 # _fuse_unmount calls `fusermount -u` + logs details if unmount failed.
 @func
@@ -713,6 +730,7 @@ def main():
     elif cmd == "stop":
         mntpt = _mntpt_4zurl(zurl)
         _fuse_unmount(mntpt)
+        _rmdir_ifexists(mntpt)
 
     else:
         print("wcfs: unknown command %s" % qq(cmd), file=sys.stderr)
