@@ -24,7 +24,7 @@ import pytest
 import transaction
 from golang import func, defer
 from functools import partial
-import gc
+import os, gc
 
 # reset transaction synchronizers before every test run.
 #
@@ -46,9 +46,24 @@ def transaction_reset():
     # nothing to run after test
 
 
+# prepend_env prepends prefix + ' ' to environment variable var.
+def prepend_env(var, prefix):
+    v = os.environ.get(var, '')
+    if v != '':
+        v = ' ' + v
+    v = prefix + v
+    os.environ[var] = v
+
+
 # enable log_cli on no-capture
 # (output during a test is a mixture of print and log)
 def pytest_configure(config):
+    # put WCFS log into stderr instead of to many files in /tmp/wcfs.*.log
+    # this way we don't leak those files and include relevant information in test output
+    #
+    # TODO put WCFS logs into dedicated dir without -v?
+    prepend_env('WENDELIN_CORE_WCFS_OPTIONS', '-logtostderr')
+
     if config.option.capture == "no":
         config.inicfg['log_cli'] = "true"
         assert config.getini("log_cli") is True
