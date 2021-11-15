@@ -417,13 +417,22 @@ def __stop(wcsrv, ctx, _onstuck):
 
     # unmount and wait for wcfs to exit
     # kill wcfs and abort FUSE connection if clean unmount fails
-    # at the end make sure mountpoint directory is removed
+    # at the end make sure mount entry and mountpoint directory are removed
 
     def _():
         # when stop runs:
         # - wcsrv could be already `fusermount -u`'ed from outside
         # - the mountpoint could be also already removed from outside
         _rmdir_ifexists(wcsrv.mountpoint)
+    defer(_)
+
+    def _():
+        # second unmount, if first unmount failed and we had to abort FUSE connection
+        # -z (lazy) because this one has to succeed, but there could be still
+        # client file descriptors left pointing to the mounted filesystem.
+        if _is_mountpoint(wcsrv.mountpoint):
+            log.warn("-> unmount -z ...")
+            _fuse_unmount(wcsrv.mountpoint, "-z")
     defer(_)
 
     def _():
@@ -539,9 +548,11 @@ def _rmdir_ifexists(path):
             raise
 
 # _fuse_unmount calls `fusermount -u` + logs details if unmount failed.
+#
+# Additional options to fusermount can be passed via optv.
 @func
-def _fuse_unmount(mntpt):
-    ret, out = _sysproccallout(["fusermount", "-u", mntpt])
+def _fuse_unmount(mntpt, *optv):
+    ret, out = _sysproccallout(["fusermount", "-u"] + list(optv) + [mntpt])
     if ret != 0:
         # unmount failed, usually due to "device is busy".
         # Log which files are still opened and reraise
@@ -560,7 +571,10 @@ def _fuse_unmount(mntpt):
         defer(_)
 
         out = out.rstrip() # kill trailing \n\n
-        emsg = "fuse_unmount %s: failed: %s" % (mntpt, out)
+        opts = ' '.join(optv)
+        if opts != '':
+            opts += ' '
+        emsg = "fuse_unmount %s%s: failed: %s" % (opts, mntpt, out)
         log.warn(emsg)
         raise RuntimeError("%s\n(more details logged)" % emsg)
 
