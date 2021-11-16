@@ -293,7 +293,7 @@ def test_zconn_at():
     assert zconn_at(conn2) == at0
 
 
-    # reopen conn2 -> view upated to @at1_
+    # reopen conn2 -> view updated to @at1_
     conn2.close()
     conn2_ = db.open(transaction_manager=tm1)
     assert conn2_ is conn2  # from DB pool

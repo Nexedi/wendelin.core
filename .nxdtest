@@ -9,9 +9,9 @@ for kind in ['t', 'fault', 'asan', 'tsan']:
     t = 'test.%s' % kind
     envadj = {}
 
-    # test.fault: on Ubuntu, when apport is registerd in /proc/sys/kernel/core_pattern,
+    # test.fault: on Ubuntu, when apport is registered in /proc/sys/kernel/core_pattern,
     # it is apport which is run to process core. Apport dumps core for us, but
-    # rejects to run in parralel with the following message in its log:
+    # rejects to run in parallel with the following message in its log:
     #   ERROR: apport ...: another apport instance is already running, aborting
     # this way, when test.fault tests are run in parallel, some of them fail to
     # find core corresponding to expected crash.

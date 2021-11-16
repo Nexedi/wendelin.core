@@ -34,7 +34,7 @@
 #include "../../t/t_utils.h"
 #include   "../../t/t_utils.c"
 
-
+/* test_vmamap verifies addr -> VMA lookup. */
 void test_vmamap()
 {
     VMA vma1, vma2, vma3;
@@ -805,6 +805,7 @@ void test_file_access_synthetic(void)
     CHECK_MRU   (page2, page0, page3);
     CHECK_DIRTY (/*empty*/);
 
+    /* invalidation */
     diag("invalidate");
     mkdirty2();
 
