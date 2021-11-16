@@ -182,11 +182,16 @@ def before2at(before): # -> at
 
 # _zassertHasNXDPatch asserts that ZODB is patched with specified Nexedi-provided patch.
 def _zassertHasNXDPatch(patch, details_link):
-    nxd_patches = getattr(ZODB, 'nxd_patches', set())
-    if patch not in nxd_patches:
+    if not _zhasNXDPatch(patch):
         raise AssertionError(
             "ZODB%s is not patched with required Nexedi patch %r\n\tSee %s for details" %
             (zmajor, patch, details_link))
+
+# _zhasNXDPatch returns whether ZODB is patched with specified Nexedi-provided patch.
+def _zhasNXDPatch(patch):
+    nxd_patches = getattr(ZODB, 'nxd_patches', set())
+    return (patch in nxd_patches)
+
 
 # _zversion returns ZODB version object
 def _zversion():

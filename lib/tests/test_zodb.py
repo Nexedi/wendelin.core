@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -238,6 +238,9 @@ def test_deactivate_btree():
 # verify that zconn_at gives correct answer.
 @func
 def test_zconn_at():
+    if zmajor == 4 and not _zhasNXDPatch('conn:MVCC-via-loadBefore-only'):
+        pytest.xfail(reason="zconn_at needs https://lab.nexedi.com/nexedi/ZODB/merge_requests/1 to work on ZODB4")
+
     stor = testdb.getZODBStorage()
     defer(stor.close)
     db  = DB(stor)
