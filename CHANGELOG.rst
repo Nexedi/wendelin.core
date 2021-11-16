@@ -1,6 +1,60 @@
 Wendelin.core change history
 ============================
 
+2.0.alpha1 (2021-11-16)
+-----------------------
+
+This is a major pre-release that reduces wendelin.core RAM consumption
+dramatically:
+
+The project switches to be mainly using kernel virtual memory manager.
+Bigfiles are now primarily accessed with plain OS-level mmap to files from
+synthetic WCFS filesystem. This makes bigfile's cache (now it is the kernel's
+pagecache) to be shared in between several processes.
+
+In addition a custom coherency protocol is provided, which allows clients,
+that want to receive isolation guarantee ("I" from ACID), to still use the shared
+cache and at the same time get bigfile view isolated from other's changes.
+
+By default wendelin.core python client continues to provide full ACID semantics as
+before.
+
+In addition to being significantly more efficient, WCFS also fixes
+data-corruption bugs that were discovered__ in how Wendelin.core 1 handles
+invalidations on BTree topology change.
+
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/8c32c9f6
+
+Please see wcfs.go__ for description of the new filesystem.
+
+__ https://lab.nexedi.com/nexedi/wendelin.core/blob/master/wcfs/wcfs.go
+
+Major steps: 1__, 2__, 3__, 4__, 5__, 6__, 7__, 8__, 9__, 10__, 11__, 12__,
+13__, 14__, 15__, 16__, 17__, 18__, 19__, 20__, 21__.
+
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/2c152d41?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/e3f2ee2d?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/0e829874?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/a8595565?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/b87edcfe?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/1f2cd49d?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/27df5a3b?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/80153aa5?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/2ab4be93?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/f980471f?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/4430de41?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/6f0cdaff?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/10f7153a?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/fae045cc?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/23362204?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/ceadfcc7?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/1dba3a9a?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/1f866c00?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/e11edc70?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/986cf86e?expanded=1
+__ https://lab.nexedi.com/nexedi/wendelin.core/commit/c5e18c74?expanded=1
+
+
 0.13 (2019-06-18)
 -----------------
 

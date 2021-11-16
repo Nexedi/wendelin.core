@@ -81,13 +81,17 @@ limitations and things that need to be improved:
 Thus
 
 - we are currently working on improved wendelin.core design and implementation,
-  which will use kernel virtual memory manager (instead of one implemented__ in__
+  which uses kernel virtual memory manager (complemented by one implemented__ in__
   userspace__) with arrays backend presented to kernel via FUSE as virtual
   filesystem implemented in Go.
+
+  As of 2021 November `this filesystem`__ reached its alpha state and is staged
+  to be tried for real.
 
 __  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/include/wendelin/bigfile/virtmem.h
 __  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/bigfile/virtmem.c
 __  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/bigfile/pagefault.c
+__  https://lab.nexedi.com/nexedi/wendelin.core/blob/master/wcfs/wcfs.go
 
 In parallel we will also:
 
