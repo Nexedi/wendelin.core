@@ -469,7 +469,7 @@ def __stop(wcsrv, ctx, _onstuck):
     try:
         if _is_mountpoint(wcsrv.mountpoint): # could be unmounted from outside
             _fuse_unmount(wcsrv.mountpoint)
-    except:
+    except Exception as e:
         # if clean unmount failed -> kill -TERM wcfs and force abort of fuse connection.
         #
         # aborting fuse connection is needed in case wcfs/kernel will be stuck
@@ -482,7 +482,11 @@ def __stop(wcsrv, ctx, _onstuck):
                 wcsrv._fuseabort.write(b"1\n")
                 wcsrv._fuseabort.flush()
         defer(_)
-        raise
+
+        # treat first unmount failure as temporary - e.g. due to "device or resource is busy".
+        # we'll be retrying to unmount the filesystem the second time after kill/fuse-abort.
+        if not isinstance(e, _FUSEUnmountError):
+            raise
 
 
 # ---- misc ----
@@ -550,6 +554,8 @@ def _rmdir_ifexists(path):
 # _fuse_unmount calls `fusermount -u` + logs details if unmount failed.
 #
 # Additional options to fusermount can be passed via optv.
+class _FUSEUnmountError(RuntimeError):
+    pass
 @func
 def _fuse_unmount(mntpt, *optv):
     ret, out = _sysproccallout(["fusermount", "-u"] + list(optv) + [mntpt])
@@ -576,7 +582,7 @@ def _fuse_unmount(mntpt, *optv):
             opts += ' '
         emsg = "fuse_unmount %s%s: failed: %s" % (opts, mntpt, out)
         log.warn(emsg)
-        raise RuntimeError("%s\n(more details logged)" % emsg)
+        raise _FUSEUnmountError("%s\n(more details logged)" % emsg)
 
 # _is_mountpoint returns whether path is a mountpoint
 def _is_mountpoint(path):    # -> bool
