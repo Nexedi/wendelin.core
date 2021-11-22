@@ -32,7 +32,7 @@ from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.wcfs.wcfs_test import tDB, tAt, timeout, eprint
 from wendelin.wcfs import _waitfor_ as waitfor_
 from wendelin.wcfs import wcfs_test
-from wendelin.wcfs.internal.wcfs_test import read_mustfault
+from wendelin.wcfs.internal.wcfs_test import read_mustfault, read_exfault_withgil
 from wendelin.wcfs.internal import mm
 
 from pytest import raises
@@ -83,7 +83,7 @@ class tMapping(object):
         #      - - - - - -
         #     client process
         #
-        _ = blkview[0]
+        _ = read_exfault_withgil(blkview[0:1])
         assert _ == dataok[0]
         assert blkview.tobytes() == dataok
 

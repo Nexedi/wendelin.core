@@ -81,12 +81,20 @@ cdef class _tWCFS:
 # read_exfault_nogil reads mem with GIL released and returns its content.
 #
 # If reading hits segmentation fault, it is converted to SegmentationFault exception.
+def read_exfault_nogil(const unsigned char[::1] mem not None) -> bytes:
+    return _read_exfault(mem, withgil=False)
+
+# read_exfault_withgil is similar to read_exfault_nogil, but does the reading
+# while holding the GIL.
+def read_exfault_withgil(const unsigned char[::1] mem not None) -> bytes:
+    return _read_exfault(mem, withgil=True)
+
 class SegmentationFault(Exception): pass
 cdef sync.Mutex exfaultMu     # one at a time as sigaction is per-process
 cdef sigjmp_buf exfaultJmp
 cdef cbool faulted
-def read_exfault_nogil(const unsigned char[::1] mem not None) -> bytes:
-    assert len(mem) == 1, "read_exfault_nogil: only [1] mem is supported for now"
+def _read_exfault(const unsigned char[::1] mem not None, cbool withgil) -> bytes:
+    assert len(mem) == 1, "_read_exfault: only [1] mem is supported for now"
     cdef unsigned char b
     global faulted
     cdef cbool faulted_
@@ -97,8 +105,12 @@ def read_exfault_nogil(const unsigned char[::1] mem not None) -> bytes:
 
     faulted = False
     try:
-        with nogil:
-            b = _read_exfault(&mem[0])
+        if withgil:
+            #with gil:  (cython complains "Trying to acquire the GIL while it is already held.")
+                b = __read_exfault(&mem[0])
+        else:
+            with nogil:
+                b = __read_exfault(&mem[0])
     finally:
         faulted_ = faulted
         with nogil:
@@ -114,7 +126,7 @@ cdef void exfaultSighand(int sig) nogil:
     faulted = True
     siglongjmp(exfaultJmp, 1)
 
-cdef unsigned char _read_exfault(const unsigned char *p) nogil except +topyexc:
+cdef unsigned char __read_exfault(const unsigned char *p) nogil except +topyexc:
     global faulted
 
     cdef sigaction_t act, saveact
