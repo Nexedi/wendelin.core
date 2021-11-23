@@ -446,7 +446,7 @@ def __stop(wcsrv, ctx, _onstuck):
         if _procwait_(timeoutFrac(0.5), wcsrv._proc):
             return
 
-        log.warn("wcfs.go does not exit (after SIGTERM)")
+        log.warn("wcfs.go does not exit")
         log.warn("-> kill -QUIT wcfs.go ...")
         os.kill(wcsrv._proc.pid, SIGQUIT)
 
