@@ -74,10 +74,12 @@ blksize32 = blksize // 4
 def Blk(vma, i):
     return ndarray(blksize32, offset=i*blksize, buffer=vma, dtype=uint32)
 
+@func
 def test_bigfile_filezodb():
     ram_reclaim_all()   # reclaim pages allocated by previous tests
 
     root = dbopen()
+    defer(lambda: dbclose(root))
     root['zfile'] = f = ZBigFile(blksize)
     transaction.commit()
 
@@ -124,7 +126,6 @@ def test_bigfile_filezodb():
     del fh
 
     dbclose(root)
-    del root
 
     root = dbopen()
     f = root['zfile']
@@ -160,7 +161,6 @@ def test_bigfile_filezodb():
     del vma
     del fh
     dbclose(root)
-    del root
 
     root = dbopen()
     f = root['zfile']
@@ -194,7 +194,7 @@ def test_bigfile_filezodb():
     del vma
     del fh
     dbclose(root)
-    del db, root
+    del db
 
     root = dbopen()
     f = root['zfile']
@@ -207,9 +207,6 @@ def test_bigfile_filezodb():
     for i in xrange(1, blen):
         assert Blk(vma, i)[0] == i+1
         assert array_equal(Blk(vma, i)[1:], dataX(i)[1:])
-
-
-    dbclose(root)
 
 
 

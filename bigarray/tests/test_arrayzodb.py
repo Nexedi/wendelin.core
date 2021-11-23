@@ -44,13 +44,15 @@ def teardown_module():
     testdb.teardown()
 
 
+@func
 def test_zbigarray():
     root = testdb.dbopen()
+    defer(lambda: dbclose(root))
+
     root['zarray'] = ZBigArray((16*1024*1024,), uint8)
     transaction.commit()
 
     dbclose(root)
-    del root
 
 
     root = testdb.dbopen()
@@ -94,7 +96,7 @@ def test_zbigarray():
 
     # reload DB & array
     dbclose(root)
-    del root, a,b, A
+    del a,b, A
 
 
     root = testdb.dbopen()
@@ -130,7 +132,7 @@ def test_zbigarray():
 
     # reload & verify changes
     dbclose(root)
-    del root, a, A, db
+    del a, A, db
 
 
     root = testdb.dbopen()
@@ -165,7 +167,7 @@ def test_zbigarray():
     # commit; reload & verify changes
     transaction.commit()
     dbclose(root)
-    del root, a, b, A
+    del a, b, A
 
 
     root = testdb.dbopen()
@@ -190,22 +192,21 @@ def test_zbigarray():
     assert a[24*1024*1024+2] ==  12
     assert a[24*1024*1024+3] ==  13
 
-    dbclose(root)
-
 
 # test array ordering is saved properly into DB and is picked up in
 # backward-compatible manner - for data saved before order parameter was
 # introduced.
 # (actual ordering indexing test is in BigArray tests, not here)
+@func
 def test_zbigarray_order():
     # make sure order is properly saved/restored to/from DB
     root = testdb.dbopen()
+    defer(lambda: dbclose(root))
     root['carray'] = ZBigArray((16*1024*1024,), uint8)
     root['farray'] = ZBigArray((16*1024*1024,), uint8, order='F')
     transaction.commit()
 
     dbclose(root)
-    del root
 
     root = testdb.dbopen()
     C = root['carray']
@@ -228,15 +229,11 @@ def test_zbigarray_order():
     transaction.commit()
 
     dbclose(root)
-    del root, Cold
 
     root = testdb.dbopen()
     Cold = root['coldarray']
 
     assert Cold._order == 'C'
-
-    dbclose(root)
-    del root
 
 
 
