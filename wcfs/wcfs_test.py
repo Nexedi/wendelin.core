@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2021  Nexedi SA and Contributors.
+# Copyright (C) 2018-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -395,7 +395,7 @@ class tWCFS(_tWCFS):
 
 class tDB(tWCFS):
     @func
-    def __init__(t):
+    def __init__(t, _with_old_data=False):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -432,9 +432,15 @@ class tDB(tWCFS):
         t._maintid = gettid()
 
         # prepare initial objects for test: zfile, nonzfile
-        t.root['!file'] = t.nonzfile  = Persistent()
-        t.root['zfile'] = t.zfile     = ZBigFile(blksize)
-        t.at0 = t.commit()
+        if not _with_old_data:
+            t.root['!file'] = t.nonzfile  = Persistent()
+            t.root['zfile'] = t.zfile     = ZBigFile(blksize)
+            t.at0 = t.commit()
+        else:
+            t.at0 = tAt(t, t.tail)
+
+        t.nonzfile = t.root['!file']
+        t.zfile    = t.root['zfile']
 
     @property
     def head(t):
@@ -1316,6 +1322,37 @@ def test_wcfs_basic_read_aftertail():
     assert _(4*blksize)     == b''
     assert _(8*blksize)     == b''
     assert _(100*blksize)   == b''
+
+
+# verify that wcfs does not panic with "no current transaction" when processing
+# invalidations if it needs to access ZODB during handleδZ.
+@func
+def test_wcfs_basic_invalidation_wo_dFtail_coverage():
+    # prepare initial data with single change to zfile[0].
+    @func
+    def _():
+        t = tDB(); zf = t.zfile
+        defer(t.close)
+        t.commit(zf, {0:'a'})
+    _()
+
+    # start wcfs with ΔFtail/ΔBtail not covering that initial change.
+    t = tDB(_with_old_data=True); zf = t.zfile
+    defer(t.close)
+
+    f = t.open(zf)
+    t.commit(zf, {1:'b1'})  # arbitrary commit to non-0 blk
+    f._assertBlk(0, 'a')    # [0] becomes tracked (don't verify against computed dataok due to _with_old_data)
+
+    # wcfs was crashing on processing further invalidation to blk 0 because
+    # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
+    # - ΔFtail.BlkRevAt activates "access ZODB" codepath,
+    # - but handleδZ was calling ΔFtail.BlkRevAt without properly putting zhead's transaction into ctx.
+    # -> panic.
+    t.commit(zf, {0:'a2'})
+
+    # just in case
+    f.assertBlk(0, 'a2')
 
 
 

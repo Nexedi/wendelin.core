@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -868,6 +868,13 @@ retry:
 		log.Infof("\n\n")
 	}
 
+	// put zhead's transaction into ctx because we will potentially need to
+	// access ZODB when processing invalidations.
+	// TODO better ctx = transaction.PutIntoContext(ctx, txn)
+	ctx0 := ctx
+	ctx, cancel := xcontext.Merge(ctx0, zhead.TxnCtx)
+	defer cancel()
+
 	// invalidate kernel cache for file data
 	wg := xsync.NewWorkGroup(ctx)
 	for foid, δfile := range δF.ByFile {
@@ -920,12 +927,14 @@ retry:
 
 	// 1. abort old and resync to new txn/at
 	transaction.Current(zhead.TxnCtx).Abort()
-	_, ctx = transaction.New(context.Background())
+	_, txnCtx := transaction.New(context.Background())
+	ctx, cancel = xcontext.Merge(ctx0, txnCtx) // TODO better transaction.PutIntoContext
+	defer cancel()
 	err = zhead.Resync(ctx, δZ.Tid)
 	if err != nil {
 		return err
 	}
-	zhead.TxnCtx = ctx
+	zhead.TxnCtx = txnCtx
 
 	// 2. restat invalidated ZBigFile
 	// NOTE no lock needed since .blksize and .size are constant during lifetime of one txn.
