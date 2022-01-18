@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2021  Nexedi SA and Contributors.
+# Copyright (C) 2018-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -736,6 +736,10 @@ def main():
     argv = argv[1:]
     zurl = argv[-1]     # -a -b zurl    -> zurl
     optv = argv[:-1]    # -a -b zurl    -> -a -b
+
+    # setup log.warn/error to go to stderr, so that details could be seen on
+    # e.g. "fuse_unmount: ... failed (more details logged)"
+    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
     if cmd == "serve":
         if argv[0] == '-h':
