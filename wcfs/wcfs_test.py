@@ -492,7 +492,19 @@ class tDB(tWCFS):
     # changeDelta) call is made before actually committing.
     def commit(t, zf=None, changeDelta=None):   # -> tAt
         head = t._commit(zf, changeDelta)
-        t._wcsync() # synchronize wcfs to db
+
+        # make sure wcfs is synchronized to committed transaction
+        while len(t._wc_zheadv) < len(t.dFtail):
+            l = t._wc_zheadfh.readline()
+            #print('> zhead read: %r' % l)
+            l = l.rstrip('\n')
+            wchead = tAt(t, fromhex(l))
+            i = len(t._wc_zheadv)
+            if wchead != t.dFtail[i].rev:
+                raise RuntimeError("wcsync #%d: wczhead (%s) != zhead (%s)" % (i, wchead, t.dFtail[i].rev))
+            t._wc_zheadv.append(wchead)
+        assert t.wc._read("head/at") == h(t.head)
+
         return head
 
     def _commit(t, zf=None, changeDelta=None):  # -> tAt
@@ -544,21 +556,6 @@ class tDB(tWCFS):
         t._changed = {}
 
         return head
-
-    # _wcsync makes sure wcfs is synchronized to latest committed transaction.
-    def _wcsync(t):
-        while len(t._wc_zheadv) < len(t.dFtail):
-            l = t._wc_zheadfh.readline()
-            #print('> zhead read: %r' % l)
-            l = l.rstrip('\n')
-            wchead = tAt(t, fromhex(l))
-            i = len(t._wc_zheadv)
-            if wchead != t.dFtail[i].rev:
-                raise RuntimeError("wcsync #%d: wczhead (%s) != zhead (%s)" % (i, wchead, t.dFtail[i].rev))
-            t._wc_zheadv.append(wchead)
-
-        # head/at = last txn of whole db
-        assert t.wc._read("head/at") == h(t.head)
 
     # _blkheadaccess marks head/zf[blk] accessed.
     def _blkheadaccess(t, zf, blk):
