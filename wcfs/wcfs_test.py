@@ -403,16 +403,31 @@ class tDB(tWCFS):
                 dbclose(t.root)
         defer(_)
 
-        # start wcfs after testdb is created
-        super(tDB, t).__init__()
-
-
         # ZBigFile(s) scheduled for commit
         t._changed = {} # ZBigFile -> {} blk -> data
 
         # committed: (tail, head] + δF history
         t.tail   = t.root._p_jar.db().storage.lastTransaction()
         t.dFtail = [] # of DF; head = dFtail[-1].rev
+
+        # ID of the thread which created tDB
+        # ( transaction plays dirty games with threading.local and we have to
+        #   check the thread is the same when .root is used )
+        t._maintid = gettid()
+
+        # prepare initial objects for test: zfile, nonzfile
+        if not _with_old_data:
+            t.root['!file'] = t.nonzfile  = Persistent()
+            t.root['zfile'] = t.zfile     = ZBigFile(blksize)
+            t.at0 = t._commit()
+        else:
+            t.at0 = tAt(t, t.tail)
+
+        t.nonzfile = t.root['!file']
+        t.zfile    = t.root['zfile']
+
+        # start wcfs after testdb is created
+        super(tDB, t).__init__()
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
@@ -424,22 +439,6 @@ class tDB(tWCFS):
         # tracked opened tFiles & tWatchLinks
         t._files    = set()
         t._wlinks   = set()
-
-        # ID of the thread which created tDB
-        # ( transaction plays dirty games with threading.local and we have to
-        #   check the thread is the same when .root is used )
-        t._maintid = gettid()
-
-        # prepare initial objects for test: zfile, nonzfile
-        if not _with_old_data:
-            t.root['!file'] = t.nonzfile  = Persistent()
-            t.root['zfile'] = t.zfile     = ZBigFile(blksize)
-            t.at0 = t.commit()
-        else:
-            t.at0 = tAt(t, t.tail)
-
-        t.nonzfile = t.root['!file']
-        t.zfile    = t.root['zfile']
 
     @property
     def head(t):
@@ -1801,6 +1800,8 @@ def test_wcfs_no_pin_twice():
 
 
 # verify watching for 2 files over single watch link.
+#
+# NOTE this test also verifies how wcfs handles ZBigFile created after wcfs startup.
 @func
 def test_wcfs_watch_2files():
     t = tDB(); zf1 = t.zfile
