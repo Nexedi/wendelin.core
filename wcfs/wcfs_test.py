@@ -491,6 +491,11 @@ class tDB(tWCFS):
     # zf and changeDelta can be optionally provided, in which case .change(zf,
     # changeDelta) call is made before actually committing.
     def commit(t, zf=None, changeDelta=None):   # -> tAt
+        head = t._commit(zf, changeDelta)
+        t._wcsync() # synchronize wcfs to db
+        return head
+
+    def _commit(t, zf=None, changeDelta=None):  # -> tAt
         if zf is not None:
             assert changeDelta is not None
             t.change(zf, changeDelta)
@@ -538,8 +543,6 @@ class tDB(tWCFS):
             print('M:      f<%s>\t%s' % (h(zf._p_oid), sorted(zfDelta.keys())))
         t._changed = {}
 
-        # synchronize wcfs to db, and we are done
-        t._wcsync()
         return head
 
     # _wcsync makes sure wcfs is synchronized to latest committed transaction.
