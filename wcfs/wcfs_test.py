@@ -394,8 +394,13 @@ class tWCFS(_tWCFS):
 
 
 class tDB(tWCFS):
+    # __init__ initializes test database and wcfs.
+    #
+    # old_data can be optinally provided to specify ZBigFile revisions to
+    # create before wcfs startup. old_data is []changeDelta - see .commit
+    # and .change for details.
     @func
-    def __init__(t, _with_old_data=False):
+    def __init__(t, old_data=[]):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -416,17 +421,15 @@ class tDB(tWCFS):
         t._maintid = gettid()
 
         # prepare initial objects for test: zfile, nonzfile
-        if not _with_old_data:
-            t.root['!file'] = t.nonzfile  = Persistent()
-            t.root['zfile'] = t.zfile     = ZBigFile(blksize)
-            t.at0 = t._commit()
-        else:
-            t.at0 = tAt(t, t.tail)
+        t.root['!file'] = t.nonzfile  = Persistent()
+        t.root['zfile'] = t.zfile     = ZBigFile(blksize)
+        t.at0 = t._commit()
 
-        t.nonzfile = t.root['!file']
-        t.zfile    = t.root['zfile']
+        # commit initial data before wcfs starts
+        for changeDelta in old_data:
+            t._commit(t.zfile, changeDelta)
 
-        # start wcfs after testdb is created
+        # start wcfs after testdb is created and initial data is committed
         super(tDB, t).__init__()
 
         # fh(.wcfs/zhead) + history of zhead read from there
@@ -1324,21 +1327,13 @@ def test_wcfs_basic_read_aftertail():
 # invalidations if it needs to access ZODB during handleδZ.
 @func
 def test_wcfs_basic_invalidation_wo_dFtail_coverage():
-    # prepare initial data with single change to zfile[0].
-    @func
-    def _():
-        t = tDB(); zf = t.zfile
-        defer(t.close)
-        t.commit(zf, {0:'a'})
-    _()
-
-    # start wcfs with ΔFtail/ΔBtail not covering that initial change.
-    t = tDB(_with_old_data=True); zf = t.zfile
+    # start wcfs with ΔFtail/ΔBtail not covering initial data.
+    t = tDB(old_data=[{0:'a'}]); zf = t.zfile
     defer(t.close)
 
     f = t.open(zf)
     t.commit(zf, {1:'b1'})  # arbitrary commit to non-0 blk
-    f._assertBlk(0, 'a')    # [0] becomes tracked (don't verify against computed dataok due to _with_old_data)
+    f.assertBlk(0, 'a')     # [0] becomes tracked
 
     # wcfs was crashing on processing further invalidation to blk 0 because
     # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
