@@ -416,7 +416,6 @@ class tDB(tWCFS):
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
-        t._wc_zheadv  = []
 
         # whether head/ ZBigFile(s) blocks were ever accessed via wcfs.
         # this is updated only explicitly via ._blkheadaccess() .
@@ -494,16 +493,14 @@ class tDB(tWCFS):
         head = t._commit(zf, changeDelta)
 
         # make sure wcfs is synchronized to committed transaction
-        while len(t._wc_zheadv) < len(t.dFtail):
-            l = t._wc_zheadfh.readline()
-            #print('> zhead read: %r' % l)
-            l = l.rstrip('\n')
-            wchead = tAt(t, fromhex(l))
-            i = len(t._wc_zheadv)
-            if wchead != t.dFtail[i].rev:
-                raise RuntimeError("wcsync #%d: wczhead (%s) != zhead (%s)" % (i, wchead, t.dFtail[i].rev))
-            t._wc_zheadv.append(wchead)
-        assert t.wc._read("head/at") == h(t.head)
+        l = t._wc_zheadfh.readline()
+        #print('> zhead read: %r' % l)
+        l = l.rstrip('\n')
+        wchead = tAt(t, fromhex(l))
+        if wchead != t.dFtail[-1].rev:
+            raise RuntimeError("commit #%d: wcsync: wczhead (%s) != zhead (%s)" %
+                                    (len(t.dFtail), wchead, t.dFtail[-1].rev))
+        assert t.wc._read("head/at") == h(head)
 
         return head
 
