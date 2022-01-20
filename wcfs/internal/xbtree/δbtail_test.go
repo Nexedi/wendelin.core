@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2021  Nexedi SA and Contributors.
+// Copyright (C) 2020-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1167,6 +1167,11 @@ func TestΔBtailGetAt(t_ *testing.T) {
 	}
 
 	//          @at  key  value rev  valueExact  revExact
+	assertGetAt(at1, 1,   ø,    at1, false,      false)
+	assertGetAt(at1, 2,   ø,    at1, false,      false)
+	assertGetAt(at1, 3,   "c",  at1, true,       false)
+	assertGetAt(at1, 4,   ø,    at1, true,       false)
+
 	assertGetAt(at2, 1,   ø,    at1, false,      false)
 	assertGetAt(at2, 2,   ø,    at1, false,      false)
 	assertGetAt(at2, 3,   "c",  at1, true,       false)

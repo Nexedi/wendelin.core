@@ -1836,7 +1836,7 @@ def test_wcfs_crash_old_data():
     wl = t.openwatch()
     wl.watch(zf, at1, {})
 
-    # wcfs is crashing on readPinWatcher -> ΔFtail.BlkRevAt with
+    # wcfs was crashing on readPinWatcher -> ΔFtail.BlkRevAt with
     #   "at out of bounds: at: @at1,  (tail,head] = (@at1,@at1]
     # because BlkRevAt(at=tail) query was disallowed.
     f.assertBlk(0, 'a')          # [0] becomes tracked

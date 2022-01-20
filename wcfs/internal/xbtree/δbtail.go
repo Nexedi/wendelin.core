@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -935,7 +935,7 @@ func (δTtail *_ΔTtail) _forgetPast(revCut zodb.Tid) {
 //	revExact:   false
 //
 // key must be tracked
-// at  must ∈ (tail, head]
+// at  must ∈ {tail} ∪ (tail, head]
 func (δBtail *ΔBtail) GetAt(root zodb.Oid, key Key, at zodb.Tid) (value Value, rev zodb.Tid, valueExact, revExact bool, err error) {
 	defer xerr.Contextf(&err, "ΔBtail: root<%s>: get %d @%s", root, key, at)
 
@@ -956,7 +956,7 @@ func (δBtail *ΔBtail) GetAt(root zodb.Oid, key Key, at zodb.Tid) (value Value,
 
 	tail := δBtail.Tail()
 	head := δBtail.Head()
-	if !(tail < at && at <= head) {
+	if !(tail <= at && at <= head) {
 		panicf("at out of bounds: at: @%s,  (tail, head] = (@%s, @%s]", at, tail, head)
 	}
 

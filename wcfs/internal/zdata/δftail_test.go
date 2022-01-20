@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021  Nexedi SA and Contributors.
+// Copyright (C) 2019-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -571,9 +571,16 @@ func testΔFtail(t_ *testing.T, testq chan ΔFTestEntry) {
 			return blkv[i] < blkv[j]
 		})
 
-		for j := 0; j < len(vδf); j++ {
-			at := vδf[j].Rev
-			blkRev := blkRevAt[at]
+		for j := -1; j < len(vδf); j++ {
+			var at     zodb.Tid
+			var blkRev map[int64]zodb.Tid
+			if j == -1 {
+				at = δFtail.Tail()
+				// blkRev remains ø
+			} else {
+				at = vδf[j].Rev
+				blkRev = blkRevAt[at]
+			}
 			for _, blk := range blkv {
 				rev, exact, err := δFtail.BlkRevAt(ctx, zfile, blk, at);  X(err)
 				revOK, ok := blkRev[blk]

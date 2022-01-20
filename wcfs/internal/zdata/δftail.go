@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021  Nexedi SA and Contributors.
+// Copyright (C) 2019-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1061,8 +1061,8 @@ func flipsign(x int64) int64 {
 //
 // if exact=False - what is returned is only an upper bound for last block revision.
 //
-// zfile must be any checkout from (tail, head]
-// at must ∈ (tail, head]
+// zfile must be any checkout from {tail} ∪ (tail, head]
+// at must ∈ {tail} ∪ (tail, head]
 // blk must be tracked
 func (δFtail *ΔFtail) BlkRevAt(ctx context.Context, zfile *ZBigFile, blk int64, at zodb.Tid) (_ zodb.Tid, exact bool, err error) {
 	foid := zfile.POid()
@@ -1070,17 +1070,17 @@ func (δFtail *ΔFtail) BlkRevAt(ctx context.Context, zfile *ZBigFile, blk int64
 
 	//fmt.Printf("\nblkrev #%d @%s\n", blk, at)
 
-	// assert at ∈ (tail, head]
+	// assert at ∈ [tail, head]
 	tail := δFtail.Tail()
 	head := δFtail.Head()
-	if !(tail < at && at <= head) {
+	if !(tail <= at && at <= head) {
 		panicf("at out of bounds: at: @%s,  (tail, head] = (@%s, @%s]", at, tail, head)
 	}
 
-	// assert zfile.at ∈ (tail, head]
+	// assert zfile.at ∈ [tail, head]
 	zconn := zfile.PJar()
 	zconnAt := zconn.At()
-	if !(tail < zconnAt && zconnAt <= head) {
+	if !(tail <= zconnAt && zconnAt <= head) {
 		panicf("zconn.at out of bounds: zconn.at: @%s,  (tail, head] = (@%s, @%s]", zconnAt, tail, head)
 	}
 
@@ -1119,7 +1119,7 @@ func (δFtail *ΔFtail) BlkRevAt(ctx context.Context, zfile *ZBigFile, blk int64
 	//fmt.Printf("  epoch: @%s  root: %s\n", epoch, root)
 
 	if root == xbtree.VDEL {
-		return epoch, true, nil
+		return epoch, (epoch > tail), nil
 	}
 
 	zblk, tabRev, zblkExact, tabRevExact, err := δFtail.δBtail.GetAt(root, blk, at)
@@ -1135,7 +1135,7 @@ func (δFtail *ΔFtail) BlkRevAt(ctx context.Context, zfile *ZBigFile, blk int64
 	}
 
 	// if δBtail does not have entry that covers root[blk] - get it
-	// through any zconn with .at ∈ (tail, head].
+	// through any zconn with .at ∈ [tail, head].
 	if !zblkExact {
 		xblktab, err := zconn.Get(ctx, root)
 		if err != nil {
