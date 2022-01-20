@@ -1570,8 +1570,8 @@ def test_wcfs_watch_setup():
 
     # new watch + update at_i -> at_j
     wl = t.openwatch()
-    # XXX check @at0 ?
-    wl.watch(zf, at1, {0:at0,  2:at1,  3:at0,  5:at0})  #     -> at1 (new watch)    XXX at0 -> ø?
+    wl.watch(zf, at0, {0:at0,  2:at0,  3:at0,  5:at0})  #     -> at0 (new watch)    XXX at0 -> ø?
+    wl.watch(zf, at1, {        2:at1,               })  # at0 -> at1
     wl.watch(zf, at2, {        2:at2,  3:at2,  5:at2})  # at1 -> at2
     wl.watch(zf, at3, {0:None, 2:at3,          5:at3})  # at2 -> at3
     wl.watch(zf, at4, {        2:None,         5:at4})  # at3 -> at4 f(5) pinned even it was not accessed >=4
