@@ -386,6 +386,7 @@ func testΔFtail(t_ *testing.T, testq chan ΔFTestEntry) {
 		}
 		blkRevAt[commit.At] = blkRev
 		/*
+		if false {
 			fmt.Printf("blkRevAt[@%s]:\n", commit.AtSymb())
 			blkv := []int64{}
 			for blk := range blkRev {
@@ -395,8 +396,9 @@ func testΔFtail(t_ *testing.T, testq chan ΔFTestEntry) {
 				return blkv[i] < blkv[j]
 			})
 			for _, blk := range blkv {
-				fmt.Printf("  #%d:  %v\n", blk, blkRev[blk])
+				fmt.Printf("  #%d:  @%s\n", blk, t.AtSymb(blkRev[blk]))
 			}
+		}
 		*/
 
 		// update zfile
