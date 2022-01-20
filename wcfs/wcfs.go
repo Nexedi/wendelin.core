@@ -1613,6 +1613,10 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 	defer head.zheadMu.RUnlock()
 	headAt := head.zconn.At()
 
+	// TODO better ctx = transaction.PutIntoContext(ctx, txn)
+	ctx, cancel := xcontext.Merge(ctx, head.zconn.TxnCtx)
+	defer cancel()
+
 	if at != zodb.InvalidTid && at < bfdir.δFtail.Tail() {
 		return fmt.Errorf("too far away back from head/at (@%s); δt = %s",
 			headAt, headAt.Time().Sub(at.Time().Time))

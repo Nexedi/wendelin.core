@@ -1844,14 +1844,19 @@ def test_wcfs_crash_old_data():
     at2 = t.commit(zf, {1:'b1'}) # arbitrary commit to non-0 blk
 
     # wcfs was crashing on processing invalidation to blk 0 because
-    # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
-    # - ΔFtail.BlkRevAt activates "access ZODB" codepath,
-    # - but handleδZ was calling ΔFtail.BlkRevAt without properly putting zhead's transaction into ctx.
+    # 1. ΔBtail.GetAt([0], head) returns valueExact=false, and so
+    # 2. ΔFtail.BlkRevAt activates "access ZODB" codepath,
+    # 3. but handleδZ was calling ΔFtail.BlkRevAt without putting zhead's transaction into ctx.
     # -> panic.
-    t.commit(zf, {0:'a2'})
+    at3 = t.commit(zf, {0:'a2'})
 
     # just in case
     f.assertBlk(0, 'a2')
+
+    # wcfs was crashing in setting up watch because of "1" and "2" from above, and
+    # 3. setupWatch was calling ΔFtail.BlkRevAt without putting zhead's transaction into ctx.
+    wl2 = t.openwatch()
+    wl2.watch(zf, at2, {0:at1})
 
 
 # ---- misc ---
