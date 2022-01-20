@@ -1323,29 +1323,6 @@ def test_wcfs_basic_read_aftertail():
     assert _(100*blksize)   == b''
 
 
-# verify that wcfs does not panic with "no current transaction" when processing
-# invalidations if it needs to access ZODB during handleδZ.
-@func
-def test_wcfs_basic_invalidation_wo_dFtail_coverage():
-    # start wcfs with ΔFtail/ΔBtail not covering initial data.
-    t = tDB(old_data=[{0:'a'}]); zf = t.zfile
-    defer(t.close)
-
-    f = t.open(zf)
-    t.commit(zf, {1:'b1'})  # arbitrary commit to non-0 blk
-    f.assertBlk(0, 'a')     # [0] becomes tracked
-
-    # wcfs was crashing on processing further invalidation to blk 0 because
-    # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
-    # - ΔFtail.BlkRevAt activates "access ZODB" codepath,
-    # - but handleδZ was calling ΔFtail.BlkRevAt without properly putting zhead's transaction into ctx.
-    # -> panic.
-    t.commit(zf, {0:'a2'})
-
-    # just in case
-    f.assertBlk(0, 'a2')
-
-
 
 # ---- verify wcfs functionality that depends on isolation protocol ----
 
@@ -1842,6 +1819,30 @@ def test_wcfs_watch_2files():
 
 # TODO new watch request while previous watch request is in progress (over the same /head/watch handle)
 # TODO @revX/ is automatically removed after some time
+
+# ----------------------------------------
+
+# verify that wcfs does not panic with "no current transaction" when processing
+# invalidations if it needs to access ZODB during handleδZ.
+@func
+def test_wcfs_crash_old_data():
+    # start wcfs with ΔFtail/ΔBtail not covering initial data.
+    t = tDB(old_data=[{0:'a'}]); zf = t.zfile
+    defer(t.close)
+
+    f = t.open(zf)
+    t.commit(zf, {1:'b1'})  # arbitrary commit to non-0 blk
+    f.assertBlk(0, 'a')     # [0] becomes tracked
+
+    # wcfs was crashing on processing further invalidation to blk 0 because
+    # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
+    # - ΔFtail.BlkRevAt activates "access ZODB" codepath,
+    # - but handleδZ was calling ΔFtail.BlkRevAt without properly putting zhead's transaction into ctx.
+    # -> panic.
+    t.commit(zf, {0:'a2'})
+
+    # just in case
+    f.assertBlk(0, 'a2')
 
 
 # ---- misc ---
