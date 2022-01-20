@@ -1822,19 +1822,28 @@ def test_wcfs_watch_2files():
 
 # ----------------------------------------
 
-# verify that wcfs does not panic with "no current transaction" when processing
-# invalidations if it needs to access ZODB during handleδZ.
+# verify that wcfs does not panic with "no current transaction" / "at out of
+# bounds" on read/invalidate/watch codepaths.
 @func
 def test_wcfs_crash_old_data():
     # start wcfs with ΔFtail/ΔBtail not covering initial data.
-    t = tDB(old_data=[{0:'a'}]); zf = t.zfile
+    t = tDB(old_data=[{0:'a'}]); zf = t.zfile; at1 = t.head
     defer(t.close)
 
     f = t.open(zf)
-    t.commit(zf, {1:'b1'})  # arbitrary commit to non-0 blk
-    f.assertBlk(0, 'a')     # [0] becomes tracked
 
-    # wcfs was crashing on processing further invalidation to blk 0 because
+    # ΔFtail coverage is currently (at1,at1]
+    wl = t.openwatch()
+    wl.watch(zf, at1, {})
+
+    # wcfs is crashing on readPinWatcher -> ΔFtail.BlkRevAt with
+    #   "at out of bounds: at: @at1,  (tail,head] = (@at1,@at1]
+    # because BlkRevAt(at=tail) query was disallowed.
+    f.assertBlk(0, 'a')          # [0] becomes tracked
+
+    at2 = t.commit(zf, {1:'b1'}) # arbitrary commit to non-0 blk
+
+    # wcfs was crashing on processing invalidation to blk 0 because
     # - ΔBtail.GetAt([0], head) returns valueExact=false, and so
     # - ΔFtail.BlkRevAt activates "access ZODB" codepath,
     # - but handleδZ was calling ΔFtail.BlkRevAt without properly putting zhead's transaction into ctx.
