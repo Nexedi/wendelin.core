@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021  Nexedi SA and Contributors.
+// Copyright (C) 2019-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -27,6 +27,8 @@
 #include "bigfile/_file_zodb.h"
 #include <ccan/container_of/container_of.h>
 
+using namespace xgolang;
+
 static int zfile_mmap_setup_read(VMA *vma, BigFile *file, blk_t blk, size_t blklen) {
     _ZBigFile* _zfile = container_of(file, _ZBigFile, __pyx_base.file);
 
@@ -39,7 +41,7 @@ static int zfile_mmap_setup_read(VMA *vma, BigFile *file, blk_t blk, size_t blkl
 
     tie(mmap, err) = fileh->mmap(blk, blklen, vma);
     if (err != nil) {
-        log::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
+        xlog::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
         return -1;
     }
 
@@ -56,7 +58,7 @@ static int zfile_remmap_blk_read(VMA *vma, BigFile *file, blk_t blk) {
     error err;
     err = mmap->remmap_blk(blk);
     if (err != nil) {
-        log::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
+        xlog::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
         return -1;
     }
 
@@ -74,7 +76,7 @@ static int zfile_munmap(VMA *vma, BigFile *file) {
     error err;
     err = mmap->unmap();
     if (err != nil) {
-        log::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
+        xlog::Errorf("%s", v(err)); // XXX no way to return error details to virtmem
         return -1;
     }
 

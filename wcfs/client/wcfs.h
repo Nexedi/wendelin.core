@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -118,6 +118,10 @@ struct VMA;
 namespace wcfs {
 
 using namespace golang;
+namespace os        = xgolang::xos;
+namespace mm        = xgolang::xmm;
+namespace xstrconv  = xgolang::xstrconv;
+namespace log       = xgolang::xlog;
 using cxx::dict;
 using cxx::set;
 using std::tuple;

@@ -55,11 +55,11 @@ using std::vector;
 #include <sys/stat.h>
 #include <fcntl.h>
 
-// golang::
-namespace golang {
+// xgolang::
+namespace xgolang {
 
-// os::
-namespace os {
+// xos::
+namespace xos {
 
 extern global<error> ErrClosed;
 
@@ -126,15 +126,15 @@ void RegisterAfterFork(IAfterFork obj);
 // It is noop if obj was not registered.
 void UnregisterAfterFork(IAfterFork obj);
 
-}   // os::
+}   // xos::
 
-// mm::
-namespace mm {
-    tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t size);
-    error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset);
+// xmm::
+namespace xmm {
+    tuple<uint8_t*, error> map(int prot, int flags, xos::File f, off_t offset, size_t size);
+    error map_into(void *addr, size_t size, int prot, int flags, xos::File f, off_t offset);
     error unmap(void *addr, size_t size);
 
-}   // mm::
+}   // xmm::
 
 
 // io::ioutil::
@@ -157,8 +157,8 @@ tuple<uint64_t, error> parseUint(const string& s);
 
 }   // xstrconv::
 
-// log::
-namespace log {
+// xlog::
+namespace xlog {
 
 #define Debugf(format, ...) __Logf(__FILE__, __LINE__, 'D', format, ##__VA_ARGS__)
 #define Infof(format, ...)  __Logf(__FILE__, __LINE__, 'I', format, ##__VA_ARGS__)
@@ -167,9 +167,9 @@ namespace log {
 #define Fatalf(format, ...) __Logf(__FILE__, __LINE__, 'F', format, ##__VA_ARGS__)
 void __Logf(const char *file, int line, char level, const char *format, ...);
 
-}   // log::
+}   // xlog::
 
-}   // golang::
+}   // xgolang::
 
 
 // zodb::

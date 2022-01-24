@@ -36,11 +36,13 @@ using namespace golang;
 #include <algorithm>
 #include <memory>
 
-// golang::
-namespace golang {
+// xgolang::
+namespace xgolang {
 
-// os::
-namespace os {
+// xos::
+namespace xos {
+
+namespace io = golang::io;
 
 global<error> ErrClosed = errors::New("file already closed");
 
@@ -196,16 +198,16 @@ static string _sysErrString(int syserr) {
     return string(estr);
 }
 
-}   // os::
+}   // xos::
 
 
-// mm::
-namespace mm {
+// xmm::
+namespace xmm {
 
 // map memory-maps f.fd[offset +size) somewhere into memory.
 // prot  is PROT_* from mmap(2).
 // flags is MAP_*  from mmap(2); MAP_FIXED must not be used.
-tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t size) {
+tuple<uint8_t*, error> map(int prot, int flags, xos::File f, off_t offset, size_t size) {
     void *addr;
 
     if (flags & MAP_FIXED)
@@ -213,7 +215,7 @@ tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t
 
     addr = ::mmap(nil, size, prot, flags, f->_sysfd(), offset);
     if (addr == MAP_FAILED)
-        return make_tuple(nil, os::_pathError("mmap", f->Name(), errno));
+        return make_tuple(nil, xos::_pathError("mmap", f->Name(), errno));
 
     return make_tuple((uint8_t*)addr, nil);
 }
@@ -221,12 +223,12 @@ tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t
 // map_into memory-maps f.fd[offset +size) into [addr +size).
 // prot  is PROT_* from mmap(2).
 // flags is MAP_*  from mmap(2); MAP_FIXED is added automatically.
-error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset) {
+error map_into(void *addr, size_t size, int prot, int flags, xos::File f, off_t offset) {
     void *addr2;
 
     addr2 = ::mmap(addr, size, prot, MAP_FIXED | flags, f->_sysfd(), offset);
     if (addr2 == MAP_FAILED)
-        return os::_pathError("mmap", f->Name(), errno);
+        return xos::_pathError("mmap", f->Name(), errno);
     if (addr2 != addr)
         panic("mmap(addr, MAP_FIXED): returned !addr");
     return nil;
@@ -236,11 +238,11 @@ error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t o
 error unmap(void *addr, size_t size) {
     int err = ::munmap(addr, size);
     if (err != 0)
-        return os::_pathError("munmap", "<memory>", errno);
+        return xos::_pathError("munmap", "<memory>", errno);
     return nil;
 }
 
-}   // mm::
+}   // xmm::
 
 
 // io::ioutil::
@@ -249,10 +251,10 @@ namespace ioutil {
 
 tuple<string, error> ReadFile(const string& path) {
     // errctx is ok as returned by all calls.
-    os::File f;
-    error    err;
+    xos::File f;
+    error     err;
 
-    tie(f, err) = os::Open(path);
+    tie(f, err) = xos::Open(path);
     if (err != nil)
         return make_tuple("", err);
 
@@ -264,7 +266,7 @@ tuple<string, error> ReadFile(const string& path) {
         tie(n, err) = f->Read(&buf[0], buf.size());
         data.append(&buf[0], n);
         if (err != nil) {
-            if (err == io::EOF_)
+            if (err == golang::io::EOF_)
                 err = nil;
             break;
         }
@@ -318,7 +320,7 @@ tuple<uint64_t, error> parseUint(const string& s) {
 }   // xstrconv::
 
 
-}   // golang::
+}   // xgolang::
 
 
 // xerr::
@@ -354,9 +356,9 @@ error Contextf::operator() (error err) const {
 #include <sys/types.h>
 #include <sys/syscall.h>
 
-// golang::log::
-namespace golang {
-namespace log {
+// xgolang::xlog::
+namespace xgolang {
+namespace xlog {
 
 void __Logf(const char *file, int line, char level, const char *format, ...) {
     double t = time::now();
@@ -385,7 +387,7 @@ void __Logf(const char *file, int line, char level, const char *format, ...) {
     funlockfile(stderr);
 }
 
-}}  // golang::log::
+}}  // xgolang::xlog::
 
 
 // wcfs::

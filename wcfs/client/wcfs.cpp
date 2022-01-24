@@ -229,7 +229,7 @@ using std::min;
 using std::max;
 using std::vector;
 
-namespace ioutil = io::ioutil;
+namespace ioutil = xgolang::io::ioutil;
 
 
 #define TRACE 0
