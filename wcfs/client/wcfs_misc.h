@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021  Nexedi SA and Contributors.
+// Copyright (C) 2019-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -75,34 +75,34 @@ class _File : public object {
 private:
     _File();
     ~_File();
-    friend tuple<File, error> open(const string &path, int flags, mode_t mode);
+    friend tuple<File, error> Open(const string &path, int flags, mode_t mode);
 public:
     void decref();
 
 public:
-    int     fd()    const;
-    string  name()  const;
-    error   close();
+    int     _sysfd() const;
+    string  Name()   const;
+    error   Close();
 
     // read implements io.Reader from Go: it reads into buf up-to count bytes.
     // XXX buf -> slice<byte> ?
-    tuple<int, error> read(void *buf, size_t count);
+    tuple<int, error> Read(void *buf, size_t count);
 
     // write implements io.Writer from Go: it writes all data from buf.
     //
     // NOTE write behaves like io.Writer in Go - it tries to write as much
     // bytes as requested, and if it could write only less - it returns error.
     // XXX buf -> slice<byte> ?
-    tuple<int, error> write(const void *buf, size_t count);
+    tuple<int, error> Write(const void *buf, size_t count);
 
-    error   stat(struct stat *st);
+    error   Stat(struct stat *st);
 
 private:
     error _errno(const char *op);
 };
 
-// open opens file @path.
-tuple<File, error> open(const string &path, int flags = O_RDONLY,
+// Open opens file @path.
+tuple<File, error> Open(const string &path, int flags = O_RDONLY,
         mode_t mode = S_IRUSR | S_IWUSR | S_IXUSR |
                       S_IRGRP | S_IWGRP | S_IXGRP |
                       S_IROTH | S_IWOTH | S_IXOTH);

@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -755,7 +755,7 @@ error _Conn::resync(zodb::Tid at) {
 
         // update f._headfsize and remmap to head/f zero regions that are now covered by head/f
         struct stat st;
-        err = f->_headf->stat(&st);
+        err = f->_headf->Stat(&st);
         if (err != nil)
             return E(err);
 
@@ -956,18 +956,18 @@ error _FileH::_open() {
     bool retok = false;
     defer([&]() {
         if (!retok)
-            f._headf->close();
+            f._headf->Close();
     });
 
     struct stat st;
-    err = f._headf->stat(&st);
+    err = f._headf->Stat(&st);
     if (err != nil)
         return err;
     f.blksize    = st.st_blksize;
     f._headfsize = st.st_size;
     if (!(f._headfsize % f.blksize == 0))
         return fmt::errorf("wcfs bug: %s size (%d) %% blksize (%d) != 0",
-                        v(f._headf->name()), f._headfsize, f.blksize);
+                        v(f._headf->Name()), f._headfsize, f.blksize);
 
     // start watching f
     // NOTE we are _not_ holding wconn.filehMu nor f.mmapMu - only wconn.atMu to rely on wconn.at being stable.
@@ -1066,7 +1066,7 @@ error _FileH::_closeLocked(bool force) {
         panic("BUG: fileh.close: wconn.filehTab[fileh.foid] != fileh");
     wconn->_filehTab.erase(fileh.foid);
 
-    reterr1(fileh._headf->close());
+    reterr1(fileh._headf->Close());
 
     // change all fileh.mmaps to cause EFAULT on any access after fileh.close
     fileh._mmapMu.lock();
@@ -1110,7 +1110,7 @@ void _FileH::_afterFork() {
         panic("BUG: fileh.closeAfterFork: wconn.filehTab[fileh.foid] != fileh");
     wconn->_filehTab.erase(fileh.foid);
 
-    fileh._headf->close(); // ignore err
+    fileh._headf->Close(); // ignore err
 
     // change all fileh.mmaps to cause EFAULT on access
     for (auto mmap : fileh._mmaps) {
@@ -1343,11 +1343,11 @@ error _Mapping::_remmapblk(int64_t blk, zodb::Tid at) {
     }
     defer([&]() {
         if (fclose)
-            fsfile->close();
+            fsfile->Close();
     });
 
     struct stat st;
-    err = fsfile->stat(&st);
+    err = fsfile->Stat(&st);
     if (err != nil)
         return E(err);
     if ((size_t)st.st_blksize != f->blksize)
@@ -1426,7 +1426,7 @@ string WCFS::_path(const string &obj) {
 tuple<os::File, error> WCFS::_open(const string &path, int flags) {
     WCFS& wc = *this;
     string path_ = wc._path(path);
-    return os::open(path_, flags);
+    return os::Open(path_, flags);
 }
 
 
@@ -1441,11 +1441,11 @@ static error mmap_zero_into(void *addr, size_t size, int prot) {
     // this way the mapping will be able to be read, but no memory will be allocated to keep it.
     os::File z;
     error err;
-    tie(z, err) = os::open("/dev/zero");
+    tie(z, err) = os::Open("/dev/zero");
     if (err != nil)
         return E(err);
     defer([&]() {
-        z->close();
+        z->Close();
     });
     err = mm::map_into(addr, size, prot, MAP_SHARED | MAP_NORESERVE, z, 0);
     if (err != nil)

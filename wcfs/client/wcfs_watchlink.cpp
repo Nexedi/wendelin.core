@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -94,7 +94,7 @@ error _WatchLink::close() {
         errors::Is(err2, ErrLinkDown))          // link shutdown due to logic error; details logged
         err2 = nil;
 
-    error err3 = wlink._f->close();
+    error err3 = wlink._f->Close();
     if (err == nil)
         err = err2;
     if (err == nil)
@@ -115,7 +115,7 @@ void _WatchLink::afterFork() {
     // _serveRX is not running. Just release the file handle, that fork
     // duplicated, to make sure that child cannot send anything to wcfs and
     // interfere into parent-wcfs exchange.
-    wlink._f->close(); // ignore err
+    wlink._f->Close(); // ignore err
 }
 
 // closeWrite closes send half of the link.
@@ -386,7 +386,7 @@ error _WatchLink::_write(const string &pkt) {
 
     int n;
     error err;
-    tie(n, err) = wlink._f->write(pkt.c_str(), pkt.size());
+    tie(n, err) = wlink._f->Write(pkt.c_str(), pkt.size());
     return err;
 }
 
@@ -454,7 +454,7 @@ tuple<string, error> _WatchLink::_readline() {
 
         int n;
         error err;
-        tie(n, err) = wlink._f->read(buf, sizeof(buf));
+        tie(n, err) = wlink._f->Read(buf, sizeof(buf));
         if (n > 0) {
             wlink._rxbuf += string(buf, n);
             continue;
@@ -515,12 +515,12 @@ void _WatchLink::decref() {
 string _WatchLink::String() const {
     const _WatchLink& wlink = *this;
     // XXX don't include wcfs as prefix here? (see Conn.String for details)
-    return fmt::sprintf("%s: wlink%d", v(wlink._wc), wlink._f->fd());
+    return fmt::sprintf("%s: wlink%d", v(wlink._wc), wlink._f->_sysfd());
 }
 
 int _WatchLink::fd() const {
     const _WatchLink& wlink = *this;
-    return wlink._f->fd();
+    return wlink._f->_sysfd();
 }
 
 // _nextReqID returns stream ID for next client-originating request to be made.

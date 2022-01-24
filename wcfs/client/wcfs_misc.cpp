@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021  Nexedi SA and Contributors.
+// Copyright (C) 2019-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -49,8 +49,8 @@ global<error> ErrClosed = errors::New("file already closed");
 static error _pathError(const char *op, const string &path, int syserr);
 static string _sysErrString(int syserr);
 
-int     _File::fd() const   { return _fd; }
-string  _File::name() const { return _path; }
+int     _File::_sysfd() const { return _fd; }
+string  _File::Name()   const { return _path; }
 
 _File::_File() {}
 _File::~_File() {}
@@ -60,7 +60,7 @@ void _File::decref() {
 }
 
 
-tuple<File, error> open(const string &path, int flags, mode_t mode) {
+tuple<File, error> Open(const string &path, int flags, mode_t mode) {
     int fd = ::open(path.c_str(), flags, mode);
     if (fd == -1)
         return make_tuple(nil, _pathError("open", path, errno));
@@ -71,7 +71,7 @@ tuple<File, error> open(const string &path, int flags, mode_t mode) {
     return make_tuple(f, nil);
 }
 
-error _File::close() {
+error _File::Close() {
     _File& f = *this;
 
     int err = ::close(f._fd);
@@ -81,7 +81,7 @@ error _File::close() {
     return nil;
 }
 
-tuple<int, error> _File::read(void *buf, size_t count) {
+tuple<int, error> _File::Read(void *buf, size_t count) {
     _File& f = *this;
     int n;
 
@@ -94,7 +94,7 @@ tuple<int, error> _File::read(void *buf, size_t count) {
     return make_tuple(n, nil);
 }
 
-tuple <int, error> _File::write(const void *buf, size_t count) {
+tuple <int, error> _File::Write(const void *buf, size_t count) {
     _File& f = *this;
     int n, wrote=0;
 
@@ -112,7 +112,7 @@ tuple <int, error> _File::write(const void *buf, size_t count) {
     return make_tuple(wrote, nil);
 }
 
-error _File::stat(struct stat *st) {
+error _File::Stat(struct stat *st) {
     _File& f = *this;
 
     int err = fstat(f._fd, st);
@@ -211,9 +211,9 @@ tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t
     if (flags & MAP_FIXED)
         panic("MAP_FIXED not allowed for map - use map_into");
 
-    addr = ::mmap(nil, size, prot, flags, f->fd(), offset);
+    addr = ::mmap(nil, size, prot, flags, f->_sysfd(), offset);
     if (addr == MAP_FAILED)
-        return make_tuple(nil, os::_pathError("mmap", f->name(), errno));
+        return make_tuple(nil, os::_pathError("mmap", f->Name(), errno));
 
     return make_tuple((uint8_t*)addr, nil);
 }
@@ -224,9 +224,9 @@ tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t
 error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset) {
     void *addr2;
 
-    addr2 = ::mmap(addr, size, prot, MAP_FIXED | flags, f->fd(), offset);
+    addr2 = ::mmap(addr, size, prot, MAP_FIXED | flags, f->_sysfd(), offset);
     if (addr2 == MAP_FAILED)
-        return os::_pathError("mmap", f->name(), errno);
+        return os::_pathError("mmap", f->Name(), errno);
     if (addr2 != addr)
         panic("mmap(addr, MAP_FIXED): returned !addr");
     return nil;
@@ -252,7 +252,7 @@ tuple<string, error> ReadFile(const string& path) {
     os::File f;
     error    err;
 
-    tie(f, err) = os::open(path);
+    tie(f, err) = os::Open(path);
     if (err != nil)
         return make_tuple("", err);
 
@@ -261,7 +261,7 @@ tuple<string, error> ReadFile(const string& path) {
 
     while (1) {
         int n;
-        tie(n, err) = f->read(&buf[0], buf.size());
+        tie(n, err) = f->Read(&buf[0], buf.size());
         data.append(&buf[0], n);
         if (err != nil) {
             if (err == io::EOF_)
@@ -270,7 +270,7 @@ tuple<string, error> ReadFile(const string& path) {
         }
     }
 
-    error err2 = f->close();
+    error err2 = f->Close();
     if (err == nil)
         err = err2;
     if (err != nil)
