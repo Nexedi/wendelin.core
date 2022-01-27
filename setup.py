@@ -18,7 +18,7 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 from golang.pyx.build import setup, DSO as _DSO, Extension as _PyGoExt, build_ext as _build_ext
-from setuptools_dso import Extension
+from setuptools_dso import Extension, build_dso as _build_dso
 from setuptools import Command, find_packages
 from setuptools.command.build_py import build_py as _build_py
 from pkg_resources import working_set, EntryPoint
@@ -157,7 +157,7 @@ def runmake(target):
     if pypath is not None:
         pypathv.append(pypath)
 
-    err = os.system('make %s PYTHON="%s" PYTHONPATH="%s"' % \
+    err = os.system('make %s PYTHON="%s" PYTHONPATH="%s" INMAKE=1' % \
             (target, sys.executable, ':'.join(pypathv)))
     if err:
         raise DistutilsExecError('Failed to execute `make %s`' % target)
@@ -176,6 +176,15 @@ def viamake(target, help_text):
 
     return run_viamake
 
+# build_dso that
+# - builds via Makefile  (and thus pre-builds ccan)  XXX hacky
+class build_dso(_build_dso):
+
+    def run(self):
+        if 'INMAKE' not in os.environ:
+            runmake('all')
+        else:
+            _build_dso.run(self)
 
 # build_ext that
 # - builds via Makefile  (and thus pre-builds ccan)  XXX hacky
@@ -290,7 +299,7 @@ libwcfs_h = [
 
 setup(
     name        = 'wendelin.core',
-    version     = '2.0.alpha2',
+    version     = '2.0.alpha2.post1',
     description = 'Out-of-core NumPy arrays',
     long_description = '%s\n----\n\n%s' % (
                             readfile('README.rst'), readfile('CHANGELOG.rst')),
@@ -384,7 +393,8 @@ setup(
                    'test': ['pytest', 'scipy'],
     },
 
-    cmdclass    = {'build_ext':     build_ext,
+    cmdclass    = {'build_dso':     build_dso,
+                   'build_ext':     build_ext,
                    'll_build_ext':  _build_ext, # original build_ext for Makefile
                    'build_py':      build_py,
                    'test':          viamake('test',     'run tests'),
