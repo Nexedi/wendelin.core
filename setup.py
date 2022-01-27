@@ -1,5 +1,5 @@
 # Wendelin.core | pythonic package setup
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -373,7 +373,7 @@ setup(
                    'ZODB >= 4', # for ZBigFile / ZBigArray
                    'zodbtools >= 0.0.0.dev8', # lib.zodb.dbstoropen + ...
 
-                   'pygolang >= 0.0.8', # defer, sync.WaitGroup, pyx/nogil channels ...
+                   'pygolang >= 0.1', # defer, sync.WaitGroup, pyx/nogil channels ...
 
                    'six',       # compat py2/py3
 

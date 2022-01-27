@@ -118,7 +118,8 @@ struct VMA;
 namespace wcfs {
 
 using namespace golang;
-namespace os        = xgolang::xos;
+namespace os        = golang::os;
+namespace xos       = xgolang::xos;
 namespace mm        = xgolang::xmm;
 namespace xstrconv  = xgolang::xstrconv;
 namespace log       = xgolang::xlog;
@@ -173,7 +174,7 @@ struct WCFS {
 // Conn logically mirrors ZODB.Connection .
 // It is safe to use Conn from multiple threads simultaneously.
 typedef refptr<struct _Conn> Conn;
-struct _Conn : os::_IAfterFork, object {
+struct _Conn : xos::_IAfterFork, object {
     WCFS        *_wc;
     WatchLink   _wlink; // watch/receive pins for mappings created under this conn
 

@@ -33,6 +33,7 @@
 #include <stdint.h>
 
 #include <golang/libgolang.h>
+#include <golang/os.h>
 using namespace golang;
 
 #include <string>
@@ -51,62 +52,11 @@ using std::tie;
 using std::vector;
 
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-
 // xgolang::
 namespace xgolang {
 
 // xos::
 namespace xos {
-
-extern global<error> ErrClosed;
-
-
-// os::File mimics os.File from Go.
-// its operations return error with full file context.
-typedef refptr<class _File> File;
-class _File : public object {
-    int    _fd;
-    string _path;
-
-    // don't new - create via open
-private:
-    _File();
-    ~_File();
-    friend tuple<File, error> Open(const string &path, int flags, mode_t mode);
-public:
-    void decref();
-
-public:
-    int     _sysfd() const;
-    string  Name()   const;
-    error   Close();
-
-    // read implements io.Reader from Go: it reads into buf up-to count bytes.
-    // XXX buf -> slice<byte> ?
-    tuple<int, error> Read(void *buf, size_t count);
-
-    // write implements io.Writer from Go: it writes all data from buf.
-    //
-    // NOTE write behaves like io.Writer in Go - it tries to write as much
-    // bytes as requested, and if it could write only less - it returns error.
-    // XXX buf -> slice<byte> ?
-    tuple<int, error> Write(const void *buf, size_t count);
-
-    error   Stat(struct stat *st);
-
-private:
-    error _errno(const char *op);
-};
-
-// Open opens file @path.
-tuple<File, error> Open(const string &path, int flags = O_RDONLY,
-        mode_t mode = S_IRUSR | S_IWUSR | S_IXUSR |
-                      S_IRGRP | S_IWGRP | S_IXGRP |
-                      S_IROTH | S_IWOTH | S_IXOTH);
-
 
 // afterfork
 
@@ -130,20 +80,12 @@ void UnregisterAfterFork(IAfterFork obj);
 
 // xmm::
 namespace xmm {
-    tuple<uint8_t*, error> map(int prot, int flags, xos::File f, off_t offset, size_t size);
-    error map_into(void *addr, size_t size, int prot, int flags, xos::File f, off_t offset);
+    tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t size);
+    error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset);
     error unmap(void *addr, size_t size);
 
 }   // xmm::
 
-
-// io::ioutil::
-namespace io {
-namespace ioutil {
-
-tuple<string, error> ReadFile(const string& path);
-
-}}  // io::ioutil::
 
 // ---- misc ----
 

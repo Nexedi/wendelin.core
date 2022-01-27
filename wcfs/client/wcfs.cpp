@@ -229,8 +229,6 @@ using std::min;
 using std::max;
 using std::vector;
 
-namespace ioutil = xgolang::io::ioutil;
-
 
 #define TRACE 0
 #if TRACE
@@ -277,7 +275,7 @@ error WCFS::_headWait(zodb::Tid at) {
 
     // XXX dumb implementation, because _headWait should go away.
     while (1) {
-        tie(xatStr, err) = ioutil::ReadFile(wc._path("head/at"));
+        tie(xatStr, err) = os::ReadFile(wc._path("head/at"));
         if (err != nil)
             return E(err);
 
@@ -321,8 +319,8 @@ pair<Conn, error> WCFS::connect(zodb::Tid at) {
     wconn->_at      = at;
     wconn->_wlink   = wlink;
 
-    os::RegisterAfterFork(newref(
-        static_cast<os::_IAfterFork*>( wconn._ptr() )
+    xos::RegisterAfterFork(newref(
+        static_cast<xos::_IAfterFork*>( wconn._ptr() )
     ));
 
     context::Context pinCtx;
@@ -434,8 +432,8 @@ error _Conn::close() {
     if (!errors::Is(err, context::canceled)) // canceled - ok
         reterr1(err);
 
-    os::UnregisterAfterFork(newref(
-        static_cast<os::_IAfterFork*>( &wconn )
+    xos::UnregisterAfterFork(newref(
+        static_cast<xos::_IAfterFork*>( &wconn )
     ));
 
     return E(eret);

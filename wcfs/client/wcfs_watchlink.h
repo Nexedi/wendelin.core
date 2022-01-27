@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2022  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -70,7 +70,7 @@ static_assert(sizeof(rxPkt) == 256, "rxPkt miscompiled"); // NOTE 128 is too low
 //
 // It is safe to use WatchLink from multiple threads simultaneously.
 typedef refptr<class _WatchLink> WatchLink;
-class _WatchLink : public os::_IAfterFork, object {
+class _WatchLink : public xos::_IAfterFork, object {
     WCFS            *_wc;
     os::File        _f;      // head/watch file handle
     string          _rxbuf;  // buffer for data already read from _f

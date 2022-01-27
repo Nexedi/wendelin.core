@@ -44,91 +44,9 @@ namespace xos {
 
 namespace io = golang::io;
 
-global<error> ErrClosed = errors::New("file already closed");
-
-
 // TODO -> os.PathError + err=syscall.Errno
 static error _pathError(const char *op, const string &path, int syserr);
 static string _sysErrString(int syserr);
-
-int     _File::_sysfd() const { return _fd; }
-string  _File::Name()   const { return _path; }
-
-_File::_File() {}
-_File::~_File() {}
-void _File::decref() {
-    if (__decref())
-        delete this;
-}
-
-
-tuple<File, error> Open(const string &path, int flags, mode_t mode) {
-    int fd = ::open(path.c_str(), flags, mode);
-    if (fd == -1)
-        return make_tuple(nil, _pathError("open", path, errno));
-
-    File f = adoptref(new _File);
-    f->_path = path;
-    f->_fd   = fd;
-    return make_tuple(f, nil);
-}
-
-error _File::Close() {
-    _File& f = *this;
-
-    int err = ::close(f._fd);
-    if (err != 0)
-        return f._errno("close");
-    f._fd = -1;
-    return nil;
-}
-
-tuple<int, error> _File::Read(void *buf, size_t count) {
-    _File& f = *this;
-    int n;
-
-    n = ::read(f._fd, buf, count);
-    if (n == 0)
-        return make_tuple(n, io::EOF_);
-    if (n < 0)
-        return make_tuple(0, f._errno("read"));
-
-    return make_tuple(n, nil);
-}
-
-tuple <int, error> _File::Write(const void *buf, size_t count) {
-    _File& f = *this;
-    int n, wrote=0;
-
-    // NOTE contrary to write(2) we have to write all data as io.Writer requires.
-    while (count != 0) {
-        n = ::write(f._fd, buf, count);
-        if (n < 0)
-            return make_tuple(wrote, f._errno("write"));
-
-        wrote += n;
-        buf    = ((const char *)buf) + n;
-        count -= n;
-    }
-
-    return make_tuple(wrote, nil);
-}
-
-error _File::Stat(struct stat *st) {
-    _File& f = *this;
-
-    int err = fstat(f._fd, st);
-    if (err != 0)
-        return f._errno("stat");
-    return nil;
-}
-
-
-// _errno returns error corresponding to op(file) and errno.
-error _File::_errno(const char *op) {
-    _File& f = *this;
-    return _pathError(op, f._path, errno);
-}
 
 // _pathError returns os.PathError-like for op/path and system error
 // indicated by syserr.
@@ -207,7 +125,7 @@ namespace xmm {
 // map memory-maps f.fd[offset +size) somewhere into memory.
 // prot  is PROT_* from mmap(2).
 // flags is MAP_*  from mmap(2); MAP_FIXED must not be used.
-tuple<uint8_t*, error> map(int prot, int flags, xos::File f, off_t offset, size_t size) {
+tuple<uint8_t*, error> map(int prot, int flags, os::File f, off_t offset, size_t size) {
     void *addr;
 
     if (flags & MAP_FIXED)
@@ -223,7 +141,7 @@ tuple<uint8_t*, error> map(int prot, int flags, xos::File f, off_t offset, size_
 // map_into memory-maps f.fd[offset +size) into [addr +size).
 // prot  is PROT_* from mmap(2).
 // flags is MAP_*  from mmap(2); MAP_FIXED is added automatically.
-error map_into(void *addr, size_t size, int prot, int flags, xos::File f, off_t offset) {
+error map_into(void *addr, size_t size, int prot, int flags, os::File f, off_t offset) {
     void *addr2;
 
     addr2 = ::mmap(addr, size, prot, MAP_FIXED | flags, f->_sysfd(), offset);
@@ -243,44 +161,6 @@ error unmap(void *addr, size_t size) {
 }
 
 }   // xmm::
-
-
-// io::ioutil::
-namespace io {
-namespace ioutil {
-
-tuple<string, error> ReadFile(const string& path) {
-    // errctx is ok as returned by all calls.
-    xos::File f;
-    error     err;
-
-    tie(f, err) = xos::Open(path);
-    if (err != nil)
-        return make_tuple("", err);
-
-    string data;
-    vector<char> buf(4096);
-
-    while (1) {
-        int n;
-        tie(n, err) = f->Read(&buf[0], buf.size());
-        data.append(&buf[0], n);
-        if (err != nil) {
-            if (err == golang::io::EOF_)
-                err = nil;
-            break;
-        }
-    }
-
-    error err2 = f->Close();
-    if (err == nil)
-        err = err2;
-    if (err != nil)
-        data = "";
-    return make_tuple(data, err);
-}
-
-}}  // io::ioutil::
 
 
 // xstrconv::   (strconv-like)

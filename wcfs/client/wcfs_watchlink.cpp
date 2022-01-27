@@ -63,8 +63,8 @@ pair<WatchLink, error> WCFS::_openwatch() {
 
     wlink->rx_eof     = makechan<structZ>();
 
-    os::RegisterAfterFork(newref(
-        static_cast<os::_IAfterFork*>( wlink._ptr() )
+    xos::RegisterAfterFork(newref(
+        static_cast<xos::_IAfterFork*>( wlink._ptr() )
     ));
 
     context::Context serveCtx;
@@ -100,8 +100,8 @@ error _WatchLink::close() {
     if (err == nil)
         err = err3;
 
-    os::UnregisterAfterFork(newref(
-        static_cast<os::_IAfterFork*>( &wlink )
+    xos::UnregisterAfterFork(newref(
+        static_cast<xos::_IAfterFork*>( &wlink )
     ));
 
     return E(err);
