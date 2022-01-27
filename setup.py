@@ -290,7 +290,7 @@ libwcfs_h = [
 
 setup(
     name        = 'wendelin.core',
-    version     = '2.0.alpha1',
+    version     = '2.0.alpha2',
     description = 'Out-of-core NumPy arrays',
     long_description = '%s\n----\n\n%s' % (
                             readfile('README.rst'), readfile('CHANGELOG.rst')),
