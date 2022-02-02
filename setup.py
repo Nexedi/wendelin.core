@@ -30,6 +30,8 @@ import os
 import sys
 from errno import EEXIST
 
+PY3 = (sys.version_info.major >= 3)
+
 
 # tell cython to resolve `cimport wendelin.*` modules hierarchy starting at top-level.
 # see wendelin.py for details.
@@ -248,6 +250,8 @@ def runcmd(argv):
     if retcode:
         raise RuntimeError("%s -> failed (status %s)" % (argv, retcode))
 
+    if PY3:
+        output = output.decode('utf-8')
     return output
 
 
