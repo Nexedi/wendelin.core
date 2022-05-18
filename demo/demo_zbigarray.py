@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -43,6 +43,8 @@ from numpy import float64, dtype, cumsum, sin
 import psutil
 import sys
 import getopt
+
+from six.moves import range as xrange
 
 KB = 1024
 MB = 1024*KB
