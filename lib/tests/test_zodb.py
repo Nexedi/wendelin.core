@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -25,11 +25,15 @@ from ZODB import DB, POSException
 from ZODB.FileStorage import FileStorage
 from ZODB.MappingStorage import MappingStorage
 from BTrees.IOBTree import IOBTree
+from BTrees.OOBTree import BTree
 import transaction
 from transaction import TransactionManager
 from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+from ZEO.ClientStorage import ClientStorage as ZEOStorage
+from neo.client.Storage import Storage as NEOStorage
+import pkg_resources
 
 from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
@@ -393,17 +397,126 @@ def test_zodb_onshutdown():
 
 # test that zurl does not change from one open to another storage open.
 def test_zurlstable():
+    def get_root(zstor):
+        db = DB(zstor)
+        conn = db.open()
+        return conn.root()
+
+    def commit_and_close(zstor):
+        root = get_root(zstor)
+        try:
+            tree = root.tree
+        except AttributeError:
+            tree = root.tree = BTree()
+        try:
+            item = tree['item']
+        except KeyError:
+            item = tree['item'] = 0
+        item += 1
+        transaction.commit()
+        last_transaction = zstor.lastTransaction()
+        dbclose(root)
+        return last_transaction
+
     if not isinstance(testdb, (testing.TestDB_FileStorage, testing.TestDB_ZEO, testing.TestDB_NEO)):
         pytest.xfail(reason="zstor_2zurl is TODO for %r" % testdb)
     zurl0 = None
     for i in range(10):
         zstor = testdb.getZODBStorage()
         zurl  = zstor_2zurl(zstor)
-        zstor.close()
+        last_transaction = commit_and_close(zstor)
+
         if i == 0:
             zurl0 = zurl
         else:
             assert zurl == zurl0
+
+        zstor = dbstoropen(zurl)
+        last_transaction1 = zstor.lastTransaction()
+        zstor.close()
+        assert last_transaction1 == last_transaction
+
+
+# ensure zstor_2zurl returns expected zurl
+def test_zstor_2zurl():
+    def get_zeo_version():
+        return pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZEO')).version
+
+    zeo_major = int(get_zeo_version()[0])
+
+    def get_zeo_storage(host, port):
+        # It's better to use a mock storage for zeo == 4, because
+        # we would have to wait for a long time. See here the
+        # respective part in ZEO4 source code:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/4/src/ZEO/ClientStorage.py#L423-L430
+        #
+        # ..compared to ZEO5 which omits the else clause:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/5.3.0/src/ZEO/ClientStorage.py#L279-L286
+        if zeo_major == 4:
+            zeo_storage = type("ClientStorage", (object,), {"_addr": (host, port), "_storage": "1"})()
+            type(zeo_storage).__module__ = "ZEO.ClientStorage"
+            type(zeo_storage).__name__ = "ClientStorage"
+            return zeo_storage
+        else:
+            return ZEOStorage((host, port), wait=False)
+
+    def get_neo_storage(host, port):
+        return NEOStorage(
+          master_nodes="%s:%s" % (host, port), name=neo_cluster_name
+        )
+
+    def get_file_storage(file_name):
+        file_storage = FileStorage(file_name)
+        file_storage.cleanup()
+        return file_storage
+
+    def assert_zurl_is_correct(storage, expected_zurl):
+        assert zstor_2zurl(storage) == expected_zurl
+
+    neo_cluster_name = "test"
+
+    # Test FileStorage
+    assert_zurl_is_correct(
+        get_file_storage("/tmp/test.fs"),
+        "file:///tmp/test.fs"
+    )
+
+    # Test ZEO
+    #   ipv4
+    assert_zurl_is_correct(
+        get_zeo_storage("127.0.0.1", 1234),
+        "zeo://127.0.0.1:1234"
+    )
+
+    #   ipv6
+    assert_zurl_is_correct(
+        get_zeo_storage("::1", 1234),
+        "zeo://[::1]:1234"
+    )
+
+    # Test NEO
+    #   ipv4
+    assert_zurl_is_correct(
+        get_neo_storage("127.0.0.1", 1234),
+        "neo://127.0.0.1:1234/%s" % neo_cluster_name
+    )
+
+    #   ipv6
+    assert_zurl_is_correct(
+        get_neo_storage("[::1]", 1234),
+        "neo://[::1]:1234/%s" % neo_cluster_name
+    )
+
+    # Test exceptions
+    #   invalid storage
+    with raises(ValueError, match="in-RAM storages are not supported"):
+        zstor_2zurl(MappingStorage())
+
+    #   invalid object
+    with raises(NotImplementedError):
+        zstor_2zurl("I am not a storage.")
 
 
 # ---- tests for critical properties of ZODB ----
