@@ -31,6 +31,7 @@ import zodbtools.util
 from weakref import WeakSet
 import gc
 from six.moves.urllib import parse as urlparse
+import socket
 
 import pkg_resources
 
@@ -334,6 +335,14 @@ def _ZDB_close(self):
 ZODB.DB.close = _ZDB_close
 
 
+def is_ipv6(host):
+    try:
+        socket.inet_pton(socket.AF_INET6, host)
+    except socket.error:
+        return False
+    return True
+
+
 # zstor_2zurl converts a ZODB storage to URL to access it.
 def zstor_2zurl(zstor):
     # There is, sadly, no unified way to do it, as even if storages are created via
@@ -374,6 +383,8 @@ def zstor_2zurl(zstor):
             u += addr
         else:
             host, port = addr
+            if is_ipv6(host):
+              host = "[%s]" % host
             u += '%s:%d' % (host, port)
 
         storage = zstor._storage
@@ -402,8 +413,11 @@ def zstor_2zurl(zstor):
             raise NotImplementedError("NEO client has multiple configured masters: %r" % (masterv,))
         master = masterv[0]
         host, port = master.getAddress()
-        u += "%s:%s" % (host, port)
 
+        if is_ipv6(host):
+            host = "[%s]" % host
+
+        u += "%s:%s" % (host, port)
         u += "/%s" % app.name
 
         return u
