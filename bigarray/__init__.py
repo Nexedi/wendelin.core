@@ -39,11 +39,13 @@ of physical RAM.
 from __future__ import print_function
 from wendelin.lib.calc import mul
 from wendelin.lib.xnumpy import _as_strided
+from wendelin.lib.utils import inttuple
 from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
 import logging
 
 
 pagesize = 2*1024*1024 # FIXME hardcoded, TODO -> fileh.ram.pagesize
+
 
 class BigArray(object):
     # numpy.ndarray like
@@ -92,6 +94,10 @@ class BigArray(object):
             raise TypeError("dtypes with object are not supported", _dtype)
 
         self._dtype = _dtype
+        # XXX: Reassigning cast object to local "shape" variable,
+        # because local "shape" is used few lines later here
+        # and we need to be sure its already tuple[int, ...].
+        shape = inttuple(shape)
         self._shape = shape
         self._order = order
         # TODO +offset ?
