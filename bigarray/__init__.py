@@ -39,11 +39,13 @@ of physical RAM.
 from __future__ import print_function
 from wendelin.lib.calc import mul
 from wendelin.lib.xnumpy import _as_strided
+from wendelin.lib.utils import inttuple
 from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
 import logging
 
 
 pagesize = 2*1024*1024 # FIXME hardcoded, TODO -> fileh.ram.pagesize
+
 
 class BigArray(object):
     # numpy.ndarray like
@@ -79,6 +81,7 @@ class BigArray(object):
 
     # __init__ part without fileh
     def _init0(self, shape, dtype_, order):
+        shape = inttuple(shape)  # mimic numpy
         _dtype = dtype(dtype_)
         if _dtype.hasobject:
             logging.warn("You tried to use dtype containing object (%r) with out-of-core array ..." % _dtype)

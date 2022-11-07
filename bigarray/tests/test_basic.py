@@ -112,6 +112,20 @@ def test_bigarray_noobject(testbig):
         with raises(TypeError):
             BigArray((1,), dtype_, Zh)
 
+# Ensure BigArray mimics the behavior of ndarray
+# when initializing its shape property.
+# (array.shape should always return a tuple of ints,
+#  but during initialization it should allow sequences of
+#  ints or ints)
+def test_bigarray_shape_initialization(testbig):
+    def assert_shape_becomes(shape_input, shape_property):
+        assert BigArray(shape_input, float, Zh).shape == shape_property
+
+    Zh = testbig.fopen()
+
+    assert_shape_becomes([1, 4, 3], (1, 4, 3))
+    assert_shape_becomes(42, (42,))
+    assert_shape_becomes((4, 4), (4, 4))
 
 # basic ndarray-compatibility attributes of BigArray
 def test_bigarray_basic(testbig):
