@@ -383,6 +383,8 @@ def zstor_2zurl(zstor):
             u += addr
         else:
             host, port = addr
+            if is_ipv6(host):
+              host = "[%s]" % host
             u += '%s:%d' % (host, port)
 
         storage = zstor._storage
