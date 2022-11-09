@@ -30,6 +30,9 @@ from transaction import TransactionManager
 from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+from ZEO.ClientStorage import ClientStorage as ZEOStorage
+from neo.client.Storage import Storage as NEOStorage
+import pkg_resources
 
 from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
@@ -404,6 +407,67 @@ def test_zurlstable():
             zurl0 = zurl
         else:
             assert zurl == zurl0
+
+
+def test_zstor_2zurl():
+    def get_zeo_version():
+        return pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZEO')).version
+
+    zeo_major = int(get_zeo_version()[0])
+
+    def get_zeo_storage(host, port):
+        # It's better to use a mock storage for zeo == 4, because
+        # we would have to wait for a long time. See here the
+        # respective part in ZEO4 source code:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/4/src/ZEO/ClientStorage.py#L423-L430
+        #
+        # ..compared to ZEO5 which omits the else clause:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/5.3.0/src/ZEO/ClientStorage.py#L279-L286
+        if zeo_major == 4:
+            zeo_storage = type("ClientStorage", (object,), {"_addr": (host, port), "_storage": "1"})()
+            type(zeo_storage).__module__ = "ZEO.ClientStorage"
+            type(zeo_storage).__name__ = "ClientStorage"
+            return zeo_storage
+        else:
+            return ZEOStorage((host, port), wait=False)
+
+    def get_neo_storage(host, port):
+        return NEOStorage(
+          master_nodes="%s:%s" % (host, port), name=neo_cluster_name
+        )
+
+    def assert_zurl_is_correct(storage, expected_zurl):
+        assert zstor_2zurl(storage) == expected_zurl
+
+    neo_cluster_name = "test"
+
+    # Test ZEO
+    #   ipv4
+    assert_zurl_is_correct(
+        get_zeo_storage("127.0.0.1", 1234),
+        "zeo://127.0.0.1:1234"
+    )
+
+    #   ipv6
+    assert_zurl_is_correct(
+        get_zeo_storage("::1", 1234),
+        "zeo://[::1]:1234"
+    )
+
+    # Test NEO
+    #   ipv4
+    assert_zurl_is_correct(
+        get_neo_storage("127.0.0.1", 1234),
+        "neo://127.0.0.1:1234/%s" % neo_cluster_name
+    )
+
+    #   ipv6
+    assert_zurl_is_correct(
+        get_neo_storage("[::1]", 1234),
+        "neo://[::1]:1234/%s" % neo_cluster_name
+    )
 
 
 # ---- tests for critical properties of ZODB ----
