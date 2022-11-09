@@ -47,7 +47,11 @@ def inttuple(int_or_int_sequence):
               "'%s' cannot be interpreted as integer" % type(object_)
             )
 
-    if isinstance(int_or_int_sequence, Sequence):
+    # We need to explicitly add np.ndarray into checked types,
+    # because np.ndarray aren't Sequences, see also:
+    #
+    #   https://github.com/numpy/numpy/issues/2776
+    if isinstance(int_or_int_sequence, (Sequence, np.ndarray)):
         int_tuple = tuple(int_or_int_sequence)
         [raise_if_not_integer(object_) for object_ in int_tuple]
         return int_tuple

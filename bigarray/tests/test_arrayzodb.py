@@ -663,7 +663,7 @@ def test_zbigarray_invalidate_shape():
 #  ints or ints)
 def test_zbigarray_shape_initialization():
     def assert_shape_becomes(shape_input, shape_property):
-        assert ZBigArray(shape=shape_input).shape == shape_property
+        assert ZBigArray(shape=shape_input, dtype=float).shape == shape_property
 
     assert_shape_becomes([1, 4, 3], (1, 4, 3))
     assert_shape_becomes(42, (42,))

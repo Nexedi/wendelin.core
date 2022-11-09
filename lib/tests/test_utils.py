@@ -50,5 +50,7 @@ def test_inttuple():
     assert_raises(Fraction(3, 2))
     #     other objects
     assert_raises("privjet")
+    assert_raises({1, 2, 3})
+    assert_raises({0: 1, 1: 2})
     #   No none-integer values inside sequences are allowed
     assert_raises((1, 0.5))
