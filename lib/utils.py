@@ -19,7 +19,7 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 
-
+import numpy as np
 import numbers
 import six
 
