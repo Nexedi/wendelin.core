@@ -654,3 +654,17 @@ def test_zbigarray_invalidate_shape():
 
 
     del conn2, root2, a2
+
+
+# Ensure ZBigArray mimics the behavior of ndarray
+# when initializing its shape property.
+# (array.shape should always return a tuple of ints,
+#  but during initialization it should allow sequences of
+#  ints or ints)
+def test_zbigarray_shape_initialization():
+    def assert_shape_becomes(shape_input, shape_property):
+        assert ZBigArray(shape=shape_input).shape == shape_property
+
+    assert_shape_becomes([1, 4, 3], (1, 4, 3))
+    assert_shape_becomes(42, (42,))
+    assert_shape_becomes((4, 4), (4, 4))

@@ -39,42 +39,12 @@ of physical RAM.
 from __future__ import print_function
 from wendelin.lib.calc import mul
 from wendelin.lib.xnumpy import _as_strided
+from wendelin.lib.utils import inttuple
 from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
 import logging
-import six
-
-if six.PY2:
-  from collections import Sequence
-else:
-  from collections.abc import Sequence
 
 
 pagesize = 2*1024*1024 # FIXME hardcoded, TODO -> fileh.ram.pagesize
-
-
-def _inttuple(int_or_int_sequence):
-    # Imitate the behaviour of numpy by converting
-    # int or sequence of int to a tuple of int and
-    # raise error in case this is not possible.
-
-    # See the following numpy + cpython references:
-    #
-    #   https://github.com/numpy/numpy/blob/28e9227565b2/numpy/core/src/multiarray/conversion_utils.c#L133-L144
-    #   https://github.com/python/cpython/blob/9c4ae037b9c3/Objects/abstract.c#L1706-L1713
-
-    def raise_if_not_integer(object_):
-        if not isinstance(object_, int):
-            raise TypeError(
-              "'%s' cannot be interpreted as integer" % type(object_)
-            )
-
-    if isinstance(int_or_int_sequence, Sequence):
-        int_tuple = tuple(int_or_int_sequence)
-        [raise_if_not_integer(object_) for object_ in int_tuple]
-        return int_tuple
-
-    raise_if_not_integer(int_or_int_sequence)
-    return (int_or_int_sequence,)
 
 
 class BigArray(object):
@@ -124,7 +94,7 @@ class BigArray(object):
             raise TypeError("dtypes with object are not supported", _dtype)
 
         self._dtype = _dtype
-        self._shape = _inttuple(shape)
+        self._shape = inttuple(shape)
         self._order = order
         # TODO +offset ?
         # TODO +strides ?
