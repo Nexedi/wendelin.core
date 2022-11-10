@@ -438,10 +438,21 @@ def test_zstor_2zurl():
           master_nodes="%s:%s" % (host, port), name=neo_cluster_name
         )
 
+    def get_file_storage(file_name):
+        file_storage = FileStorage(file_name)
+        file_storage.cleanup()
+        return file_storage
+
     def assert_zurl_is_correct(storage, expected_zurl):
         assert zstor_2zurl(storage) == expected_zurl
 
     neo_cluster_name = "test"
+
+    # Test FileStorage
+    assert_zurl_is_correct(
+        get_file_storage("/tmp/test.fs"),
+        "file:///tmp/test.fs"
+    )
 
     # Test ZEO
     #   ipv4
