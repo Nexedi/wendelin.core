@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -25,6 +25,7 @@ from ZODB import DB, POSException
 from ZODB.FileStorage import FileStorage
 from ZODB.MappingStorage import MappingStorage
 from BTrees.IOBTree import IOBTree
+from BTrees.OOBTree import BTree
 import transaction
 from transaction import TransactionManager
 from golang import defer, func
@@ -396,17 +397,44 @@ def test_zodb_onshutdown():
 
 # test that zurl does not change from one open to another storage open.
 def test_zurlstable():
+    def get_root(zstor):
+        db = DB(zstor)
+        conn = db.open()
+        return conn.root()
+
+    def commit_and_close(zstor):
+        root = get_root(zstor)
+        try:
+            tree = root.tree
+        except AttributeError:
+            tree = root.tree = BTree()
+        try:
+            item = tree['item']
+        except KeyError:
+            item = tree['item'] = 0
+        item += 1
+        transaction.commit()
+        last_transaction = zstor.lastTransaction()
+        dbclose(root)
+        return last_transaction
+
     if not isinstance(testdb, (testing.TestDB_FileStorage, testing.TestDB_ZEO, testing.TestDB_NEO)):
         pytest.xfail(reason="zstor_2zurl is TODO for %r" % testdb)
     zurl0 = None
     for i in range(10):
         zstor = testdb.getZODBStorage()
         zurl  = zstor_2zurl(zstor)
-        zstor.close()
+        last_transaction = commit_and_close(zstor)
+
         if i == 0:
             zurl0 = zurl
         else:
             assert zurl == zurl0
+
+        zstor = dbstoropen(zurl)
+        last_transaction1 = zstor.lastTransaction()
+        zstor.close()
+        assert last_transaction1 == last_transaction
 
 
 def test_zstor_2zurl():
