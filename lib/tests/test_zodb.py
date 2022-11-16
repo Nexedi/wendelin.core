@@ -519,8 +519,12 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     _(zeo("test",  "/path/to/zeo.sock"),    "zeo:///path/to/zeo.sock?storage=test") #   + non-default storage name
     _(zeo("1",     ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234")                 # ZEO/ip4
     _(zeo("test",  ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234?storage=test")    #   + non-default storage name
+    _(zeo("1",     ("::1",       1234)),    "zeo://[::1]:1234")                     # ZEO/ip6
+    _(zeo("test",  ("::1",       1234)),    "zeo://[::1]:1234?storage=test")        #   + non-default storage name
     _(neo("test",  "127.0.0.1:1234"),       "neo://127.0.0.1:1234/test")            # NEO/ip4
     _(neo("test",  "127.0.0.1:1234", 1),    "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
+    _(neo("test",  "[::1]:1234"),           "neo://[::1]:1234/test")                # NEO/ip6
+    _(neo("test",  "[::1]:1234", 1),        "neos://%s@[::1]:1234/test" % sslp)     #   + ssl
     _(demo(zeo("base", ("1.2.3.4",  5)),                                            # DemoStorage
            fs1("delta.fs")),                "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
 
