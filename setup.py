@@ -394,7 +394,11 @@ setup(
                   ],
 
     extras_require = {
-                   'test': ['pytest', 'scipy'],
+                   'test': [
+                     'pytest',
+                     'scipy',
+                     'ZEO',         # lib/tests/test_zodb.py
+                    ],
     },
 
     cmdclass    = {'build_dso':     build_dso,

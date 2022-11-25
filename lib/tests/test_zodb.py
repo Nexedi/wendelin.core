@@ -30,6 +30,7 @@ from transaction import TransactionManager
 from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+from ZEO.ClientStorage import ClientStorage as ZEOStorage
 
 from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
@@ -433,6 +434,16 @@ def test_zodb_zloadrace():
 # zsync syncs ZODB storage.
 # it is noop, if zstor does not support syncing (i.e. FileStorage has no .sync())
 def zsync(zstor):
+    # ZEOs default sync is effectless. We explicitly need to sync by
+    # pinging to the server. For ZEO 5 it would actually be sufficient
+    # to set init parameter 'server_sync' to 'True':
+    #   https://github.com/zopefoundation/ZEO/blob/423cb8/src/ZEO/ClientStorage.py#L224-L246
+    # But because our storage is already initiated this doesn't help.
+    if isinstance(zstor, ZEOStorage):
+        # ZEO >= 5 specifies ping
+        #   https://github.com/zopefoundation/ZEO/blob/423cb8/src/ZEO/ClientStorage.py#L472-L478
+        # ZEO < 5: we need to provide a ping method
+        getattr(zstor, 'ping', lambda: zstor._server.lastTransaction())()
     sync = getattr(zstor, 'sync', None)
     if sync is not None:
         sync()
