@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB utilities and critical properties of ZODB itself
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -17,13 +17,14 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
 from ZODB import DB, POSException
 from ZODB.FileStorage import FileStorage
 from ZODB.MappingStorage import MappingStorage
+from ZODB.DemoStorage import DemoStorage
 from BTrees.IOBTree import IOBTree
 import transaction
 from transaction import TransactionManager
@@ -31,6 +32,9 @@ from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
 from ZEO.ClientStorage import ClientStorage as ZEOStorage
+from neo.client.Storage import Storage as NEOStorage
+import os
+from six.moves.urllib.parse import quote_plus
 
 from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
@@ -405,6 +409,143 @@ def test_zurlstable():
             zurl0 = zurl
         else:
             assert zurl == zurl0
+
+
+# test that ZODB database opened via storage's zurl, provides access to the same data.
+@func
+def test_zurlsamedb():
+    stor1 = testdb.getZODBStorage()
+    defer(stor1.close)
+
+    # skip on FileStorage - ZODB/py fails with LockError on attempt to create
+    # two FileStorage's connected to the same data.
+    if isinstance(stor1, FileStorage):
+        pytest.skip("skipping on FileStorage")
+
+    zurl = zstor_2zurl(stor1)
+    stor2 = dbstoropen(zurl)
+    defer(stor2.close)
+
+    db1 = DB(stor1)
+    db2 = DB(stor2)
+
+    # get/set retrieves or sets root['X'] = x.
+    @func
+    def set(db, x):
+        conn = db.open();   defer(conn.close)
+        root = conn.root()
+        root['X'] = x
+        transaction.commit()
+    @func
+    def get(db):
+        patchsync(db.storage)
+        zsync(db.storage)
+        conn = db.open();   defer(conn.close)
+        root = conn.root()
+        return root['X']
+
+    # stor1/stor2 should have the same data
+    set(db1, 1)
+    assert get(db2) == 1
+    set(db1, 'abc')
+    assert get(db2) == 'abc'
+
+
+# ensure zstor_2zurl returns expected zurl.
+def test_zstor_2zurl(tmpdir, neo_ssl_dict):
+    # fs1 returns new FileStorage located in tmpdir.
+    def fs1(name):
+        return FileStorage("%s/%s" % (tmpdir, name))
+
+    # zeo returns new ZEO client for specified storage name and server address.
+    #
+    # server_addr can be either:
+    # - str (specifying address of UNIX socket), or
+    # - (host, addr) pair - specifying TCP address.
+    #
+    # NOTE the client is returned without waiting until server is connected.
+    def zeo(storage_name, server_addr):
+        if testing.TestDB_ZEO('').z5:
+            return ZEOStorage(server_addr, storage=storage_name, wait=False)
+
+        # It's better to use a mock storage for zeo == 4, because
+        # we would have to wait for a long time. See here the
+        # respective part in ZEO4 source code:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/4/src/ZEO/ClientStorage.py#L423-L430
+        #
+        # ..compared to ZEO5 which omits the else clause:
+        #
+        #   https://github.com/zopefoundation/ZEO/blob/5.3.0/src/ZEO/ClientStorage.py#L279-L286
+        zeo_storage = type(
+            "ClientStorage",
+            (object,),
+            {
+                "_addr": server_addr,
+                "_storage": storage_name,
+                "close": lambda self: None,
+                "getName": lambda self: self._storage
+            }
+        )()
+        type(zeo_storage).__module__ = "ZEO.ClientStorage"
+        type(zeo_storage).__name__ = "ClientStorage"
+        return zeo_storage
+
+    # neo returns new NEO client for specified cluster name and master address.
+    # NOTE, similarly to ZEO, the client is returned without waiting until server nodes are connected.
+    def neo(cluster_name, master_addr, ssl=0):
+        kwargs = dict(master_nodes=master_addr, name=cluster_name)
+        if ssl:
+            kwargs.update(neo_ssl_dict)
+        return NEOStorage(**kwargs)
+
+    # demo returns new DemoStorage with specified base and delta.
+    def demo(base, delta):
+        return DemoStorage(base=base, changes=delta)
+
+    # assert_zurl_is_correct verifies that zstor_2zurl(zstor) returns zurl_ok.
+    # zstor is closed after this test.
+    @func
+    def assert_zurl_is_correct(zstor, zurl_ok):
+        defer(zstor.close)
+        assert zstor_2zurl(zstor) == zurl_ok
+
+    # sslp is the ssl encryption uri part of an encrypted NEO node
+    q = quote_plus
+    sslp = ";".join(("%s=%s" % (q(k), q(v)) for k, v in sorted(neo_ssl_dict.items())))
+
+    _ = assert_zurl_is_correct
+    _(fs1("test.fs"),                       "file://%s/test.fs" % tmpdir)           # FileStorage
+    _(zeo("1",     "/path/to/zeo.sock"),    "zeo:///path/to/zeo.sock")              # ZEO/unix
+    _(zeo("test",  "/path/to/zeo.sock"),    "zeo:///path/to/zeo.sock?storage=test") #   + non-default storage name
+    _(zeo("1",     ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234")                 # ZEO/ip4
+    _(zeo("test",  ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234?storage=test")    #   + non-default storage name
+    _(neo("test",  "127.0.0.1:1234"),       "neo://127.0.0.1:1234/test")            # NEO/ip4
+    _(neo("test",  "127.0.0.1:1234", 1),    "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
+    _(demo(zeo("base", ("1.2.3.4",  5)),                                            # DemoStorage
+           fs1("delta.fs")),                "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
+
+    # Test exceptions
+    #   invalid storage
+    with raises(ValueError, match="in-RAM storages are not supported"):
+        zstor_2zurl(MappingStorage())
+
+    #   invalid object
+    with raises(NotImplementedError):
+        zstor_2zurl("I am not a storage.")
+
+
+# neo_ssl_dict returns the path of precomputed static ssl certificate
+# files.
+@pytest.fixture
+def neo_ssl_dict():
+    ssl_files_base_path = "%s%s%s%s" % (
+      os.path.dirname(__file__), os.sep, "testdata", os.sep
+    )
+    return {
+        k: "%s%s" % (ssl_files_base_path, v)
+        for k, v in dict(ca="ca.crt", key="node.key", cert="node.crt").items()
+    }
 
 
 # ---- tests for critical properties of ZODB ----
