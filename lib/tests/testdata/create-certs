@@ -1,0 +1,11 @@
+#!/bin/sh -e
+# Same as the one used in NEO/py tests:
+# 	https://lab.nexedi.com/nexedi/neoppod/blob/bff5c82f/neo/tests/create-certs
+DAYS=100000  # = ~270 years
+
+at_exit() { rm -f "$CAkey"; }
+trap at_exit 0
+CAkey=`mktemp`
+openssl req -new -x509 -nodes -keyout "$CAkey" -out ca.crt -subj /CN=CA -days $DAYS
+openssl req -new -nodes -keyout node.key -subj /CN=node |
+openssl x509 -CA ca.crt -CAkey "$CAkey" -req -out node.crt -set_serial 1 -days $DAYS
