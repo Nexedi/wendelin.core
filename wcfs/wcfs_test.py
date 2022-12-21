@@ -374,6 +374,7 @@ class tWCFS(_tWCFS):
     def close(t):
         def _():
             os.close(t._wcfuseabort)
+        defer(_)
         defer(t._closed.close)
 
         # unmount and wait for wcfs to exit
