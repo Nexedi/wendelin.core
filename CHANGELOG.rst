@@ -1,6 +1,10 @@
 Wendelin.core change history
 ============================
 
+- `2.0.alpha3`__ (2022-12-21)  More fixes discovered by on-field usage.
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/compare/5e5ad598...7ce0978d
+
 - `2.0.alpha2`__ (2022-01-27)  Fix several crashes discovered by first on-field usage.
 
   __ https://lab.nexedi.com/nexedi/wendelin.core/compare/49f826b1...a36cdcc3
