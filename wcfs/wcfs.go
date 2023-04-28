@@ -2466,7 +2466,14 @@ func _main() (err error) {
 	}
 
 	opts := &fuse.MountOptions{
-		FsName: zurl,
+		// Replace prohibited commas with semicolon (they are used
+		// for separating our masters from each other).
+		// Unfortunately fusermount uses commas to separate mountoptions
+		// from each other [1]. Escaping FsName with either " or ' or \"
+		// doesn't help, so lets simply replace all commas with ";".
+		//
+		// [1] https://www.man7.org/linux/man-pages/man1/fusermount3.1.html
+		FsName: strings.Replace(zurl, ",", ";", -1),
 		Name:   "wcfs",
 
 		// We retrieve kernel cache in ZBlk.blksize chunks, which are 2MB in size.
