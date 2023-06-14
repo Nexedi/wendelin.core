@@ -401,15 +401,17 @@ def zstor_2zurl(zstor):
         masterv = app.nm.getMasterList()
         if len(masterv) == 0:
             raise RuntimeError("%r has empty master list" % zstor)
-        if len(masterv) > 1:
-            raise NotImplementedError("NEO client has multiple configured masters: %r" % (masterv,))
-        master = masterv[0]
-        host, port = master.getAddress()
 
-        if _is_ipv6(host):
-            host = "[%s]" % host
+        master_list = []
+        for master in masterv:
+            host, port = master.getAddress()
 
-        u += "%s:%s" % (host, port)
+            if _is_ipv6(host):
+                host = "[%s]" % host
+
+            master_list.append("%s:%s" % (host, port))
+
+        u += ",".join(master_list)
         u += "/%s" % app.name
 
         return u

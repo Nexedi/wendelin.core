@@ -514,19 +514,20 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     sslp = ";".join(("%s=%s" % (q(k), q(v)) for k, v in sorted(neo_ssl_dict.items())))
 
     _ = assert_zurl_is_correct
-    _(fs1("test.fs"),                       "file://%s/test.fs" % tmpdir)           # FileStorage
-    _(zeo("1",     "/path/to/zeo.sock"),    "zeo:///path/to/zeo.sock")              # ZEO/unix
-    _(zeo("test",  "/path/to/zeo.sock"),    "zeo:///path/to/zeo.sock?storage=test") #   + non-default storage name
-    _(zeo("1",     ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234")                 # ZEO/ip4
-    _(zeo("test",  ("127.0.0.1", 1234)),    "zeo://127.0.0.1:1234?storage=test")    #   + non-default storage name
-    _(zeo("1",     ("::1",       1234)),    "zeo://[::1]:1234")                     # ZEO/ip6
-    _(zeo("test",  ("::1",       1234)),    "zeo://[::1]:1234?storage=test")        #   + non-default storage name
-    _(neo("test",  "127.0.0.1:1234"),       "neo://127.0.0.1:1234/test")            # NEO/ip4
-    _(neo("test",  "127.0.0.1:1234", 1),    "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
-    _(neo("test",  "[::1]:1234"),           "neo://[::1]:1234/test")                # NEO/ip6
-    _(neo("test",  "[::1]:1234", 1),        "neos://%s@[::1]:1234/test" % sslp)     #   + ssl
-    _(demo(zeo("base", ("1.2.3.4",  5)),                                            # DemoStorage
-           fs1("delta.fs")),                "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
+    _(fs1("test.fs"),                         "file://%s/test.fs" % tmpdir)           # FileStorage
+    _(zeo("1",     "/path/to/zeo.sock"),      "zeo:///path/to/zeo.sock")              # ZEO/unix
+    _(zeo("test",  "/path/to/zeo.sock"),      "zeo:///path/to/zeo.sock?storage=test") #   + non-default storage name
+    _(zeo("1",     ("127.0.0.1", 1234)),      "zeo://127.0.0.1:1234")                 # ZEO/ip4
+    _(zeo("test",  ("127.0.0.1", 1234)),      "zeo://127.0.0.1:1234?storage=test")    #   + non-default storage name
+    _(zeo("1",     ("::1",       1234)),      "zeo://[::1]:1234")                     # ZEO/ip6
+    _(zeo("test",  ("::1",       1234)),      "zeo://[::1]:1234?storage=test")        #   + non-default storage name
+    _(neo("test",  "127.0.0.1:1234"),         "neo://127.0.0.1:1234/test")            # NEO/ip4
+    _(neo("test",  "127.0.0.1:1234", 1),      "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
+    _(neo("test",  "[::1]:1234"),             "neo://[::1]:1234/test")                # NEO/ip6
+    _(neo("test",  "[::1]:1234", 1),          "neos://%s@[::1]:1234/test" % sslp)     #   + ssl
+    _(neo("test",  "[::1]:1234\n[::2]:1234"), "neo://[::1]:1234,[::2]:1234/test")     #   + 2 master nodes
+    _(demo(zeo("base", ("1.2.3.4",  5)),                                              # DemoStorage
+           fs1("delta.fs")),                  "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
 
     # Test exceptions
     #   invalid storage
