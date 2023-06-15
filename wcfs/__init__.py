@@ -81,6 +81,8 @@ from persistent import Persistent
 from zodbtools.util import ashex as h
 from six.moves.urllib.parse import urlsplit, urlunsplit
 
+from wendelin.lib.mntpt import mntpt_4zurl
+
 from .client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
@@ -198,7 +200,7 @@ def _default_autostart():
 #
 # For the same zurl join returns the same WCFS object.
 def join(zurl, autostart=_default_autostart()): # -> WCFS
-    mntpt = _mntpt_4zurl(zurl)
+    mntpt = mntpt_4zurl(zurl)
     with _wcmu:
         # check if we already have connection to wcfs server from this process
         wc = _wcregistry.get(mntpt)
@@ -264,7 +266,7 @@ def _try_attach_wcsrv(mntpt): # -> (fwcfs, trylockstartf)
 # optv can be optionally given to pass flags to wcfs.
 def start(zurl, *optv): # -> Server
     # verify that wcfs is not already running
-    mntpt = _mntpt_4zurl(zurl)
+    mntpt = mntpt_4zurl(zurl)
 
     fwcfs, trylockstartf = _try_attach_wcsrv(mntpt)
     if fwcfs is not None:
@@ -288,7 +290,7 @@ def _optv_with_wcfs_defaults(optv): # -> optv
 # _start serves start and join.
 @func
 def _start(zurl, *optv): # -> Server, fwcfs
-    mntpt = _mntpt_4zurl(zurl)
+    mntpt = mntpt_4zurl(zurl)
     optv  = _optv_with_wcfs_defaults(optv)
     log.info("starting for %s ...", zurl)
 
@@ -495,54 +497,6 @@ def __stop(wcsrv, ctx, _onstuck):
 def _wcfs_exe():
     return '%s/wcfs' % dirname(__file__)
 
-# _mntpt_4zurl returns wcfs should-be mountpoint for ZODB @ zurl.
-#
-# it also makes sure the mountpoint exists.
-def _mntpt_4zurl(zurl):
-    # remove credentials from zurl.
-    # The same database can be accessed from different clients with different
-    # credentials, but we want to map them all to the same single WCFS
-    # instance.
-    scheme, netloc, path, query, frag = urlsplit(zurl)
-    if '@' in netloc:
-        netloc = netloc[netloc.index('@')+1:]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
-
-    m = hashlib.sha1()
-    m.update(zurl)
-
-    # WCFS mounts are located under /dev/shm/wcfs. /dev/shm is already used by
-    # userspace part of wendelin.core memory manager for dirtied pages.
-    # In a sense WCFS mount provides shared read-only memory backed by ZODB.
-
-    # mkdir /dev/shm/wcfs with stiky bit. This way multiple users can create subdirectories inside.
-    wcfsroot = "/dev/shm/wcfs"
-    wcfsmode = 0o777 | stat.S_ISVTX
-    if _mkdir_p(wcfsroot):
-        os.chmod(wcfsroot, wcfsmode)
-    else:
-        # migration workaround for the situation when /dev/shm/wcfs was created by
-        # code that did not yet set sticky bit.
-        _ = os.stat(wcfsroot)
-        if _.st_uid == os.getuid():
-            if _.st_mode != wcfsmode:
-                os.chmod(wcfsroot, wcfsmode)
-
-    mntpt = "%s/%s" % (wcfsroot, m.hexdigest())
-    _mkdir_p(mntpt)
-    return mntpt
-
-
-# mkdir -p.
-def _mkdir_p(path, mode=0o777): # -> created(bool)
-    try:
-        os.makedirs(path, mode)
-    except OSError as e:
-        if e.errno != EEXIST:
-            raise
-        return False
-    return True
-
 # rmdir if path exists.
 def _rmdir_ifexists(path):
     try:
@@ -692,7 +646,7 @@ def _ready(ch):
 #
 # serve(zurl, exec_=False).
 def serve(zurl, optv, exec_=False, _tstartingq=None):
-    mntpt = _mntpt_4zurl(zurl)
+    mntpt = mntpt_4zurl(zurl)
     optv  = _optv_with_wcfs_defaults(optv)
     log.info("serving %s ...", zurl)
 
@@ -752,7 +706,7 @@ def main():
         print("wcfs<%s>: serving ok" % zurl)
 
     elif cmd == "stop":
-        mntpt = _mntpt_4zurl(zurl)
+        mntpt = mntpt_4zurl(zurl)
         _fuse_unmount(mntpt)
         _rmdir_ifexists(mntpt)
 
