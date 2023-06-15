@@ -29,14 +29,21 @@ from six.moves.urllib.parse import urlsplit, urlunsplit
 #
 # it also makes sure the mountpoint exists.
 def mntpt_4zurl(zurl):
-    # remove credentials from zurl.
-    # The same database can be accessed from different clients with different
-    # credentials, but we want to map them all to the same single WCFS
-    # instance.
+    # Filter URI in order to make mntpt persistent among different clients with
+    # varying client options: the WCFS URI should always keep the same if the
+    # same storage is meant.
     scheme, netloc, path, query, frag = urlsplit(zurl)
-    if "@" in netloc:
-        netloc = netloc[netloc.index("@") + 1 :]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
+
+    try:
+        # The filtering depends on the storage backend (there is no standard
+        # among ZODB storages).
+        f = globals()["_filter_%s" % scheme.lower()]
+    except KeyError:
+        raise NotImplementedError(
+            "can't calculate mountpoint for storage with scheme %s" % scheme
+        )
+
+    zurl = urlunsplit(f(scheme, netloc, path, query, frag))
 
     m = hashlib.sha1()
     m.update(zurl)
@@ -61,6 +68,27 @@ def mntpt_4zurl(zurl):
     mntpt = "%s/%s" % (wcfsroot, m.hexdigest())
     _mkdir_p(mntpt)
     return mntpt
+
+
+# Supported storages, but no filtering applied yet.
+_filter = lambda *args: args
+_filter_demo = _filter
+_filter_file = _filter
+_filter_zeo = _filter
+
+
+def _filter_neo(scheme, netloc, path, query, frag):
+    # remove credentials from zurl.
+    # The same database can be accessed from different clients with different
+    # credentials, but we want to map them all to the same single WCFS
+    # instance.
+    if "@" in netloc:
+        netloc = netloc[netloc.index("@") + 1 :]
+    return (scheme, netloc, path, query, frag)
+
+
+# Alias for neo scheme with SSL encryption
+_filter_neos = _filter_neo
 
 
 # mkdir -p.
