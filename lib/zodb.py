@@ -32,6 +32,7 @@ from weakref import WeakSet
 import gc
 from six.moves.urllib import parse as urlparse
 import socket
+from six.moves.urllib.parse import urlsplit, urlunsplit
 
 import pkg_resources
 
@@ -432,3 +433,31 @@ def _is_ipv6(host):
     except socket.error:
         return False
     return True
+
+
+# 'zurl_normalize' normalizes a zurl so that a zurl for a particular storage is
+# always the same e.g.
+#
+#   (zurl_normalize(zurl0) == zurl_normalize(zurl1)) and
+#   (
+#           (zurl0 != zurl1) or
+#           (zurl0 == zurl1
+#   )
+
+# iff zurl0 & zurl1 point to the same storage.
+#
+# In practice this means that this function drops client-only parameters, which
+# would break the invariant of always having the same zurl for a given storage,
+# so the following statement MAY be true:
+#
+#   resolve_uri(zurl)     != resolve_uri(zurl_normalize(zurl))
+def zurl_normalize(zurl):
+    # remove credentials from zurl.
+    # The same database can be accessed from different clients with different
+    # credentials, but we want to map them all to the same single WCFS
+    # instance.
+    scheme, netloc, path, query, frag = urlsplit(zurl)
+    if '@' in netloc:
+        netloc = netloc[netloc.index('@')+1:]
+    zurl = urlunsplit((scheme, netloc, path, query, frag))
+    return zurl
