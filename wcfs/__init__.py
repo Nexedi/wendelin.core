@@ -79,8 +79,8 @@ from golang.gcompat import qq
 
 from persistent import Persistent
 from zodbtools.util import ashex as h
-from six.moves.urllib.parse import urlsplit, urlunsplit
 
+from wendelin.lib.zodb import zurl_normalize
 from .client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
@@ -499,14 +499,8 @@ def _wcfs_exe():
 #
 # it also makes sure the mountpoint exists.
 def _mntpt_4zurl(zurl):
-    # remove credentials from zurl.
-    # The same database can be accessed from different clients with different
-    # credentials, but we want to map them all to the same single WCFS
-    # instance.
-    scheme, netloc, path, query, frag = urlsplit(zurl)
-    if '@' in netloc:
-        netloc = netloc[netloc.index('@')+1:]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
+    # normalize zurl so that even if two neos:// ... we still have them associated with the same wcfs mountpoint.
+    zurl = zurl_normalize(zurl)
 
     m = hashlib.sha1()
     m.update(zurl)

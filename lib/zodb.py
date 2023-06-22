@@ -32,6 +32,7 @@ from weakref import WeakSet
 import gc
 from six.moves.urllib import parse as urlparse
 import socket
+from six.moves.urllib.parse import urlsplit, urlunsplit
 
 import pkg_resources
 
@@ -432,3 +433,35 @@ def _is_ipv6(host):
     except socket.error:
         return False
     return True
+
+
+
+# zurl_normalize returns main part of zurl in its canonical form.
+#
+# The main part of a zurl identifies particular ZODB database without
+# client-side options how to open and access it. The main part also does not
+# include secrets.
+#
+# The following invariant is true:
+#
+#   zurl_normalize(zurl₁) = zurl_normalize(zurl₂)
+#
+#                       ⇕
+#
+#                zurl₁ and zurl₂
+#           point to the same storage
+#
+#
+# Example:
+#
+#   neos://ca=zzz@def:2,abc:1/cluster   ->  neos://abc:1,def:2/cluster
+def zurl_normalize(zurl):
+    # remove credentials from zurl.
+    # The same database can be accessed from different clients with different
+    # credentials, but we want to map them all to the same single WCFS
+    # instance.
+    scheme, netloc, path, query, frag = urlsplit(zurl)
+    if '@' in netloc:
+        netloc = netloc[netloc.index('@')+1:]
+    zurl = urlunsplit((scheme, netloc, path, query, frag))
+    return zurl
