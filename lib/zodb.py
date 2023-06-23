@@ -435,7 +435,6 @@ def _is_ipv6(host):
     return True
 
 
-
 # zurl_normalize returns main part of zurl in its canonical form.
 #
 # The main part of a zurl identifies particular ZODB database without
@@ -456,12 +455,47 @@ def _is_ipv6(host):
 #
 #   neos://ca=zzz@def:2,abc:1/cluster   ->  neos://abc:1,def:2/cluster
 def zurl_normalize(zurl):
+    scheme, netloc, path, query, frag = urlsplit(zurl)
+    try:
+        # The filtering depends on the storage backend (there is no standardized
+        # zodburi scheme among ZODB storages).
+        f = register_filter._scheme_to_filter[scheme.lower()]
+    except KeyError:
+        raise NotImplementedError("can't normalize zurl with scheme %s" % scheme)
+    return urlunsplit(f(scheme, netloc, path, query, frag))
+
+
+# register_filter adds a new normalization filter for zurl with the given schemes.
+#
+# Each scheme can only have exactly one filter function. If there is already
+# a registered filter function, the old one is overridden.
+register_filter = type(
+    'register_filter',
+    (object,),
+    {
+        # Internal/private mapping of url scheme to
+        # normalization/filter function.
+        "_scheme_to_filter": {},
+        "__call__": (
+            lambda self, *scheme:
+                lambda func: [
+                    self._scheme_to_filter.update({s: func}) for s in scheme
+                ]
+        )
+    },
+)()
+
+
+# Supported storages, but no filtering applied yet.
+register_filter('demo', 'file', 'zeo')(lambda *args: args)
+
+
+@register_filter('neo', 'neos')
+def _normalize_neo(scheme, netloc, path, query, frag):
     # remove credentials from zurl.
     # The same database can be accessed from different clients with different
     # credentials, but we want to map them all to the same single WCFS
     # instance.
-    scheme, netloc, path, query, frag = urlsplit(zurl)
-    if '@' in netloc:
-        netloc = netloc[netloc.index('@')+1:]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
-    return zurl
+    if "@" in netloc:
+        netloc = netloc[netloc.index("@") + 1 :]
+    return (scheme, netloc, path, query, frag)
