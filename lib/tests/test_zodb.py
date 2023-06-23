@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Wendelin.core.bigfile | Tests for ZODB utilities and critical properties of ZODB itself
 # Copyright (C) 2014-2022  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
@@ -17,7 +18,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen, zurl_normalize_main
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -539,6 +540,37 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     #   invalid object
     with raises(NotImplementedError):
         zstor_2zurl("I am not a storage.")
+
+
+@pytest.mark.parametrize(
+    "zurl,zurl_norm_ok",
+    [
+        # FileStorage
+        ("file://Data.fs", "file://Data.fs"),
+        # ZEO
+        ("zeo://localhost:9001", "zeo://localhost:9001"),
+        # NEO
+        ("neo://127.0.0.1:1234/cluster", "neo://127.0.0.1:1234/cluster"),
+        #   > 1 master nodes \w different order
+        ("neo://abc:1,def:2/cluster", "neo://abc:1,def:2/cluster"),
+        ("neo://def:2,abc:1/cluster", "neo://abc:1,def:2/cluster"),
+        #   Different SSL paths
+        ("neos://ca=a&key=b&cert=c@xyz:1/cluster", "neos://xyz:1/cluster"),
+        ("neos://ca=α&key=β&cert=γ@xyz:1/cluster", "neos://xyz:1/cluster"),
+    ],
+)
+def test_zurl_normalize_main(zurl, zurl_norm_ok):
+    assert zurl_normalize_main(zurl) == zurl_norm_ok
+    # also verify that zurl_normalize is stable
+    assert zurl_normalize_main(zurl_norm_ok) == zurl_norm_ok
+
+
+# 'zurl_normalize' must explicitly raise an exception if an unsupported
+# zodburi scheme is used.
+def test_zurl_normalize_main_invalid_scheme():
+    for uri in "https://test postgres://a:b@c:5432/d".split(" "):
+        with pytest.raises(NotImplementedError):
+            zurl_normalize_main(uri)
 
 
 # neo_ssl_dict returns the path of precomputed static ssl certificate
