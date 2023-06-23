@@ -498,4 +498,10 @@ def _normalize_neo(scheme, netloc, path, query, frag):
     # instance.
     if "@" in netloc:
         netloc = netloc[netloc.index("@") + 1 :]
+    # Sort multiple master nodes: if a NEO cluster has multiple master
+    # nodes, there is no agreed on order in which the master node
+    # addresses appear in the netloc. In order to insure we always
+    # get the same mountpoint among different clients we explicitly
+    # sort the master node addr order.
+    netloc = ",".join(sorted(netloc.split(',')))
     return (scheme, netloc, path, query, frag)
