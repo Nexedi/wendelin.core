@@ -562,6 +562,14 @@ def test_zurl_normalize_main(zurl, zurl_norm_ok):
     assert zurl_normalize_main(zurl_norm_ok) == zurl_norm_ok
 
 
+# 'zurl_normalize_main' must explicitly raise an exception if an unsupported
+# zodburi scheme is used.
+def test_zurl_normalize_main_invalid_scheme():
+    for uri in "https://test postgres://a:b@c:5432/d".split(" "):
+        with pytest.raises(NotImplementedError):
+            zurl_normalize_main(uri)
+
+
 # neo_ssl_dict returns the path of precomputed static ssl certificate
 # files.
 @pytest.fixture

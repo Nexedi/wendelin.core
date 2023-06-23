@@ -455,12 +455,34 @@ def _is_ipv6(host):
 #
 #   neos://ca=zzz@def:2,abc:1/cluster   ->  neos://abc:1,def:2/cluster
 def zurl_normalize_main(zurl):
+    scheme, netloc, path, query, frag = urlsplit(zurl)
+    try:
+        # Normalization depends on the storage backend (there is no standardized
+        # zodburi scheme among ZODB storages).
+        f = _zurl_normalize_registry[scheme.lower()]
+    except KeyError:
+        raise NotImplementedError("can't normalize zurl with scheme %s" % scheme)
+    return urlunsplit(f(scheme, netloc, path, query, frag))
+
+# _znormalizer registers func f for zurl_normalize_main to use as scheme handler.
+_zurl_normalize_registry = {}  # scheme -> normalization func
+def _znormalizer(scheme, f):
+    assert scheme not in _zurl_normalize_registry
+    _zurl_normalize_registry[scheme] = f
+
+# Supported storages, but no normalization applied yet (TODO).
+_znormalizer('file', lambda *args: args)
+_znormalizer('zeo',  lambda *args: args)
+_znormalizer('demo', lambda *args: args)
+
+
+def _znormalize_neo(scheme, netloc, path, query, frag):
     # remove credentials from zurl.
     # The same database can be accessed from different clients with different
     # credentials, but we want to map them all to the same single WCFS
     # instance.
-    scheme, netloc, path, query, frag = urlsplit(zurl)
-    if '@' in netloc:
-        netloc = netloc[netloc.index('@')+1:]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
-    return zurl
+    if "@" in netloc:
+        netloc = netloc[netloc.index("@") + 1 :]
+    return (scheme, netloc, path, query, frag)
+_znormalizer('neo',  _znormalize_neo)
+_znormalizer('neos', _znormalize_neo)
