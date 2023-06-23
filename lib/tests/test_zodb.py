@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen
+from wendelin.lib.zodb import LivePersistent, deactivate_btree, dbclose, zconn_at, zstor_2zurl, zmajor, _zhasNXDPatch, dbstoropen, zurl_normalize
 from wendelin.lib.testing import getTestDB
 from wendelin.lib import testing
 from persistent import Persistent, UPTODATE, GHOST, CHANGED
@@ -576,6 +576,7 @@ def test_zodb_zloadrace():
 
 # ---- misc ----
 
+
 # zsync syncs ZODB storage.
 # it is noop, if zstor does not support syncing (i.e. FileStorage has no .sync())
 def zsync(zstor):
@@ -592,3 +593,42 @@ def zsync(zstor):
     sync = getattr(zstor, 'sync', None)
     if sync is not None:
         sync()
+
+
+@pytest.mark.parametrize(
+    "uri_tuple",
+    [
+        # FileStorage
+        ("file://Data.fs", "file://Data.fs"),
+        # ZEO
+        ("zeo://localhost:9001", "zeo://localhost:9001"),
+        # NEO
+        ("neo://127.0.0.1:1234/cluster", "neo://127.0.0.1:1234/cluster"),
+        #   > 1 master nodes \w different order
+        (
+            "neo://127.0.0.1:1234,127.0.0.2:1234/cluster",
+            "neo://127.0.0.2:1234,127.0.0.1:1234/cluster",
+        ),
+        #   Different SSL paths
+        (
+            "neos://ca=ca.cert&key=neo.key&cert=neo.cert@127.0.0.1:1234/cluster",
+            "neos://ca=a&key=b&cert=c@127.0.0.1:1234/cluster",
+        ),
+    ],
+)
+def test_stable_zurl_normalize(uri_tuple):
+    uri_normalized = None
+    for uri in uri_tuple:
+        nuri_normalized = zurl_normalize(uri)
+        if uri_normalized is not None:
+            assert uri_normalized == nuri_normalized
+        uri_normalized = nuri_normalized
+
+
+# 'zurl_normalize' must explicitly raise an exception if an unsupported
+# zodburi scheme is used.
+def test_zurl_normalize_invalid_scheme():
+    for uri in "https://test postgres://a:b@c:5432/d".split(" "):
+        with pytest.raises(NotImplementedError):
+            zurl_normalize(uri)
+
