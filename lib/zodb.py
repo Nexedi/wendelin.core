@@ -452,12 +452,31 @@ def _is_ipv6(host):
 #
 #   resolve_uri(zurl)     != resolve_uri(zurl_normalize(zurl))
 def zurl_normalize(zurl):
+    scheme, netloc, path, query, frag = urlsplit(zurl)
+    try:
+        # The filtering depends on the storage backend (there is no standardized
+        # zodburi scheme among ZODB storages).
+        f = globals()["_normalize_%s" % scheme.lower()]
+    except KeyError:
+        raise NotImplementedError(
+            "can't calculate mountpoint for storage with scheme %s" % scheme
+        )
+    return urlunsplit(f(scheme, netloc, path, query, frag))
+
+
+# Supported storages, but no filtering applied yet.
+_normalize_demo, _normalize_file, _normalize_zeo = (lambda *args: args for _ in range(3))
+
+
+def _normalize_neo(scheme, netloc, path, query, frag):
     # remove credentials from zurl.
     # The same database can be accessed from different clients with different
     # credentials, but we want to map them all to the same single WCFS
     # instance.
-    scheme, netloc, path, query, frag = urlsplit(zurl)
-    if '@' in netloc:
-        netloc = netloc[netloc.index('@')+1:]
-    zurl = urlunsplit((scheme, netloc, path, query, frag))
-    return zurl
+    if "@" in netloc:
+        netloc = netloc[netloc.index("@") + 1 :]
+    return (scheme, netloc, path, query, frag)
+
+
+# Alias for neo scheme with SSL encryption
+_normalize_neos = _normalize_neo
