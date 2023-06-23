@@ -551,6 +551,9 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         ("zeo://localhost:9001", "zeo://localhost:9001"),
         # NEO
         ("neo://127.0.0.1:1234/cluster", "neo://127.0.0.1:1234/cluster"),
+        #   > 1 master nodes \w different order
+        ("neo://abc:1,def:2/cluster", "neo://abc:1,def:2/cluster"),
+        ("neo://def:2,abc:1/cluster", "neo://abc:1,def:2/cluster"),
         #   Different SSL paths
         ("neos://ca=a&key=b&cert=c@xyz:1/cluster", "neos://xyz:1/cluster"),
         ("neos://ca=α&key=β&cert=γ@xyz:1/cluster", "neos://xyz:1/cluster"),
