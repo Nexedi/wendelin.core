@@ -435,22 +435,26 @@ def _is_ipv6(host):
     return True
 
 
-# 'zurl_normalize' normalizes a zurl so that a zurl for a particular storage is
-# always the same e.g.
-#
-#   (zurl_normalize(zurl0) == zurl_normalize(zurl1)) and
-#   (
-#           (zurl0 != zurl1) or
-#           (zurl0 == zurl1
-#   )
 
-# iff zurl0 & zurl1 point to the same storage.
+# zurl_normalize returns main part of zurl in its canonical form.
 #
-# In practice this means that this function drops client-only parameters, which
-# would break the invariant of always having the same zurl for a given storage,
-# so the following statement MAY be true:
+# The main part of a zurl identifies particular ZODB database without
+# client-side options how to open and access it. The main part also does not
+# include secrets.
 #
-#   resolve_uri(zurl)     != resolve_uri(zurl_normalize(zurl))
+# The following invariant is true:
+#
+#   zurl_normalize(zurl₁) = zurl_normalize(zurl₂)
+#
+#                       ⇕
+#
+#                zurl₁ and zurl₂
+#           point to the same storage
+#
+#
+# Example:
+#
+#   neos://ca=zzz@def:2,abc:1/cluster   ->  neos://abc:1,def:2/cluster
 def zurl_normalize(zurl):
     scheme, netloc, path, query, frag = urlsplit(zurl)
     try:

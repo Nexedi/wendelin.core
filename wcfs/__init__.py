@@ -498,7 +498,8 @@ def _wcfs_exe():
 # _mntpt_4zurl returns wcfs should-be mountpoint for ZODB @ zurl.
 #
 # it also makes sure the mountpoint exists.
-def _mntpt_4zurl(zurl): 
+def _mntpt_4zurl(zurl):
+    # normalize zurl so that even if two neos:// ... we still have them associated with the same wcfs mountpoint.
     zurl = zurl_normalize(zurl)
 
     m = hashlib.sha1()
