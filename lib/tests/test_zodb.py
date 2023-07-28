@@ -505,9 +505,9 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     # assert_zurl_is_correct verifies that zstor_2zurl(zstor) returns zurl_ok.
     # zstor is closed after this test.
     @func
-    def assert_zurl_is_correct(zstor, zurl_ok):
+    def assert_zurl_is_correct(zstor, *zurl_ok):
         defer(zstor.close)
-        assert zstor_2zurl(zstor) == zurl_ok
+        assert zstor_2zurl(zstor) in zurl_ok
 
     # sslp is the ssl encryption uri part of an encrypted NEO node
     q = quote_plus
@@ -525,7 +525,9 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     _(neo("test",  "127.0.0.1:1234", 1),      "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
     _(neo("test",  "[::1]:1234"),             "neo://[::1]:1234/test")                # NEO/ip6
     _(neo("test",  "[::1]:1234", 1),          "neos://%s@[::1]:1234/test" % sslp)     #   + ssl
-    _(neo("test",  "[::1]:1234\n[::2]:1234"), "neo://[::1]:1234,[::2]:1234/test")     #   + 2 master nodes
+    _(neo("test",  "[::1]:1234\n[::2]:1234"),                                         #   + 2 master nodes
+           # Master order is not specified, so we have 2 possible/acceptable zurl
+           "neo://[::1]:1234,[::2]:1234/test", "neo://[::2]:1234,[::1]:1234/test")
     _(demo(zeo("base", ("1.2.3.4",  5)),                                              # DemoStorage
            fs1("delta.fs")),                  "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
 
