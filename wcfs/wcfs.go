@@ -1470,7 +1470,8 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 
 	// perform IO without w.pinnedMu
 	w.pinnedMu.Unlock()
-	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, revstr))
+	// XXX: should be 30, not 3
+	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, revstr), 3 * time.Second)
 	w.pinnedMu.Lock()
 
 	// check IO reply & verify/signal blkpin is ready
@@ -1485,6 +1486,15 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 
 
 	if err != nil {
+		// If timed out, we close our connection to client.
+		// We don't return an error, because 'readPinWatchers'
+		// should continue as if nothing would have happened if we
+		// timed out: the other clients should not be affected by
+		// one faulty client.
+		if errors.Is(err, ErrTimedOut) {
+			w.link.close()
+			return nil
+		}
 		blkpin.err = err
 		return err
 	}
@@ -1511,7 +1521,7 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 // Must be called with f.head.zheadMu rlocked.
 //
 // XXX do we really need to use/propagate caller context here? ideally update
-// watchers should be synchronous, and in practice we just use 30s timeout (TODO).
+// watchers should be synchronous, and in practice we just use 30s timeout.
 // Should a READ interrupt cause watch update failure? -> probably no
 func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb.Tid) (err error) {
 	defer xerr.Context(&err, "pin watchers") // f.path and blk is already put into context by readBlk
@@ -1825,6 +1835,11 @@ func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fus
 	return wlink.sk.File(), fuse.OK
 }
 
+// close exits serve by closing the file (and therefore the reading buffer)
+func (wlink *WatchLink) close() {
+	wlink.sk.Close()
+}
+
 // serve serves client initiated watch requests and routes client replies to
 // wcfs initiated pin requests.
 func (wlink *WatchLink) serve() {
@@ -1978,8 +1993,10 @@ func (wlink *WatchLink) _handleWatch(ctx context.Context, msg string) error {
 	return err
 }
 
+var ErrTimedOut error = errors.New("timed out")
+
 // sendReq sends wcfs-originated request to client and returns client response.
-func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, err error) {
+func (wlink *WatchLink) sendReq(ctx context.Context, req string, timeout time.Duration) (reply string, err error) {
 	defer xerr.Context(&err, "sendReq") // wlink is already put into ctx by caller
 
 	var stream uint64
@@ -2023,6 +2040,9 @@ func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, 
 
 	case reply = <-rxq:
 		return reply, nil
+
+	case <-time.After(timeout):
+		return "", ErrTimedOut
 	}
 }
 

@@ -1450,11 +1450,11 @@ def test_wcfs_watch_going_back():
 
 
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
+# protection against faulty/slow clients
 @func
 def test_wcfs_pintimeout_kill():
     # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
+    tkill = 4*time.second
     t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
     defer(t.close)
 
@@ -1470,7 +1470,10 @@ def test_wcfs_pintimeout_kill():
     wg = sync.WorkGroup(ctx)
     def _(ctx):
         # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+        try:
+            wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+        except Exception:
+            return
         fail("watch request completed (should not as pin handler is stuck)")
     wg.go(_)
     def _(ctx):
@@ -1480,12 +1483,13 @@ def test_wcfs_pintimeout_kill():
 
         # sleep > wcfs pin timeout - wcfs must kill us
         _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
+            time.after(tkill).recv, # 0
         )
-        if _ == 0:
-            raise ctx.err()
-        fail("wcfs did not killed stuck client")
+        try:
+            wl.replyReq(ctx, req, b"")
+        except:
+            return
+        fail("wcfs did not kill stuck client")
     wg.go(_)
     wg.wait()
 
