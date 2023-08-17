@@ -49,6 +49,7 @@ github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMyw
 github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.5.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.5.4/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/google/uuid v1.1.2/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/gwenn/gosqlite v0.0.0-20211101095637-b18efb2e44c8 h1:sWkgaGez8CNa2KHGBTTop16/mC03VP6MDqPKfvhEmCU=
 github.com/gwenn/gosqlite v0.0.0-20211101095637-b18efb2e44c8/go.mod h1:WBYs9HfQGOYDCz7rFwMk7aHkbTTB0cUkQe3pZQARvIg=
@@ -215,7 +216,11 @@ lab.nexedi.com/kirr/go123 v0.0.0-20230205112549-0399d7ad8db9 h1:shGiikNVHWS0+4+P
 lab.nexedi.com/kirr/go123 v0.0.0-20230205112549-0399d7ad8db9/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=
 lab.nexedi.com/kirr/go123 v0.0.0-20230714134036-155506a9880e h1:EB5l7YM2WxDXMeCtYR4SHw30GYcE8lWwu+a0bgrSJVs=
 lab.nexedi.com/kirr/go123 v0.0.0-20230714134036-155506a9880e/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=
+lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf h1:UwAEraoydFHxDqudGYtxBpyXbt9SqInI657OKf9VMJc=
+lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=
 lab.nexedi.com/kirr/neo/go v0.0.0-20221104095432-3e13fa061a13 h1:Cz9Iiz5oA05lG6udEd7FMKfADeFd9K0dmdpj7aTib0A=
 lab.nexedi.com/kirr/neo/go v0.0.0-20221104095432-3e13fa061a13/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
 lab.nexedi.com/kirr/neo/go v0.0.0-20230524100036-4c9414ea9a03 h1:p2+Affqxn6i7MHLY3/r3CudQkq77mg7x9RPiBwRrGF4=
 lab.nexedi.com/kirr/neo/go v0.0.0-20230524100036-4c9414ea9a03/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
+lab.nexedi.com/kirr/neo/go v0.0.0-20230802174919-db81e0de796a h1:2V+p3nvFyW5l46sdCS/nWzy4/ZqVjTZiuKKTJU5apxs=
+lab.nexedi.com/kirr/neo/go v0.0.0-20230802174919-db81e0de796a/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
