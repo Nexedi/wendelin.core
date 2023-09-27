@@ -49,7 +49,6 @@ from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
@@ -348,7 +347,7 @@ class DFile:
 # TODO(?) print -> t.trace/debug() + t.verbose depending on py.test -v -v ?
 class tWCFS(_tWCFS):
     @func
-    def __init__(t):
+    def __init__(t, timeout=10*time.second):
         assert not os.path.exists(testmntpt)
         wc = wcfs.join(testzurl, autostart=True)
         assert wc.mountpoint == testmntpt
@@ -364,7 +363,7 @@ class tWCFS(_tWCFS):
         #   still wait for request completion even after fatal signal )
         nogilready = chan(dtype='C.structZ')
         t._wcfuseabort = os.dup(wc._wcsrv._fuseabort.fileno())
-        go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        go(t._abort_ontimeout, t._wcfuseabort, timeout, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
     # _abort_ontimeout is in wcfs_test.pyx
@@ -402,7 +401,7 @@ class tDB(tWCFS):
     # create before wcfs startup. old_data is []changeDelta - see .commit
     # and .change for details.
     @func
-    def __init__(t, old_data=[]):
+    def __init__(t, old_data=[], **kwargs):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -432,7 +431,7 @@ class tDB(tWCFS):
             t._commit(t.zfile, changeDelta)
 
         # start wcfs after testdb is created and initial data is committed
-        super(tDB, t).__init__()
+        super(tDB, t).__init__(**kwargs)
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
@@ -1451,12 +1450,14 @@ def test_wcfs_watch_going_back():
 
 
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
+# protection against faulty/slow clients
 @func
 def test_wcfs_pintimeout_kill():
     # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
-    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
+    # timeout until killing is 30 seconds, we add 2 seconds delay for the actual
+    # killing/process shutdown.
+    tkill = 32*time.second
+    t = tDB(timeout=tkill*2); zf = t.zfile
     defer(t.close)
 
     at1 = t.commit(zf, {2:'c1'})
