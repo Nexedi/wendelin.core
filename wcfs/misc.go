@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	log "github.com/golang/glog"
 
@@ -514,4 +515,23 @@ func (root *Root) StatFs() *fuse.StatfsOut {
 
 func panicf(format string, argv ...interface{}) {
 	panic(fmt.Sprintf(format, argv...))
+}
+
+// isProcessAlive returns 'true' if process is still alive after timeout
+// and 'false' otherwise
+func isProcessAlive(pid int, timeout time.Duration) bool {
+	for start := time.Now(); time.Since(start) < timeout; {
+		alive := _isProcessAlive(pid)
+		if !alive {
+			return false
+		}
+	}
+	return true
+}
+
+// _isProcessAlive returns 'true' if process is currently present
+// and 'false' otherwise
+func _isProcessAlive(pid int) bool {
+	killErr := syscall.Kill(pid, syscall.Signal(0))
+	return killErr == nil
 }

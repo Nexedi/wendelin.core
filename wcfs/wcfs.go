@@ -1487,6 +1487,30 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 
 
 	if err != nil {
+		// If timed out, we kill the client:
+		//	SIGBUS => wait for some time; if still alive => SIGKILL
+		if errors.Is(err, ErrTimedOut) {
+			pid := int(w.link.caller.Pid)
+			// TODO kirr: "The kernel then sends SIGBUS on such case with the details about
+			// access to which address generated this error going in si_addr field of
+			// siginfo structure. It would be good if we can mimic that behaviour to a
+			// reasonable extent if possible."
+			err := syscall.Kill(pid, syscall.Signal(syscall.SIGBUS))
+			if err != nil {
+				return err
+			}
+			if isProcessAlive(pid, time.Second * 1) {
+				err = syscall.Kill(pid, syscall.Signal(syscall.SIGKILL))
+				if err != nil {
+					return err
+				}
+			}
+			// We don't return an error, because 'readPinWatchers'
+			// should continue as if nothing would have happened if we
+			// timed out: the other clients should not be affected by
+			// one faulty client.
+			return nil
+		}
 		blkpin.err = err
 		return err
 	}
@@ -1981,6 +2005,8 @@ func (wlink *WatchLink) _handleWatch(ctx context.Context, msg string) error {
 	return err
 }
 
+var ErrTimedOut error = errors.New("timed out")
+
 // sendReq sends wcfs-originated request to client and returns client response.
 func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, err error) {
 	defer xerr.Context(&err, "sendReq") // wlink is already put into ctx by caller
@@ -2026,6 +2052,9 @@ func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, 
 
 	case reply = <-rxq:
 		return reply, nil
+
+	case <-time.After(30 * time.Second):
+		return "", ErrTimedOut
 	}
 }
 
