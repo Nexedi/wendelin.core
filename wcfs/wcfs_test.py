@@ -49,7 +49,6 @@ from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
@@ -1451,7 +1450,7 @@ def test_wcfs_watch_going_back():
 
 
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
+# protection against faulty/slow clients
 @func
 def test_wcfs_pintimeout_kill():
     # adjusted wcfs timeout to kill client who is stuck not providing pin reply
