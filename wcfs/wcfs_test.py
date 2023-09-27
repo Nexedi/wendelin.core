@@ -44,6 +44,7 @@ import sys, os, os.path, subprocess
 from thread import get_ident as gettid
 from time import gmtime
 from errno import EINVAL, ENOTCONN
+from multiprocessing import Process, Value
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
@@ -1463,31 +1464,50 @@ def test_wcfs_pintimeout_kill():
     f = t.open(zf)
     f.assertData(['','','c2'])
 
-    # XXX move into subprocess not to kill whole testing
-    ctx, _ = context.with_timeout(context.background(), 2*tkill)
+    # move into subprocess to avoid killing testing process, in
+    # case test is successful
+    def test(state):
+        try:
+            _test(state)
+        except Exception:
+            state.value = 3
 
-    wl = t.openwatch()
-    wg = sync.WorkGroup(ctx)
-    def _(ctx):
-        # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-        fail("watch request completed (should not as pin handler is stuck)")
-    wg.go(_)
-    def _(ctx):
-        req = wl.recvReq(ctx)
-        assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+    def _test(state):
+        ctx, _ = context.with_timeout(context.background(), 2*tkill)
+        wl = t.openwatch()
+        wg = sync.WorkGroup(ctx)
+        def _(ctx):
+            # send watch. The pin handler won't be replying -> we should never get reply here.
+            wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+            state.value = 1
+        wg.go(_)
+        def _(ctx):
+            req = wl.recvReq(ctx)
+            assert req is not None
+            assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
 
-        # sleep > wcfs pin timeout - wcfs must kill us
-        _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
-        )
-        if _ == 0:
-            raise ctx.err()
-        fail("wcfs did not killed stuck client")
-    wg.go(_)
-    wg.wait()
+            # sleep > wcfs pin timeout - wcfs must kill us
+            _, _rx = select(
+                ctx.done().recv,        # 0
+                time.after(tkill).recv, # 1
+            )
+            if _ == 0:
+                raise ctx.err()
+            state.value = 2
+        wg.go(_)
+        wg.wait()
+
+    state = Value("b", 0) 
+    p = Process(target=test, args=(state,))
+    p.start()
+    p.join()
+    if state.value != 0:
+        state = (
+            "watch request completed (should not as pin handler is stuck)",
+            "wcfs did not killed stuck client",
+            "error in test code",
+        )[state.value - 1]
+        fail(state)
 
 
 # watch with @at > head - must wait for head to become >= at.
