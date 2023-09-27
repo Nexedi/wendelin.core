@@ -674,6 +674,8 @@ type WatchLink struct {
 	txMu    sync.Mutex
 	rxMu    sync.Mutex
 	rxTab   map[/*stream*/uint64]chan string // client replies go via here
+
+	caller fuse.Caller // client that opened the WatchLink
 }
 
 // Watch represents watching for changes to 1 BigFile over particular watch link.
@@ -1489,6 +1491,7 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 		return err
 	}
 
+
 	if ack != "ack" {
 		blkpin.err = fmt.Errorf("expect %q; got %q", "ack", ack)
 		return blkpin.err
@@ -1814,6 +1817,7 @@ func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fus
 		head:   head,
 		byfile: make(map[zodb.Oid]*Watch),
 		rxTab:  make(map[uint64]chan string),
+		caller: fctx.Caller,
 	}
 
 	head.wlinkMu.Lock()
