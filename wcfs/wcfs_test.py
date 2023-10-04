@@ -1451,6 +1451,10 @@ def test_wcfs_watch_going_back():
     wl.close()
 
 
+# TODO extend tests to also cover situation that a non-faulty
+# client continues to be served ok
+# TODO explicitly cover readPinWatchers behaviour with tests
+
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
 @func
 def test_wcfs_pintimeout_kill():
