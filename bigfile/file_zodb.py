@@ -509,17 +509,25 @@ class ZBigFile(LivePersistent):
     # NOTE Live: don't allow us to go to ghost state not to loose ._v_file
     #      which DataManager _ZBigFileH refers to.
 
-    def __init__(self, blksize):
+    def __init__(self, blksize, zblk_fmt=""):
         LivePersistent.__init__(self)
-        self.__setstate__((blksize, LOBTree()))     # NOTE L enough for blk_t
+        self.__setstate__((blksize, LOBTree(), zblk_fmt))     # NOTE L enough for blk_t
+        self.zblk_fmt = zblk_fmt  # Evoke check if zblk_fmt is valid
 
 
-    # state is (.blksize, .blktab)
+    # state is (.blksize, .blktab, .zblk_fmt)
     def __getstate__(self):
-        return (self.blksize, self.blktab)
+        return (self.blksize, self.blktab, self.zblk_fmt)
 
     def __setstate__(self, state):
-        self.blksize, self.blktab = state
+        state_length = len(state)
+        if state_length == 2:  # BBB
+            self.__setstate__(tuple(state) + ("",))
+        elif state_length == 3:
+            # NOTE set _zblk_fmt instead of zblk_fmt to avoid check => ↑ performance
+            self.blksize, self.blktab, self._zblk_fmt = state
+        else:
+            raise RuntimeError("E: Unexpected state length: %s" % state)
         self._v_file = _ZBigFile._new(self, self.blksize)
         self._v_filehset = WeakSet()
 
@@ -546,7 +554,7 @@ class ZBigFile(LivePersistent):
     # store data    dirty page -> ZODB obj
     def storeblk(self, blk, buf):
         zblk = self.blktab.get(blk)
-        zblk_type_write = ZBlk_fmt_registry[ZBlk_fmt_write]
+        zblk_type_write = ZBlk_fmt_registry[self.zblk_fmt or ZBlk_fmt_write]
         # if zblk was absent or of different type - we (re-)create it anew
         if zblk is None  or \
            type(zblk) is not zblk_type_write:
@@ -603,6 +611,19 @@ class ZBigFile(LivePersistent):
         fileh = _ZBigFileH(self, _use_wcfs)
         self._v_filehset.add(fileh)
         return fileh
+
+
+    # zblk_fmt is a property to implement check if user declared zblk_fmt
+    # is valid.
+    @property
+    def zblk_fmt(self):
+        return self._zblk_fmt
+
+    @zblk_fmt.setter
+    def zblk_fmt(self, zblk_fmt):
+        if zblk_fmt and zblk_fmt not in ZBlk_fmt_registry:
+            raise RuntimeError('E: Unknown ZBlk format %r' % zblk_fmt)
+        self._zblk_fmt = zblk_fmt
 
 
     # _default_use_wcfs returns whether default virtmem setting is to use wcfs or not.

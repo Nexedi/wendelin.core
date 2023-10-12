@@ -3,7 +3,10 @@
 package pycompat
 
 import (
+	"fmt"
 	"math/big"
+
+	pickle "github.com/kisielk/og-rek"
 )
 
 // Int64 tries to convert unpickled Python value to int64.
@@ -22,4 +25,22 @@ func Int64(xv interface{}) (v int64, ok bool) {
         }
 
         return 0, false
+}
+
+
+// Xstrbytes verifies and extacts str|bytes from unpickled value.
+func Xstrbytes(x interface{}) (string, error) {
+	var s string
+	switch x := x.(type) {
+	default:
+		return "", fmt.Errorf("expect str|bytes; got %T", x)
+
+	case string:
+		s = x
+
+	case pickle.Bytes:
+		s = string(x)
+	}
+
+	return s, nil
 }
