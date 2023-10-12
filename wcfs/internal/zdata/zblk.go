@@ -354,32 +354,37 @@ func (zb *ZBlk1) LoadBlkData(ctx context.Context) (_ []byte, _ zodb.Tid, err err
 type ZBigFile struct {
 	zodb.Persistent
 
-	// state: (.blksize, .blktab)
-	blksize int64
-	blktab  *btree.LOBTree // {}  blk -> ZBlk*(blkdata)
+	// state: (.blksize, .blktab, .zblk_fmt)
+	blksize  int64
+	blktab   *btree.LOBTree // {}  blk -> ZBlk*(blkdata)
+	zblk_fmt string
 }
 
 type zBigFileState ZBigFile // hide state methods from public API
 
 // DropState implements zodb.Ghostable.
 func (bf *zBigFileState) DropState() {
-	bf.blksize = 0
-	bf.blktab  = nil
+	bf.blksize  = 0
+	bf.blktab   = nil
+	bf.zblk_fmt = ""
 }
 
 // PyGetState implements zodb.PyStateful.
 func (bf *zBigFileState) PyGetState() interface{} {
-	return pickle.Tuple{bf.blksize, bf.blktab}
+	return pickle.Tuple{bf.blksize, bf.blktab, bf.zblk_fmt}
 }
 
 // PySetState implements zodb.PyStateful.
 func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 	t, ok := pystate.(pickle.Tuple)
 	if !ok {
-		return fmt.Errorf("expect [2](); got %s", xzodb.TypeOf(pystate))
+		return fmt.Errorf("expect [2|3](); got %s", xzodb.TypeOf(pystate))
 	}
-	if len(t) != 2 {
-		return fmt.Errorf("expect [2](); got [%d]()", len(t))
+	// BBB: we either accept data before adding zblk_fmt to state
+	// (lent==2) or data after adding zblk_fmt to state (lent==3).
+	lent := len(t)
+	if lent != 2 && lent != 3 {
+		return fmt.Errorf("expect [2|3](); got [%d]()", len(t))
 	}
 
 	blksize, ok := pycompat.Int64(t[0])
@@ -397,6 +402,15 @@ func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 
 	bf.blksize = blksize
 	bf.blktab  = blktab
+
+	if lent != 2 {
+		zblk_fmt, err := pycompat.Xstrbytes(t[2])
+		if err != nil {
+			return fmt.Errorf("zblk_fmt: expect str; got %s", xzodb.TypeOf(t[2]))
+		}
+		bf.zblk_fmt = zblk_fmt
+	}
+
 	return nil
 }
 
