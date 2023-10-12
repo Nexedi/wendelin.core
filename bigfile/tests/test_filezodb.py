@@ -690,3 +690,29 @@ def test_bigfile_zblk1_zdata_reuse():
     assert len(zdata_v1) == len(zdata_v2)
     for i in range(len(zdata_v1)):
         assert zdata_v1[i] is zdata_v2[i]
+
+
+# test that explicitly setting the ZBlk format works
+@func
+def test_bigfile_set_zblk_fmt():
+    # ensure ZBlk_fmt_write is ZBlk0 during this test,
+    # so that we can be sure the global default is overridden
+    # by an explicitly set value during ZBigFile initialization
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+    file_zodb.ZBlk_fmt_write = 'ZBlk0'
+    def _():
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
+
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile7'] = f = ZBigFile(blksize, zblk_fmt="ZBlk1")
+    transaction.commit()
+
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    Blk(vma, 0)[:] = 1
+    transaction.commit()
+
+    assert type(f.blktab[0]) is file_zodb.ZBlk1
