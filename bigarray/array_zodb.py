@@ -51,14 +51,14 @@ class ZBigArray(BigArray,
 
 
     # XXX default blksize hardcoded
-    def __init__(self, shape, dtype, order='C', blksize=2*1024*1024):
+    def __init__(self, shape, dtype, order='C', blksize=2*1024*1024, zblk_fmt=""):
         LivePersistent.__init__(self)
         # NOTE BigArray is cooperative to us - it names all helping (= not needing
         # to be saved) data members starting with _v_. Were it otherwise, we
         # could not inherit from BigArray and would need to keep its instance
         # in e.g. ._v_array helper and redirect all BigArray method from us to it.
         BigArray._init0(self, shape, dtype, order)
-        self.zfile = ZBigFile(blksize)
+        self.zfile = ZBigFile(blksize, zblk_fmt=zblk_fmt)
         self._v_fileh = None
 
 
