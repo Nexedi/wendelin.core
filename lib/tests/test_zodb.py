@@ -557,6 +557,8 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         #   Different SSL paths
         ("neos://ca=a&key=b&cert=c@xyz:1/cluster", "neos://xyz:1/cluster"),
         ("neos://ca=α&key=β&cert=γ@xyz:1/cluster", "neos://xyz:1/cluster"),
+        #   Client parameters
+        ("neo://127.0.0.1:1234/cluster#compress=True", "neo://127.0.0.1:1234/cluster"),
     ],
 )
 def test_zurl_normalize_main(zurl, zurl_norm_ok):
