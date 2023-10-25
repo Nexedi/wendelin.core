@@ -388,7 +388,8 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags)
     BUG_ON(fileh->writeout_inprogress);
     fileh->writeout_inprogress = 1;
 
-    /* pages are stored (if stored) in sorted order */
+    /* pages are stored (if stored) in sorted order
+     * NOTE writeout of ZBlk format 'auto' relies on this */
     if (flags & WRITEOUT_STORE)
         list_sort(&fileh->dirty_pages, hpage_indirty_cmp_bypgoffset, NULL);
 

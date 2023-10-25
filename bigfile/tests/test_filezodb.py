@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2023  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry
+from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry, _ZBlk_auto
 from wendelin.bigfile import file_zodb, ram_reclaim
 from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import LivePersistent, dbclose
@@ -631,6 +631,8 @@ def test_bigfile_filezodb_fmt_change():
         for dst_fmt, dst_type in ZBlk_fmt_registry.items():
             if src_fmt == dst_fmt:
                 continue    # skip checking e.g. ZBlk0 -> ZBlk0
+            if src_type is _ZBlk_auto   or  dst_type is _ZBlk_auto:
+                continue    # skip checking e.g. * -> auto
 
             file_zodb.ZBlk_fmt_write = src_fmt
             struct.pack_into('p', vma, 0, b(src_fmt))
@@ -690,3 +692,34 @@ def test_bigfile_zblk1_zdata_reuse():
     assert len(zdata_v1) == len(zdata_v2)
     for i in range(len(zdata_v1)):
         assert zdata_v1[i] is zdata_v2[i]
+
+
+# Minimal test to ensure normal operations work as expected with zblk format 'auto'.
+@func
+def test_bigfile_zblk_fmt_auto():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+
+    # set ZBlk_fmt_write to 'auto' for this test
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+    file_zodb.ZBlk_fmt_write = 'auto'
+    def _():
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
+
+    root['zfile8'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    b = Blk(vma, 0)
+    b[:] = 1
+    transaction.commit()
+
+    assert (b == 1).all()
+
+    b[0] = 2
+    transaction.commit()
+
+    assert b[0] == 2

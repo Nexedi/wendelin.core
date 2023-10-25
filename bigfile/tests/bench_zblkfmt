@@ -1,0 +1,241 @@
+#!/usr/bin/env python
+# Copyright (C) 2023  Nexedi SA and Contributors.
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# You can also Link and Combine this program with other software covered by
+# the terms of any of the Free Software licenses or any of the Open Source
+# Initiative approved licenses and Convey the resulting work. Corresponding
+# source of such a combination shall include the source code for all other
+# software used.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+# See https://www.nexedi.com/licensing for rationale and options.
+
+# Test to compare disk-space and access-speed of the different ZBlk format options:
+#
+#   - ZBlk0
+#   - ZBlk1
+#   - auto
+
+from __future__ import print_function, absolute_import, division
+
+import os
+import random
+import tempfile
+import timeit
+import shutil
+import multiprocessing
+from time import sleep
+ms = 1e-3
+
+from golang import defer, func
+import numpy as np
+import transaction
+import ZODB, ZODB.FileStorage
+
+from wendelin.bigarray.array_zodb import ZBigArray
+from wendelin.bigfile import file_zodb
+
+
+# IWriteWorkLoad represents write workload type:
+class IWriteWorkLoad:
+    # do_write should perform all write operations of the workload on the
+    # database associated with root object.
+    def do_write(wrk, root):  raise NotImplementedError()
+
+    # args should be set to string with arguments used to parameterize this workload.
+    args = ''
+
+
+# benchwrk benchmarks database size and read speed under write workload wrk.
+#
+# the benchmark is run for all supported ZBlk formats.
+def benchwrk(wrk):
+    # run each benchmark in separate process so that there is no chance they
+    # somehow affect each other.
+    zblk_fmtv = list(file_zodb.ZBlk_fmt_registry.keys())
+    zblk_fmtv.sort()
+    for zblk_fmt in zblk_fmtv:
+        def _():
+            file_zodb.ZBlk_fmt_write = zblk_fmt
+            _benchwrk(wrk)
+        p = multiprocessing.Process(target=_)
+        p.start()
+        p.join()
+
+@func
+def _benchwrk(wrk):
+    tmpd = tempfile.mkdtemp('', 'zblkbench')
+    def _():
+        shutil.rmtree(tmpd)
+    defer(_)
+
+    storage_path = '%s/data.fs' % tmpd
+
+    # with_db runs f(root) on a freshly-opened connection to test database.
+    traceload = False
+    delayload = False
+    @func
+    def with_db(f):
+        storage = ZODB.FileStorage.FileStorage(storage_path)
+        defer(storage.close)
+
+        # simulate loading latency as actually seen on NEO.
+        # there I was seeing latencies up to _1_ millisecond, but even with
+        # "modest" 0.2 ms it really shows in the figures.
+        #
+        # (activated only during read benchmark to avoid wasting time
+        # while preparing data)
+        tloaddelay = 0.2 * ms
+        stor_load       = storage.load
+        stor_loadBefore = storage.loadBefore
+        def loadBefore(oid, tid):
+            if traceload:
+                print('# loadBefore %r %r' % (oid, tid))
+            if delayload:
+                sleep(tloaddelay)
+            return stor_loadBefore(oid, tid)
+        def load(oid):
+            # load is used on plain ZODB4; ZODB5 and ZODB4-wc2 use loadBefore only
+            if traceload:
+                print('# load %r' % (oid,))
+            # see loadBefore above
+            if delayload:
+                sleep(tloaddelay)
+            return stor_load(oid)
+        storage.loadBefore = loadBefore
+        storage.load       = load
+
+        db = ZODB.DB(storage)   ; defer(db.close)
+        connection = db.open()  ; defer(connection.close)
+        root = connection.root
+
+        f(root)
+
+    # create test database with empty array, then run specified write workload
+    # and see how big ZODB size is.
+    @with_db
+    def _(root):
+        root.A = ZBigArray(shape=[0], dtype=int)
+        transaction.commit()
+
+        random.seed(10)
+        wrk.do_write(root)
+        transaction.commit()    # just in case
+
+    def emitbench(name, data):
+        wrkname = wrk.__class__.__name__
+        benchprefix = "Benchmark%s%s/zblk=%s/%s" % (wrkname, name, file_zodb.ZBlk_fmt_write, wrk.args)
+        print('%s\t%s' % (benchprefix, data))
+    emitbench("Size", "1\t%.1f MB" % (os.path.getsize(storage_path) / 1E6))
+
+    # now benchmark random reads.
+    delayload = True
+    @with_db
+    def _(root):
+        A = root.A
+        blklen = arr_blklen(A)
+
+        # make sure we never read the same block twice - else we will start to
+        # measure time of hot access without any ZODB loading
+        random.seed(10)
+        blkv = list(range(len(A) // blklen))
+        random.shuffle(blkv)
+
+        a = A[:]
+        def _():
+            blk = blkv.pop()
+            # force load of ZBlk data via reading ndarray element from inside the block
+            a[blk*blklen]
+
+        niter = min(len(blkv), 10)
+        assert niter >= 3, niter
+        taccess = timeit.timeit(_, number=niter) / niter
+        emitbench("RandRead", "%d %.3f ms/blk" % (niter, taccess/ms))
+
+
+# Append simulates workload when data are appended in chunks to end of array.
+class Append(IWriteWorkLoad):
+    def __init__(wrk, change_count, change_percentage_set):
+        wrk.change_count = change_count
+        wrk.change_percentage_set = change_percentage_set
+        wrk.args = "change_count=%d/change_percentage_set=%s" % (
+                                    change_count, repr(change_percentage_set).replace(' ',''))
+
+    def do_write(wrk, root):
+        A = root.A
+        for _ in range(wrk.change_count):
+            change_percentage = random.choice(wrk.change_percentage_set)
+            size = int(arr_blklen(A) * change_percentage)
+            A.append(randarr(size))
+            transaction.commit()
+
+
+# RandWrite simulates workload when data is written randomly in the array.
+class RandWrite(IWriteWorkLoad):
+    def __init__(wrk, arrsize, change_count, change_percentage_set):
+        wrk.arrsize = arrsize
+        wrk.change_count = change_count
+        wrk.change_percentage_set = change_percentage_set
+        wrk.args = "arrsize=%d/change_count=%d/change_percentage_set=%s" % (
+                                    arrsize, change_count,
+                                    repr(change_percentage_set).replace(' ',''))
+
+    def do_write(wrk, root):
+        A = root.A
+        A.append([0]*wrk.arrsize)
+        transaction.commit()
+
+        for _ in range(wrk.change_count):
+            change_percentage = random.choice(wrk.change_percentage_set)
+            setrand(A, change_percentage)
+            transaction.commit()
+
+
+# Utility functions
+
+# randarr returns random [size]int array.
+def randarr(size):
+    return np.array([random.randint(1, 1000) for _ in range(size)])
+
+# setrand makes random write access to ZBigArray A.
+#
+# The amount of changed data is fraction of underlying block size.
+# Only one block is changed.
+def setrand(A, change_percentage):
+    blklen = arr_blklen(A)
+    change_size = int(blklen * change_percentage)
+    blk_index = random.randrange(0, len(A) // blklen)
+    blk_offset = blk_index * blklen
+    # Ensure we don't always only change the beginning of a block
+    blk_offset = blk_offset + random.randint(0, blklen - change_size)
+    A[blk_offset:blk_offset+change_size][:] = randarr(change_size)
+
+# arr_blklen returns how many ZBigArray items constitute up a block in underlying ZBigFile.
+def arr_blklen(A):
+    assert isinstance(A, ZBigArray)
+    assert len(A.shape) == 1
+    assert A.zfile.blksize  % A.itemsize == 0
+    return A.zfile.blksize // A.itemsize
+
+
+# ---- benchmarks we want to run ----
+
+def main():
+    _ = benchwrk
+
+    _(Append(            500, [0.014]))     # appends of ~ 30K
+    _(RandWrite(1000000, 500, [0.2]))       # small change size, so that heuristic always uses ZBlk1
+    _(RandWrite(1000000, 500, [1]))         # big change size,   so that heuristic always uses ZBlk0
+    _(RandWrite(1000000, 500, [0.2, 1]))    # Mix between change size so that heuristic switches
+                                            # between ZBlk0 and ZBlk1
+
+
+if __name__ == '__main__':
+    main()

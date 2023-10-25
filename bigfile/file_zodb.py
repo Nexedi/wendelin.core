@@ -83,13 +83,18 @@ changes. "Small" here means something like 1-10000 bytes per transaction as
 larger changes become comparable to 2M block size and are handled efficiently
 out of the box. Until the problem is fixed on ZODB server side, wendelin.core
 provides on-client workaround in the form of specialized block format, and
-users have to explicitly indicate via environment variable that their workload
-is "small changes" if they prefer to prioritize database size over access
-speed::
+users can explicitly indicate via environment variable that their workload is
+either "big changes", if they prefer to prioritize access speed, or "small
+changes" if they prefer to prioritize database size over access speed. There is
+also "auto" mode that tries to heuristically use both ZBlk0 and ZBlk1 depending
+on change pattern and works relatively good regarding both access speed and
+database size for append-like workloads::
 
   $WENDELIN_CORE_ZBLK_FMT
-      ZBlk0             fast reads      (default)
+      ZBlk0             fast reads
       ZBlk1             small changes
+      auto  (default)   heuristically use either ZBlk0 or ZBlk1
+                        depending on change pattern
 
 Description of block formats follow:
 
@@ -159,7 +164,7 @@ will be our future approach after we teach NEO about object deduplication.
 
 from wendelin.bigfile import WRITEOUT_STORE, WRITEOUT_MARKSTORED
 from wendelin.bigfile._file_zodb import _ZBigFile
-from wendelin.lib.mem import bzero, memcpy
+from wendelin.lib.mem import bzero, memcpy, memdelta
 from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
@@ -476,10 +481,14 @@ class ZBlk1(ZBlkBase):
 # backward compatibility (early versions wrote ZBlk0 named as ZBlk)
 ZBlk = ZBlk0
 
+# _ZBlk_auto indicates to heuristically select ZBlk format
+_ZBlk_auto = object()
+
 # format-name -> blk format type
 ZBlk_fmt_registry = {
     'ZBlk0':    ZBlk0,
     'ZBlk1':    ZBlk1,
+    'auto':     _ZBlk_auto,
 }
 
 # format for updated blocks
@@ -547,6 +556,11 @@ class ZBigFile(LivePersistent):
     def storeblk(self, blk, buf):
         zblk = self.blktab.get(blk)
         zblk_type_write = ZBlk_fmt_registry[ZBlk_fmt_write]
+        if zblk_type_write is _ZBlk_auto:  # apply heuristic
+            zblk_type_write = self._zblk_fmt_heuristic(zblk, blk, buf)
+        self._setzblk(blk, zblk, buf, zblk_type_write)
+
+    def _setzblk(self, blk, zblk, buf, zblk_type_write):  # helper
         # if zblk was absent or of different type - we (re-)create it anew
         if zblk is None  or \
            type(zblk) is not zblk_type_write:
@@ -565,6 +579,72 @@ class ZBigFile(LivePersistent):
             # ZBlk1 or to corresponding zfile.
             zblk._p_changed = True
         zblk.bindzfile(self, blk)
+
+
+    # Heuristically determine zblk format by optimizing
+    # storage-space/access-speed ratio. Both can't be ideal, see
+    # module docstring: "Due to weakness of current ZODB storage
+    # servers, wendelin.core cannot provide at the same time both
+    # fast reads and small database size growth ..."
+    def _zblk_fmt_heuristic(self, zblk, blk, buf):
+        # see if we are doing a "small append" like change
+        # load previous data and compute the difference along the way
+        new_data = bytes(buf).rstrip(b'\0')
+        if zblk is None:
+            old_data = b''
+        else:
+            assert not zblk._p_changed
+            old_data  = bytes(zblk.loadblkdata()).rstrip(b'\0')
+        ndelta = memdelta(old_data, new_data)
+
+        try:
+            last_blk = self.blktab.maxKey()
+        except ValueError: # empty tree
+            last_blk = -1
+
+        append_oldblk = ((blk == last_blk)   and (new_data[:len(old_data)] == old_data))
+        append_newblk = ((blk == last_blk+1) and (len(old_data) == 0))
+
+        append = (append_oldblk or append_newblk)
+        small  = (ndelta < 0.5*self.blksize)
+        filled = (len(new_data) == self.blksize)  # filled full with non-zeros at the end
+
+        # append - migrate previously filled-up block to ZBlk0 for fast reads
+        #        - for current block use ZBlk1 if the append is small and not fully filled, and ZBlk0 otherwise
+        #
+        # do the migration of previous block only if it is also changed in
+        # current transaction. This preserves the invariant that "transaction
+        # changes ZBlk objects only for modified blocks of the file".
+        # NOTE: this misses a case when append stops exactly on blocks boundary
+        # after appending some zeros. For now we ignore such case as improbable.
+        #
+        # For the implementation we rely on that zfileh.dirty_writeout()
+        # invokes storeblk in ascending order of blk, so that when we are here,
+        # we can be sure that if previous block is also modified, then .blktab
+        # already has corresponding entry for it and the entry is changed.
+        if append:
+            if append_newblk:
+                zblk_prev = self.blktab.get(blk-1)
+                if zblk_prev is not None  and   \
+                   zblk_prev._p_changed   and   \
+                   type(zblk_prev) is not ZBlk0:
+                    # gather data prepared for previous block
+                    # NOTE: loadblkdata throws away all changes inside zblk_prev
+                    zblk_prev_data = zblk_prev.loadblkdata()
+                    # but we re-save that updated data immediately after
+                    self._setzblk(blk-1, zblk_prev, zblk_prev_data, ZBlk0)
+            return ZBlk1 if (small and not filled) else ZBlk0
+
+        # all other changes - use ZBlk1 if the change is small and ZBlk0 otherwise
+        else:
+            if small:
+                # TODO(kirr): "to support sporadic small changes over initial big fillup [...]
+                # we could introduce e.g. a ZBlkδ object, which would refer to base
+                # underlying ZBlk object and add "patch" information on top of that [...]."
+                # See https://lab.nexedi.com/nexedi/wendelin.core/merge_requests/20#note_196084
+                return ZBlk1
+            else:
+                return ZBlk0
 
 
     # invalidate data   .blktab[blk] invalidated -> invalidate page
