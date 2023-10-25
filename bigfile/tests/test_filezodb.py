@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2023  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -716,3 +716,27 @@ def test_bigfile_set_zblk_fmt():
     transaction.commit()
 
     assert type(f.blktab[0]) is file_zodb.ZBlk1
+
+
+# Minimal test to ensure normal operations work as expected
+# with zblk fmt 'h'
+@func
+def test_bigfile_zblk_fmt_heuristic():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile8'] = f = ZBigFile(blksize, zblk_fmt="h")
+    transaction.commit()
+
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    b = Blk(vma, 0)
+    b[:] = 1
+    transaction.commit()
+
+    assert (b == 1).all()
+
+    b[0] = 2
+    transaction.commit()
+
+    assert b[0] == 2

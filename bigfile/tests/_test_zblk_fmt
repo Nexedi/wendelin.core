@@ -1,0 +1,171 @@
+# Copyright (C) 2023  Nexedi SA and Contributors.
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# You can also Link and Combine this program with other software covered by
+# the terms of any of the Free Software licenses or any of the Open Source
+# Initiative approved licenses and Convey the resulting work. Corresponding
+# source of such a combination shall include the source code for all other
+# software used.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+# See https://www.nexedi.com/licensing for rationale and options.
+
+# Test to compare disk-space and access-speed of the different ZBlk format options:
+#
+# 	- ZBlk0
+# 	- ZBlk1
+# 	- h
+
+import os
+import random
+import resource
+import tempfile
+import timeit
+import sys
+from time import time, sleep
+
+# Add relative module path, to run tests on local code
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '.'))
+
+from golang import defer, func
+import numpy as np
+import transaction
+import ZODB, ZODB.FileStorage
+
+from wendelin.bigarray.array_zodb import ZBigArray
+
+ms = 1e-3
+
+random.seed(10)
+
+# Avoid error due to too many opened file descriptors.
+cur_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+new_limit = (cur_limit[1], cur_limit[1])
+resource.setrlimit(resource.RLIMIT_NOFILE, new_limit)
+
+storage_path = tempfile.mktemp(prefix='zblkbenchmark')
+
+# Declare test parameters.
+zblk_fmt = os.environ.get('zblk_fmt', 'h')
+change_percentage_set = tuple(
+    float(n) for n in os.environ.get('change_percentage_set', '0.2').split(','))
+change_count = int(os.environ.get('change_count', '1000'))
+arrsize = int(os.environ.get('arrsize', '1000000'))
+change_type = os.environ.get('change_type', 'setitem')  # setitem or append
+
+# Utiliy functions
+
+def randarr(size=1000000):
+    return np.array([[random.randint(1, 1000), random.randint(1, 1000)] for _ in range(size)])
+
+def setrand(A, blksize_length, change_percentage=1):
+    size = int(blksize_length * change_percentage)
+    blk_index = random.randint(0, int(arrsize / blksize_length) - 1)
+    blk_offset = blk_index * blksize_length
+    # Ensure we don't always only change the beginning of a block
+    blk_offset = blk_offset + random.randint(0, blksize_length - size)
+    A[blk_offset:blk_offset+size][:] = randarr(size)
+    transaction.commit()
+
+def accessrand(A):
+    # force load of ZBlk data via reading ndarray element
+    A[random.randint(0, arrsize), 0]
+
+def fillup(root):
+    root.A.append([[0, 0] for _ in range(arrsize)])
+    transaction.commit()
+
+def change_setitem(root):
+    A = root.A[:]
+    blksize_length = get_blksize_length(root)
+    for _ in range(change_count):
+        change_percentage = random.choice(change_percentage_set)
+        setrand(A, blksize_length, change_percentage)
+        transaction.commit()
+
+def change_append(root):
+    A = root.A
+    blksize_length = get_blksize_length(root)
+    for _ in range(change_count):
+        change_percentage = random.choice(change_percentage_set)
+        size = int(blksize_length * change_percentage)
+        A.append(randarr(size))
+        transaction.commit()
+
+def get_blksize_length(root):
+    return root.A.zfile.blksize / 16
+
+traceload = False
+delayload = False
+@func
+def root(func):
+    storage = ZODB.FileStorage.FileStorage(storage_path)
+    stor_load       = storage.load
+    stor_loadBefore = storage.loadBefore
+    def loadBefore(oid, tid):
+        if traceload:
+            print 'loadBefore %r %r' % (oid, tid)
+        # simulate loading latency as actually seen on NEO.
+        # there I was seeing latencies up to _1_ millisecond, but even with
+        # "modest" 0.2 ms it really shows in the figures.
+        #
+        # (activated only during read benchmark to avoid avoid wasting time
+        # while preparing data)
+        if delayload:
+            sleep(0.2 * ms)
+        return stor_loadBefore(oid, tid)
+    def load(oid):
+        print 'load %r' % oid
+        1/0 # should not call load at all
+        return stor_load(oid)
+    storage.loadBefore = loadBefore
+    storage.load       = load
+
+    db = ZODB.DB(storage)
+    connection = db.open()
+    root = connection.root
+
+    defer(connection.close)
+    defer(db.close)
+    defer(storage.close)
+
+    func(root)
+
+@root
+def setup(root):
+    root.A = A = ZBigArray(shape=[1, 2], dtype=int, zblk_fmt=zblk_fmt)
+    transaction.commit()
+
+if change_type == "setitem":
+    root(fillup)
+    root(change_setitem)
+elif change_type == "append":
+    root(change_append)
+else:
+    raise NotImplementedError(change_type)
+
+print("\tZODB storage size: %s MB" % (os.path.getsize(storage_path) / float(10**6)))
+
+@root
+def access(root):
+    global traceload, delayload
+    a = root.A[:]   # create BigArray -> ndarray view only once
+
+    delayload = True
+    def _():
+        t0 = time()
+        accessrand(a)
+        t1 = time()
+    random.seed(10)
+
+    # niter should be small to avoid getting into situation when most blocks becomes loaded into cache
+    # and we start to measure time of hot access without any ZODB loading
+    niter=10
+    taccess = timeit.timeit(_, number=niter) / niter
+    print("\tAccess time: %.3f ms / blk  (initially cold; might get warmer during benchmark)" % (taccess/ms))
