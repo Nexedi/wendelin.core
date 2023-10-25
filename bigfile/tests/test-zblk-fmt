@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+# Copyright (C) 2023  Nexedi SA and Contributors.
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# You can also Link and Combine this program with other software covered by
+# the terms of any of the Free Software licenses or any of the Open Source
+# Initiative approved licenses and Convey the resulting work. Corresponding
+# source of such a combination shall include the source code for all other
+# software used.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+# See https://www.nexedi.com/licensing for rationale and options.
+
+# Test to compare disk-space and access-speed of the different ZBlk format options:
+#
+# 	- ZBlk0
+# 	- ZBlk1
+# 	- h
+# 
+# The heuristic 'h' should behave as good as ZBlk0 in case of wide changes
+# and as good as ZBlk1 in case of small changes.
+
+function test {
+
+	function t {
+		zblkfmt=$1
+		echo "Run tests with format $zblkfmt:"
+		echo ""
+		export zblk_fmt=$zblkfmt
+		python bigfile/tests/_test_zblk_fmt
+		echo ""
+		echo ""
+	}
+
+	change_size_set=$1
+	change_count=$2
+	arrsize=$3
+
+	echo "---------------------------------------------"
+	echo "---------------------------------------------"
+	echo "Set change_size_set to $change_size_set"
+	echo "Set change_count to $change_count"
+	echo "Set arrsize to $arrsize"
+
+	echo ""
+
+	export change_size_set=$change_size_set
+	export change_count=$change_count
+	export arrsize=$arrsize
+
+	t h
+	t ZBlk0
+	t ZBlk1
+
+	echo ""
+	echo "---------------------------------------------"
+	echo "---------------------------------------------"
+	echo ""
+}
+
+echo "Use only a very small change size, so that heuristic always uses ZBlk1"
+test 20 500 1000000
+
+echo "Use only a very big change size, so that heuristic always uses ZBlk0"
+test 200000 500 1000000
+
+echo "Mix between change size so that heuristic switches between ZBlk0 and ZBlk1"
+test 20,200000 500 1000000

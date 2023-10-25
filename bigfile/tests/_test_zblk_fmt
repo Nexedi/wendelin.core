@@ -1,0 +1,118 @@
+# Copyright (C) 2023  Nexedi SA and Contributors.
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# You can also Link and Combine this program with other software covered by
+# the terms of any of the Free Software licenses or any of the Open Source
+# Initiative approved licenses and Convey the resulting work. Corresponding
+# source of such a combination shall include the source code for all other
+# software used.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+# See https://www.nexedi.com/licensing for rationale and options.
+
+# Test to compare disk-space and access-speed of the different ZBlk format options:
+#
+# 	- ZBlk0
+# 	- ZBlk1
+# 	- h
+# 
+# The heuristic 'h' should behave as good as ZBlk0 in case of wide changes
+# and as good as ZBlk1 in case of small changes.
+
+import os
+import random
+import resource
+import tempfile
+import timeit
+import sys
+
+# Add relative module path, to run tests on local code
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '.'))
+
+from golang import defer, func
+import numpy as np
+import transaction
+import ZODB, ZODB.FileStorage
+
+from wendelin.bigarray.array_zodb import ZBigArray
+
+random.seed(10)
+
+# Avoid error due to too many opened file descriptors.
+cur_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+new_limit = (cur_limit[1], cur_limit[1])
+resource.setrlimit(resource.RLIMIT_NOFILE, new_limit)
+
+storage_path = tempfile.mktemp()
+
+# Declare test parameters.
+zblk_fmt = os.environ.get('zblk_fmt', 'h')
+change_size_set = tuple(int(n) for n in os.environ.get('change_size_set', '20').split(','))
+change_count = int(os.environ.get('change_count', '1000'))
+arrsize = int(os.environ.get('arrsize', '1000000'))
+
+# Utiliy functions
+
+def randarr(size=1000000):
+    return np.array([[random.randint(1, 1000), random.randint(1, 1000)] for _ in range(size)])
+
+def setrand(A, size=20):
+    A[0:size][:] = randarr(size)
+    transaction.commit()
+
+def accessrand(A, size=1000):
+    n = random.randint(0, arrsize - size)
+    a = A[n:n+size]
+
+@func
+def root(func):
+    storage = ZODB.FileStorage.FileStorage(storage_path)
+    db = ZODB.DB(storage)
+    connection = db.open()
+    root = connection.root
+
+    defer(connection.close)
+    defer(db.close)
+    defer(storage.close)
+
+    func(root)
+
+@root
+def setup(root):
+    root.A = A = ZBigArray(shape=[1, 2], dtype=int, zblk_fmt=zblk_fmt)
+    transaction.commit()
+
+@root
+def fillup(root):
+    A = root.A
+    values = randarr(arrsize)
+    A.append(values)
+    transaction.commit()
+
+@root
+def change(root):
+    A = root.A
+    for _ in range(change_count):
+        change_size = random.choice(change_size_set)
+        setrand(A, change_size)
+        transaction.commit()
+
+def access():
+    @root
+    def _(root):
+        accessrand(root.A)
+
+def statistics():
+    print("\tZODB storage size: %s MB" % (os.path.getsize(storage_path) / float(10**6)))
+
+    random.seed(10)
+    time = timeit.timeit("access()", "from __main__ import access", number=5000)
+    print("\tAccess time: %s" % time)
+
+statistics()

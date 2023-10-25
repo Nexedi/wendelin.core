@@ -354,37 +354,42 @@ func (zb *ZBlk1) LoadBlkData(ctx context.Context) (_ []byte, _ zodb.Tid, err err
 type ZBigFile struct {
 	zodb.Persistent
 
-	// state: (.blksize, .blktab, .zblk_fmt)
-	blksize  int64
-	blktab   *btree.LOBTree // {}  blk -> ZBlk*(blkdata)
-	zblk_fmt string
+	// state: (.blksize, .blktab, .zblk_fmt, .zblk_fmt0_counter, .zblk_fmt1_counter)
+	blksize           int64
+	blktab            *btree.LOBTree // {}  blk -> ZBlk*(blkdata)
+	zblk_fmt          string
+	zblk_fmt0_counter int64
+	zblk_fmt1_counter int64
 }
 
 type zBigFileState ZBigFile // hide state methods from public API
 
 // DropState implements zodb.Ghostable.
 func (bf *zBigFileState) DropState() {
-	bf.blksize  = 0
-	bf.blktab   = nil
-	bf.zblk_fmt = ""
+	bf.blksize            = 0
+	bf.blktab             = nil
+	bf.zblk_fmt           = ""
+	bf.zblk_fmt0_counter  = 0
+	bf.zblk_fmt1_counter  = 0
 }
 
 // PyGetState implements zodb.PyStateful.
 func (bf *zBigFileState) PyGetState() interface{} {
-	return pickle.Tuple{bf.blksize, bf.blktab, bf.zblk_fmt}
+	return pickle.Tuple{bf.blksize, bf.blktab, bf.zblk_fmt, bf.zblk_fmt0_counter, bf.zblk_fmt1_counter}
 }
 
 // PySetState implements zodb.PyStateful.
 func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 	t, ok := pystate.(pickle.Tuple)
 	if !ok {
-		return fmt.Errorf("expect [2|3](); got %s", xzodb.TypeOf(pystate))
+		return fmt.Errorf("expect [2|3|5](); got %s", xzodb.TypeOf(pystate))
 	}
 	// BBB: we either accept data before adding zblk_fmt to state
-	// (lent==2) or data after adding zblk_fmt to state (lent==3).
+	// (lent==2) or data after adding zblk_fmt to state (lent==3) or
+	// data after adding zblk_fmt counter (lent==5).
 	lent := len(t)
-	if lent != 2 && lent != 3 {
-		return fmt.Errorf("expect [2|3](); got [%d]()", len(t))
+	if lent != 2 && lent != 3 && lent != 5 {
+		return fmt.Errorf("expect [2|3|5](); got [%d]()", len(t))
 	}
 
 	blksize, ok := pycompat.Int64(t[0])
@@ -409,6 +414,21 @@ func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 			return fmt.Errorf("zblk_fmt: expect str; got %s", xzodb.TypeOf(t[2]))
 		}
 		bf.zblk_fmt = zblk_fmt
+
+		if lent == 5 {
+			zblk_fmt0_counter, ok := pycompat.Int64(t[3])
+			if !ok {
+				return fmt.Errorf("zblk_fmt0_counter: expect integer; got %s", xzodb.TypeOf(t[3]))
+			}
+
+			zblk_fmt1_counter, ok := pycompat.Int64(t[4])
+			if !ok {
+				return fmt.Errorf("zblk_fmt1_counter: expect integer; got %s", xzodb.TypeOf(t[4]))
+			}
+
+			bf.zblk_fmt0_counter = zblk_fmt0_counter
+			bf.zblk_fmt1_counter = zblk_fmt1_counter
+		}
 	}
 
 	return nil

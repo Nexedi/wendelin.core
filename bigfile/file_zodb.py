@@ -414,14 +414,7 @@ class ZBlk1(ZBlkBase):
                 break
 
         # scan over buf and update/delete changed chunks
-        for start in range(0, len(buf), CHUNKSIZE):
-            data = buf[start:start+CHUNKSIZE]   # FIXME copy on py2
-            # make sure data is bytes
-            # (else we cannot .rstrip() it below)
-            if not isinstance(data, bytes):
-                data = bytes(data)              # FIXME copy on py3
-            # trim trailing \0
-            data = data.rstrip(b'\0')           # FIXME copy
+        for data, start in _buf_iterator(buf, CHUNKSIZE):
             chunk = chunktab.get(start)
 
             # all 0 -> make sure to remove chunk
@@ -511,22 +504,23 @@ class ZBigFile(LivePersistent):
 
     def __init__(self, blksize, zblk_fmt=""):
         LivePersistent.__init__(self)
-        self.__setstate__((blksize, LOBTree(), zblk_fmt))     # NOTE L enough for blk_t
+        self.__setstate__((blksize, LOBTree(), zblk_fmt, 0, 0))     # NOTE L enough for blk_t
         self.zblk_fmt = zblk_fmt  # Evoke check if zblk_fmt is valid
 
 
-    # state is (.blksize, .blktab, .zblk_fmt)
+    # state is (.blksize, .blktab, .zblk_fmt, .zblk_fmt0_counter .zblk_fmt1_counter)
     def __getstate__(self):
-        return (self.blksize, self.blktab, self.zblk_fmt)
+        return (self.blksize, self.blktab, self.zblk_fmt, self.zblk_fmt0_counter, self.zblk_fmt1_counter)
 
     def __setstate__(self, state):
         state_length = len(state)
-        # NOTE set _zblk_fmt instead of zblk_fmt to avoid check => ↑ performance
         if state_length == 2:  # BBB
-            self.blksize, self.blktab = state
-            self._zblk_fmt = ""
-        elif state_length == 3:
-            self.blksize, self.blktab, self._zblk_fmt = state
+            self.__setstate__(tuple(state) + ("", 0, 0))
+        elif state_length == 3:  # BBB
+            self.__setstate__(tuple(state) + (0, 0))
+        elif state_length == 5:
+            # NOTE set _zblk_fmt instead of zblk_fmt to avoid check => ↑ performance
+            self.blksize, self.blktab, self._zblk_fmt, self.zblk_fmt0_counter, self.zblk_fmt1_counter = state
         else:
             raise RuntimeError("E: Unexpected state length: %s" % state)
         self._v_file = _ZBigFile._new(self, self.blksize)
@@ -555,7 +549,10 @@ class ZBigFile(LivePersistent):
     # store data    dirty page -> ZODB obj
     def storeblk(self, blk, buf):
         zblk = self.blktab.get(blk)
-        zblk_type_write = ZBlk_fmt_registry[self.zblk_fmt or ZBlk_fmt_write]
+        zblk_fmt = self.zblk_fmt
+        if zblk_fmt == "h":  # apply heuristic
+            zblk_fmt = self._zblk_fmt_heuristic(zblk, buf)
+        zblk_type_write = ZBlk_fmt_registry[zblk_fmt or ZBlk_fmt_write]
         # if zblk was absent or of different type - we (re-)create it anew
         if zblk is None  or \
            type(zblk) is not zblk_type_write:
@@ -574,6 +571,43 @@ class ZBigFile(LivePersistent):
             # ZBlk1 or to corresponding zfile.
             zblk._p_changed = True
         zblk.bindzfile(self, blk)
+
+
+    # Heuristically determine zblk format by optimizing
+    # storage-space/access-speed ratio. Both can't be ideal, see
+    # module docstring: "Due to weakness of current ZODB storage
+    # servers, wendelin.core cannot provide at the same time both
+    # fast reads and small database size growth ..."
+    def _zblk_fmt_heuristic(self, zblk, buf):
+        # If the heuristic often switches between ZBlk0 and ZBlk1 the
+        # access time is even worse than when using only ZBlk1. Therefore
+        # the heuristic keeps track on how often the ZBlk format is changed.
+        # If it's more frequently changing than being stable, it switches
+        # forever to ZBlk1 and doesn't apply the heuristic anymore.
+        c0, c1 = self.zblk_fmt0_counter, self.zblk_fmt1_counter
+        try:
+            zblk_fmt_ratio = c0 / c1 if c1 > c0 else c1 / c0
+        except ZeroDivisionError:
+            zblk_fmt_ratio = 0
+        if zblk_fmt_ratio > 0.5:  # Switch forever to ZBlk1
+            self.zblk_fmt = zblk_fmt = 'ZBlk1'
+            return zblk_fmt
+
+        if zblk is None:  # no data yet => can't make any assumptions yet
+            return "ZBlk0"
+        else:
+            # We already commited our first data. Now let's
+            # see whether it's better to use ZBlk0 or ZBlk1.
+            p = _change_percentage(zblk, buf)
+            if p > 0.5:  # more than half of all chunks changed
+                # Pick ZBlk0 in case of wide change: ZBlk1 advantage of
+                # a smaller disk footprint isn't so strong then:
+                # we can go for a faster read access with ZBlk0.
+                self.zblk_fmt0_counter += 1
+                return 'ZBlk0'
+            else:
+                self.zblk_fmt1_counter += 1
+                return 'ZBlk1'
 
 
     # invalidate data   .blktab[blk] invalidated -> invalidate page
@@ -622,7 +656,7 @@ class ZBigFile(LivePersistent):
 
     @zblk_fmt.setter
     def zblk_fmt(self, zblk_fmt):
-        if zblk_fmt and zblk_fmt not in ZBlk_fmt_registry:
+        if zblk_fmt and zblk_fmt != "h" and zblk_fmt not in ZBlk_fmt_registry:
             raise RuntimeError('E: Unknown ZBlk format %r' % zblk_fmt)
         self._zblk_fmt = zblk_fmt
 
@@ -851,3 +885,61 @@ class _ZBigFileH(object):
         # and also more right - tpc_finish is there assumed as non-failing by
         # ZODB design)
         self.abort(txn)
+
+
+# Utility functions for zblk
+
+# Percentage how much the page changed to previous commit:
+#   0.0 = nothing changed
+#   0.5 = half of data changed
+#   1.0 = all data changed
+def _change_percentage(zblk, buf):
+    if type(zblk) == ZBlk0:
+        CHUNKSIZE = 4096
+        chunktab = _adhoc_chunktab(zblk.loadblkdata(), CHUNKSIZE)
+    else:
+        chunktab, CHUNKSIZE = zblk.chunktab, zblk.CHUNKSIZE
+    chunk_count = len(buf) / CHUNKSIZE
+    change_count = _count_changes(buf, chunktab, CHUNKSIZE)
+    return change_count / float(chunk_count)
+
+
+# Count how many chunks changed to previous commit.
+def _count_changes(buf, chunktab, CHUNKSIZE):
+    change_count = 0
+    for data, start in _buf_iterator(buf, CHUNKSIZE):
+        chunk = chunktab.get(start)
+        if data:
+            if chunk is None:
+                change_count += 1
+            elif chunk.data != data:
+                change_count += 1
+        elif chunk is not None:  # and not data
+            change_count += 1
+    return change_count
+
+
+# Create chunktab from buffer with chunk objects
+# that mimic ZData objects.
+def _adhoc_chunktab(buf, CHUNKSIZE):
+    class chunk():  # mimic ZData
+        def __init__(self, data):
+            self.data = data
+
+    chunktab = {}
+    for data, start in _buf_iterator(buf, CHUNKSIZE):
+        chunktab[start] = chunk(data)
+    return chunktab
+
+
+# Iterate over buffer and yield chunks and start position
+def _buf_iterator(buf, CHUNKSIZE):
+    for start in range(0, len(buf), CHUNKSIZE):
+        data = buf[start:start+CHUNKSIZE]
+        # make sure data is bytes
+        # (else we cannot .rstrip() it below)
+        if not isinstance(data, bytes):
+            data = bytes(data)              # FIXME copy on py3
+        # trim trailing \0
+        data = data.rstrip(b'\0')           # FIXME copy
+        yield data, start
