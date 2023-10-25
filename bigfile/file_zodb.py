@@ -484,7 +484,7 @@ ZBlk_fmt_registry = {
 
 # format for updated blocks
 ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT', 'ZBlk0')
-if ZBlk_fmt_write not in ZBlk_fmt_registry:
+if ZBlk_fmt_write != "h" and ZBlk_fmt_write not in ZBlk_fmt_registry:
     raise RuntimeError('E: Unknown ZBlk format %r' % ZBlk_fmt_write)
 
 
@@ -554,7 +554,13 @@ class ZBigFile(LivePersistent):
     # store data    dirty page -> ZODB obj
     def storeblk(self, blk, buf):
         zblk = self.blktab.get(blk)
-        zblk_type_write = ZBlk_fmt_registry[self.zblk_fmt or ZBlk_fmt_write]
+        zblk_fmt = self.zblk_fmt
+        if zblk_fmt == "h":  # apply heuristic
+            zblk_fmt = self._zblk_fmt_heuristic(zblk, blk, buf)
+        self._setzblk(blk, zblk, buf, zblk_fmt)
+
+    def _setzblk(self, blk, zblk, buf, zblk_fmt):  # helper
+        zblk_type_write = ZBlk_fmt_registry[zblk_fmt or ZBlk_fmt_write]
         # if zblk was absent or of different type - we (re-)create it anew
         if zblk is None  or \
            type(zblk) is not zblk_type_write:
@@ -573,6 +579,27 @@ class ZBigFile(LivePersistent):
             # ZBlk1 or to corresponding zfile.
             zblk._p_changed = True
         zblk.bindzfile(self, blk)
+
+
+    # Heuristically determine zblk format by optimizing
+    # storage-space/access-speed ratio. Both can't be ideal, see
+    # module docstring: "Due to weakness of current ZODB storage
+    # servers, wendelin.core cannot provide at the same time both
+    # fast reads and small database size growth ..."
+    def _zblk_fmt_heuristic(self, zblk, blk, buf):
+        if _is_appending(zblk, buf):
+            if not zblk and blk > 0:  # is new zblk?
+                # Set previous filled-up ZBlk to ZBlk0 for fast reads
+                previous_blk = blk - 1
+                previous_zblk = self.blktab.get(previous_blk)
+                self._setzblk(previous_blk, previous_zblk, previous_zblk.loadblkdata(), "ZBlk0")
+            return "ZBlk1"
+        else:  # it's changing
+            # kirr: "to support sporadic small changes over initial big fillup [...]
+            # we could introduce e.g. a ZBlkδ object, which would refer to base
+            # underlying ZBlk object and add "patch" information on top of that [...]."
+            # See https://lab.nexedi.com/nexedi/wendelin.core/merge_requests/20#note_196084
+            return 'ZBlk1'
 
 
     # invalidate data   .blktab[blk] invalidated -> invalidate page
@@ -621,7 +648,7 @@ class ZBigFile(LivePersistent):
 
     @zblk_fmt.setter
     def zblk_fmt(self, zblk_fmt):
-        if zblk_fmt and zblk_fmt not in ZBlk_fmt_registry:
+        if zblk_fmt and zblk_fmt != "h" and zblk_fmt not in ZBlk_fmt_registry:
             raise RuntimeError('E: Unknown ZBlk format %r' % zblk_fmt)
         self._zblk_fmt = zblk_fmt
 
@@ -850,3 +877,11 @@ class _ZBigFileH(object):
         # and also more right - tpc_finish is there assumed as non-failing by
         # ZODB design)
         self.abort(txn)
+
+
+# Utility functions for heuristic
+def _is_appending(zblk, buf):
+    if not zblk:
+        return True
+    old_buf = bytes(zblk.loadblkdata())
+    return bytes(buf).rstrip(b'\0')[:len(old_buf)] == old_buf
