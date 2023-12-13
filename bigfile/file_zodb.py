@@ -579,20 +579,6 @@ class ZBigFile(LivePersistent):
     # servers, wendelin.core cannot provide at the same time both
     # fast reads and small database size growth ..."
     def _zblk_fmt_heuristic(self, zblk, buf):
-        # If the heuristic often switches between ZBlk0 and ZBlk1 the
-        # access time is even worse than when using only ZBlk1. Therefore
-        # the heuristic keeps track on how often the ZBlk format is changed.
-        # If it's more frequently changing than being stable, it switches
-        # forever to ZBlk1 and doesn't apply the heuristic anymore.
-        c0, c1 = self.zblk_fmt0_counter, self.zblk_fmt1_counter
-        try:
-            zblk_fmt_ratio = c0 / c1 if c1 > c0 else c1 / c0
-        except ZeroDivisionError:
-            zblk_fmt_ratio = 0
-        if zblk_fmt_ratio > 0.5:  # Switch forever to ZBlk1
-            self.zblk_fmt = zblk_fmt = 'ZBlk1'
-            return zblk_fmt
-
         if zblk is None:  # no data yet => can't make any assumptions yet
             return "ZBlk0"
         else:
@@ -603,10 +589,8 @@ class ZBigFile(LivePersistent):
                 # Pick ZBlk0 in case of wide change: ZBlk1 advantage of
                 # a smaller disk footprint isn't so strong then:
                 # we can go for a faster read access with ZBlk0.
-                self.zblk_fmt0_counter += 1
                 return 'ZBlk0'
             else:
-                self.zblk_fmt1_counter += 1
                 return 'ZBlk1'
 
 

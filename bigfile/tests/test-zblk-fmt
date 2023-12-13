@@ -39,19 +39,19 @@ function test {
 		echo ""
 	}
 
-	change_size_set=$1
+	change_percentage_set=$1
 	change_count=$2
 	arrsize=$3
 
 	echo "---------------------------------------------"
 	echo "---------------------------------------------"
-	echo "Set change_size_set to $change_size_set"
+	echo "Set change_percentage_set to $change_percentage_set"
 	echo "Set change_count to $change_count"
 	echo "Set arrsize to $arrsize"
 
 	echo ""
 
-	export change_size_set=$change_size_set
+	export change_percentage_set=$change_percentage_set
 	export change_count=$change_count
 	export arrsize=$arrsize
 
@@ -66,10 +66,10 @@ function test {
 }
 
 echo "Use only a very small change size, so that heuristic always uses ZBlk1"
-test 20 500 1000000
+test 0.2 500 1000000
 
 echo "Use only a very big change size, so that heuristic always uses ZBlk0"
-test 200000 500 1000000
+test 1 500 1000000
 
 echo "Mix between change size so that heuristic switches between ZBlk0 and ZBlk1"
-test 20,200000 500 1000000
+test 0.2,1 500 1000000

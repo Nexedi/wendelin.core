@@ -56,7 +56,7 @@ storage_path = tempfile.mktemp(prefix='zblkbench')
 
 # Declare test parameters.
 zblk_fmt = os.environ.get('zblk_fmt', 'h')
-change_size_set = tuple(int(n) for n in os.environ.get('change_size_set', '20').split(','))
+change_percentage_set = tuple(float(n) for n in os.environ.get('change_percentage_set', '0.2').split(','))
 change_count = int(os.environ.get('change_count', '1000'))
 arrsize = int(os.environ.get('arrsize', '1000000'))
 
@@ -65,10 +65,14 @@ arrsize = int(os.environ.get('arrsize', '1000000'))
 def randarr(size=1000000):
     return np.array([[random.randint(1, 1000), random.randint(1, 1000)] for _ in range(size)])
 
-def setrand(A, size=20):
+def setrand(A, blksize_length, change_percentage=1):
     #A[0:size][:] = randarr(size)   XXX  always changes blk #0 only
-    n = random.randint(0, arrsize-size)
-    A[n:n+size] = randarr(size)
+    size = int(blksize_length * change_percentage)
+    blk_index = random.randint(0, int(arrsize / blksize_length) - 1)
+    blk_offset = blk_index * blksize_length
+    # Ensure we don't always only change the beginning of a block
+    blk_offset = blk_offset + random.randint(0, blksize_length - size)
+    A[blk_offset:blk_offset+size][:] = randarr(size)
     transaction.commit()
 
 def accessrand(A):
@@ -121,16 +125,17 @@ def setup(root):
 @root
 def fillup(root):
     A = root.A
-    values = randarr(arrsize)
+    values = [[0, 0] for _ in range(arrsize)]
     A.append(values)
     transaction.commit()
 
 @root
 def change(root):
     A = root.A[:]
+    blksize_length = root.A.zfile.blksize / 16
     for _ in range(change_count):
-        change_size = random.choice(change_size_set)
-        setrand(A, change_size)
+        change_percentage = random.choice(change_percentage_set)
+        setrand(A, blksize_length, change_percentage)
         transaction.commit()
 
 print("\tZODB storage size: %s MB" % (os.path.getsize(storage_path) / float(10**6)))
