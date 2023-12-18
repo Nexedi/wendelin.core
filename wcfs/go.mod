@@ -3,7 +3,7 @@ module lab.nexedi.com/nexedi/wendelin.core/wcfs
 go 1.14
 
 require (
-	github.com/golang/glog v1.0.0
+	github.com/golang/glog v1.2.0
 	github.com/hanwen/go-fuse/v2 v2.4.2 // replaced to -> kirr/go-fuse@y/nodefs-cancel
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
 	github.com/kisielk/og-rek v1.2.0
