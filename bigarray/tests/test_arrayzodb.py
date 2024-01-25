@@ -18,6 +18,7 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 from wendelin.bigarray.array_zodb import ZBigArray
+from wendelin.bigfile import file_zodb
 from wendelin.bigfile.tests.test_filezodb import ram_reclaim_all
 from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import dbclose
@@ -654,3 +655,28 @@ def test_zbigarray_invalidate_shape():
 
 
     del conn2, root2, a2
+
+
+# test that explicitly setting the ZBlk format works
+@func
+def test_bigarray_set_zblk_fmt():
+    # ensure ZBlk_fmt_write is ZBlk0 during this test,
+    # so that we can be sure the global default is overridden
+    # by an explicitly set value during ZBigArray initialization
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+    file_zodb.ZBlk_fmt_write = 'ZBlk0'
+    def _():
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
+
+    root = testdb.dbopen()
+    defer(lambda: dbclose(root))
+
+    root['zarray-set-zblk'] = A = ZBigArray((16*1024*1024,), uint8, zblk_fmt="ZBlk1")
+    transaction.commit()
+
+    a = A[:]
+    a[0] = 100
+    transaction.commit()
+
+    assert type(A.zfile.blktab[0]) is file_zodb.ZBlk1

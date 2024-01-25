@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2023  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -690,3 +690,53 @@ def test_bigfile_zblk1_zdata_reuse():
     assert len(zdata_v1) == len(zdata_v2)
     for i in range(len(zdata_v1)):
         assert zdata_v1[i] is zdata_v2[i]
+
+
+# test that explicitly setting the ZBlk format works
+@func
+def test_bigfile_set_zblk_fmt():
+    # ensure ZBlk_fmt_write is ZBlk0 during this test,
+    # so that we can be sure the global default is overridden
+    # by an explicitly set value during ZBigFile initialization
+    fmt_write_save = file_zodb.ZBlk_fmt_write
+    file_zodb.ZBlk_fmt_write = 'ZBlk0'
+    def _():
+        file_zodb.ZBlk_fmt_write = fmt_write_save
+    defer(_)
+
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile7'] = f = ZBigFile(blksize, zblk_fmt="ZBlk1")
+    transaction.commit()
+
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    Blk(vma, 0)[:] = 1
+    transaction.commit()
+
+    assert type(f.blktab[0]) is file_zodb.ZBlk1
+
+
+# Minimal test to ensure normal operations work as expected
+# with zblk fmt 'h'
+@func
+def test_bigfile_zblk_fmt_heuristic():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile8'] = f = ZBigFile(blksize, zblk_fmt="h")
+    transaction.commit()
+
+    fh  = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    b = Blk(vma, 0)
+    b[:] = 1
+    transaction.commit()
+
+    assert (b == 1).all()
+
+    b[0] = 2
+    transaction.commit()
+
+    assert b[0] == 2
