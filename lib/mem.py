@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin. Memory helpers
-# Copyright (C) 2014-2015  Nexedi SA and Contributors.
+# Copyright (C) 2014-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -18,7 +18,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from numpy import ndarray, uint8, copyto
+from numpy import ndarray, uint8, copyto, count_nonzero
 
 
 # zero buffer memory
@@ -42,3 +42,15 @@ def memcpy(dst, src):
     adst = ndarray(l, buffer=dst, dtype=uint8)
     asrc = ndarray(l, buffer=src, dtype=uint8)
     copyto(adst, asrc)
+
+
+# memdelta returns how many bytes are different in between buf1 and buf2.
+def memdelta(buf1, buf2):
+    l1 = len(buf1)
+    l2 = len(buf2)
+    l  = min(l1, l2)
+    l_max = max(l1, l2)
+    a1 = ndarray(l, buffer=buf1, dtype=uint8)
+    a2 = ndarray(l, buffer=buf2, dtype=uint8)
+    d = a1 - a2
+    return (l_max - l) + count_nonzero(d)
