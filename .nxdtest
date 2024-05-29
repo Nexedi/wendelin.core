@@ -1,7 +1,11 @@
 # setup to run tests on Nexedi testing infrastructure.
 # https://stack.nexedi.com/test_status
+import sys
+PY2 = (sys.version_info.major == 2)
 
-storv = ['fs', 'zeo', 'neo'] # storage backends to test against
+storv = ['fs', 'zeo'] # storage backends to test against
+if PY2:
+    storv.append('neo') # NEO/py does not work on py3 yet
 
 # test.t & friends unit-test core of UVMM and are Go-, Python- and ZODB-storage independent.
 # we don't run test.vg* because there is currently no valgrind on SlapOS.
