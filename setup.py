@@ -37,11 +37,11 @@ PY3 = (sys.version_info.major >= 3)
 # see wendelin.py for details.
 from Cython.Compiler.Main import Context as CyContext
 cy_search_inc_dirs = CyContext.search_include_directories
-def wendelin_cy_searh_in_dirs(self, qualified_name, suffix, pos, include=False, sys_path=False):
+def wendelin_cy_searh_in_dirs(self, qualified_name, suffix=None, source_pos=None, include=False, sys_path=False, **kwargs):
     _ = qualified_name.split('.')
     if len(_) >= 1 and _[0] == "wendelin":
         qualified_name = '.'.join(_[1:])
-    return cy_search_inc_dirs(self, qualified_name, suffix, pos, include, sys_path)
+    return cy_search_inc_dirs(self, qualified_name, suffix, source_pos, include, sys_path, **kwargs)
 CyContext.search_include_directories = wendelin_cy_searh_in_dirs
 
 
