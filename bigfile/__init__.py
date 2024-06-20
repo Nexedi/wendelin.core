@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # BigFile submodule for Wendelin
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -28,4 +28,4 @@
 # https://github.com/mdavidsaver/setuptools_dso/issues/11#issuecomment-808258994
 import golang
 
-from ._bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED, ram_reclaim
+from wendelin.bigfile._bigfile import BigFile, WRITEOUT_STORE, WRITEOUT_MARKSTORED, ram_reclaim

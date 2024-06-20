@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2022  Nexedi SA and Contributors.
+# Copyright (C) 2018-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -81,7 +81,7 @@ from persistent import Persistent
 from zodbtools.util import ashex as h
 
 from wendelin.lib.zodb import zurl_normalize_main
-from .client._wcfs import \
+from wendelin.wcfs.client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
 
