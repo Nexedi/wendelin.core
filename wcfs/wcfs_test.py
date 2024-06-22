@@ -44,11 +44,11 @@ import sys, os, os.path, subprocess
 from thread import get_ident as gettid
 from time import gmtime
 from errno import EINVAL, ENOTCONN
+from multiprocessing import Process, Value
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
@@ -347,7 +347,7 @@ class DFile:
 # TODO(?) print -> t.trace/debug() + t.verbose depending on py.test -v -v ?
 class tWCFS(_tWCFS):
     @func
-    def __init__(t):
+    def __init__(t, timeout=10*time.second):
         assert not os.path.exists(testmntpt)
         wc = wcfs.join(testzurl, autostart=True)
         assert wc.mountpoint == testmntpt
@@ -363,7 +363,7 @@ class tWCFS(_tWCFS):
         #   still wait for request completion even after fatal signal )
         nogilready = chan(dtype='C.structZ')
         t._wcfuseabort = os.dup(wc._wcsrv._fuseabort.fileno())
-        go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        go(t._abort_ontimeout, t._wcfuseabort, timeout, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
     # _abort_ontimeout is in wcfs_test.pyx
@@ -401,7 +401,7 @@ class tDB(tWCFS):
     # create before wcfs startup. old_data is []changeDelta - see .commit
     # and .change for details.
     @func
-    def __init__(t, old_data=[]):
+    def __init__(t, old_data=[], **kwargs):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -431,7 +431,7 @@ class tDB(tWCFS):
             t._commit(t.zfile, changeDelta)
 
         # start wcfs after testdb is created and initial data is committed
-        super(tDB, t).__init__()
+        super(tDB, t).__init__(**kwargs)
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
@@ -1449,13 +1449,19 @@ def test_wcfs_watch_going_back():
     wl.close()
 
 
+# TODO extend tests to also cover situation that a non-faulty
+# client continues to be served ok
+# TODO explicitly cover readPinWatchers behaviour with tests
+
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
+# protection against faulty/slow clients
 @func
 def test_wcfs_pintimeout_kill():
     # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
-    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
+    # timeout until killing is 30 seconds, we add 2 seconds delay for the actual
+    # killing/process shutdown.
+    tkill = 32*time.second
+    t = tDB(timeout=tkill*2); zf = t.zfile
     defer(t.close)
 
     at1 = t.commit(zf, {2:'c1'})
@@ -1463,31 +1469,50 @@ def test_wcfs_pintimeout_kill():
     f = t.open(zf)
     f.assertData(['','','c2'])
 
-    # XXX move into subprocess not to kill whole testing
-    ctx, _ = context.with_timeout(context.background(), 2*tkill)
+    # move into subprocess to avoid killing testing process, in
+    # case test is successful
+    def test(state):
+        try:
+            _test(state)
+        except Exception:
+            state.value = 3
 
-    wl = t.openwatch()
-    wg = sync.WorkGroup(ctx)
-    def _(ctx):
-        # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-        fail("watch request completed (should not as pin handler is stuck)")
-    wg.go(_)
-    def _(ctx):
-        req = wl.recvReq(ctx)
-        assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+    def _test(state):
+        ctx, _ = context.with_timeout(context.background(), 2*tkill)
+        wl = t.openwatch()
+        wg = sync.WorkGroup(ctx)
+        def _(ctx):
+            # send watch. The pin handler won't be replying -> we should never get reply here.
+            wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
+            state.value = 1
+        wg.go(_)
+        def _(ctx):
+            req = wl.recvReq(ctx)
+            assert req is not None
+            assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
 
-        # sleep > wcfs pin timeout - wcfs must kill us
-        _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
-        )
-        if _ == 0:
-            raise ctx.err()
-        fail("wcfs did not killed stuck client")
-    wg.go(_)
-    wg.wait()
+            # sleep > wcfs pin timeout - wcfs must kill us
+            _, _rx = select(
+                ctx.done().recv,        # 0
+                time.after(tkill).recv, # 1
+            )
+            if _ == 0:
+                raise ctx.err()
+            state.value = 2
+        wg.go(_)
+        wg.wait()
+
+    state = Value("b", 0) 
+    p = Process(target=test, args=(state,))
+    p.start()
+    p.join()
+    if state.value != 0:
+        state = (
+            "watch request completed (should not as pin handler is stuck)",
+            "wcfs did not killed stuck client",
+            "error in test code",
+        )[state.value - 1]
+        fail(state)
 
 
 # watch with @at > head - must wait for head to become >= at.
