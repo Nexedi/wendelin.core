@@ -41,7 +41,8 @@ from persistent.timestamp import TimeStamp
 from ZODB.utils import z64, u64, p64
 
 import sys, os, os.path, subprocess
-from thread import get_ident as gettid
+import six
+from six.moves._thread import get_ident as gettid
 from time import gmtime
 from errno import EINVAL, ENOTCONN
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
@@ -481,7 +482,7 @@ class tDB(tWCFS):
     def change(t, zf, changeDelta):
         assert isinstance(zf, ZBigFile)
         zfDelta = t._changed.setdefault(zf, {})
-        for blk, data in changeDelta.iteritems():
+        for blk, data in six.iteritems(changeDelta):
             data = b(data)
             assert len(data) <= zf.blksize
             zfDelta[blk] = data
@@ -520,7 +521,7 @@ class tDB(tWCFS):
             dfile = DFile()
             zconns.add(zf._p_jar)
             zfh = zf.fileh_open(_use_wcfs=False)
-            for blk, data in zfDelta.iteritems():
+            for blk, data in six.iteritems(zfDelta):
                 dfile.ddata[blk] = data
                 data += b'\0'*(zf.blksize - len(data))  # trailing \0
                 vma = zfh.mmap(blk, 1)
