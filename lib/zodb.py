@@ -489,6 +489,9 @@ def _znormalize_neo(scheme, netloc, path, query, frag):
     # get the same mountpoint among different clients we explicitly
     # sort the master node addr order.
     netloc = ",".join(sorted(netloc.split(',')))
+    # Drop client-only options: they reside in the fragment part
+    # of the URI, see https://lab.nexedi.com/kirr/neo/commit/4c9414ea
+    frag = ""
     return (scheme, netloc, path, query, frag)
 _znormalizer('neo',  _znormalize_neo)
 _znormalizer('neos', _znormalize_neo)
