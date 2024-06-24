@@ -401,7 +401,7 @@ setup(
                      'pytest',
                      'scipy',
                      'neoppod',     # lib/tests/test_zodb.py
-                     'ZEO',         # lib/tests/test_zodb.py
+                     'ZEO[test]',   # lib/tests/test_zodb.py
                     ],
     },
 
