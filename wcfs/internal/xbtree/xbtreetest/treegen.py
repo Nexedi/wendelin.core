@@ -260,7 +260,7 @@ def TreesSrv(zstor, r):
             t, D = treetxt.split()
             assert D.startswith('D')
             kv = kvDecode(t[1:], zctx.vdecode)
-            zv = _kvDecode(D[1:], kdecode=lambda ktxt: ktxt, vdecode=lambda vtxt: vtxt)
+            zv = _kvDecode(D[1:], kdecode=lambda ktxt: ktxt, vdecode=lambda vtxt: vtxt.encode('ascii'))
             patch(ztree,    diff(ztree, kv), kv)
 
             # ~ patch(valdict, diff(valdict,zv))  but sets zblk.value on change
