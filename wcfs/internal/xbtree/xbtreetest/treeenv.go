@@ -31,6 +31,7 @@ import (
 	"lab.nexedi.com/kirr/neo/go/zodb"
 
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xbtree/blib"
+	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/pycompat"
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xzodb"
 )
 
@@ -302,8 +303,8 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 	defer zblkdir.PDeactivate()
 
 	for xname, xzblk := range zblkdir.Data {
-		name, ok := xname.(string)
-		if !ok {
+		name, err := pycompat.Xstrbytes(xname)
+		if err != nil {
 			exc.Raisef("root['treegen/values']: key [%q]: expected str, got %T", xname, xname)
 		}
 

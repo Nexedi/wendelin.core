@@ -97,8 +97,8 @@ func (zb *zBlk0State) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zb *zBlk0State) PySetState(pystate interface{}) error {
-	blkdata, ok := pystate.(string)
-	if !ok {
+	blkdata, err := pycompat.Xstrbytes(pystate)
+	if err != nil {
 		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
 	}
 
@@ -143,8 +143,8 @@ func (zd *zDataState) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zd *zDataState) PySetState(pystate interface{}) error {
-	data, ok := pystate.(string)
-	if !ok {
+	data, err := pycompat.Xstrbytes(pystate)
+	if err != nil {
 		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
 	}
 
