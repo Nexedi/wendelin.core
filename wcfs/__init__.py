@@ -73,7 +73,7 @@ from stat import S_ISDIR
 from errno import ENOENT, ENOTCONN, EEXIST
 from signal import SIGTERM, SIGQUIT, SIGKILL
 
-from golang import chan, select, default, func, defer
+from golang import chan, select, default, func, defer, b
 from golang import context, errors, sync, time
 from golang.gcompat import qq
 
@@ -505,7 +505,7 @@ def _mntpt_4zurl(zurl):
     zurl = zurl_normalize_main(zurl)
 
     m = hashlib.sha1()
-    m.update(zurl)
+    m.update(b(zurl))
 
     # WCFS mounts are located under /dev/shm/wcfs. /dev/shm is already used by
     # userspace part of wendelin.core memory manager for dirtied pages.
