@@ -19,6 +19,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: c_string_type=str, c_string_encoding=utf8
 # cython: auto_pickle=False
 # distutils: language=c++
 
