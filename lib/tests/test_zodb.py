@@ -33,7 +33,6 @@ from golang import defer, func
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
 from ZEO.ClientStorage import ClientStorage as ZEOStorage
-from neo.client.Storage import Storage as NEOStorage
 import os
 from six.moves.urllib.parse import quote_plus
 
@@ -494,6 +493,8 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     # neo returns new NEO client for specified cluster name and master address.
     # NOTE, similarly to ZEO, the client is returned without waiting until server nodes are connected.
     def neo(cluster_name, master_addr, ssl=0):
+        # TODO revert to import neo globally after lab.nexedi.com/nexedi/neoppod/-/merge_requests/24 is landed
+        from neo.client.Storage import Storage as NEOStorage
         kwargs = dict(master_nodes=master_addr, name=cluster_name)
         if ssl:
             kwargs.update(neo_ssl_dict)
