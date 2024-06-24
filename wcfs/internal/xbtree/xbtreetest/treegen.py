@@ -191,13 +191,14 @@ class ZCtx(object):
         valdict = zctx.root.get('treegen/values', None)
         if valdict is None:
             valdict = zctx.root['treegen/values'] = PersistentMapping()
-        valv = b'abcdefghij'
+        valv = 'abcdefghij'
         for v in valv:
+            v_data = v.encode('ascii')
             zblk = valdict.get(v, None)
-            if zblk is not None and zblk.loadblkdata() == v:
+            if zblk is not None and zblk.loadblkdata() == v_data:
                 continue
             zblk = ZBlk()
-            zblk.setblkdata(v)
+            zblk.setblkdata(v_data)
             valdict[v] = zblk
         zctx.valdict = valdict
         commit('treegen/values: init %r' % valv, skipIfEmpty=True)
