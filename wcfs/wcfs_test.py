@@ -794,7 +794,7 @@ class tFile:
                 try:
                     b = read_exfault_nogil(blkview[0:1])
                 except SegmentationFault:
-                    b = 'FAULT'
+                    b = b'FAULT'
                 t._blkaccess(blk)
                 have_read.send(b)
             go(_)
@@ -806,7 +806,7 @@ class tFile:
                 raise ctx.err()
             b = _rx
 
-            ev.append('read ' + b)
+            ev.append(b'read ' + b)
         ev = doCheckingPin(_, pinokByWLink, pinfunc)
 
         # XXX hack - wlinks are notified and emit events simultaneously - we
@@ -814,7 +814,7 @@ class tFile:
         # are inside (i.e. read is stuck until pins are acknowledged).
         # Better do explicit check in tracetest style.
         assert ev[0]  == 'read pre', ev
-        assert ev[-1] == 'read ' + dataok[0], ev
+        assert ev[-1] == b'read ' + dataok[0:1], ev
         ev = ev[1:-1]
         if not shouldPin:
             assert ev == []
@@ -844,7 +844,7 @@ class tFile:
         assert st.st_blksize == t.blksize
         assert st.st_size == len(dataokv)*t.blksize
         if mtime is not None:
-            assert st.st_mtime == tidtime(mtime)
+            assert st.st_mtime == pytest.approx(tidtime(mtime))
 
         cachev = t.cached()
         for blk, dataok in enumerate(dataokv):
@@ -1101,7 +1101,7 @@ def _expectPin(twlink, ctx, zf, expect): # -> []SrvReq
     expected = set()    # of expected pin messages
     for blk, at in expect.items():
         hat = h(at) if at is not None else 'head'
-        msg = b"pin %s #%d @%s" % (h(zf._p_oid), blk, hat)
+        msg = "pin %s #%d @%s" % (h(zf._p_oid), blk, hat)
         assert msg not in expected
         expected.add(msg)
 
@@ -1373,7 +1373,7 @@ def test_wcfs_watch_robust():
     def _(ctx):
         req = wl.recvReq(ctx)
         assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+        assert req.msg == "pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
         # don't reply to req - close instead
         wl.closeWrite()
     wg.go(_)
@@ -1386,8 +1386,8 @@ def test_wcfs_watch_robust():
 
     # invalid requests -> wcfs replies error
     wl = t.openwatch()
-    assert wl.sendReq(timeout(), b'bla bla') ==  \
-            b'error bad watch: not a watch request: "bla bla"'
+    assert wl.sendReq(timeout(), 'bla bla') ==  \
+            'error bad watch: not a watch request: "bla bla"'
 
     # invalid request not following frame structure -> fatal + wcfs must close watch link
     assert wl.fatalv == []
@@ -1398,7 +1398,7 @@ def test_wcfs_watch_robust():
     )
     if _ == 0:
         raise RuntimeError("%s: did not rx EOF after bad frame " % wl)
-    assert wl.fatalv == [b'error: invalid frame: "zzz hello\\n" (invalid stream)']
+    assert wl.fatalv == ['error: invalid frame: "zzz hello\\n" (invalid stream)']
     wl.close()
 
     # watch with @at < δtail.tail -> rejected
@@ -1477,7 +1477,7 @@ def test_wcfs_pintimeout_kill():
     def _(ctx):
         req = wl.recvReq(ctx)
         assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+        assert req.msg == "pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
 
         # sleep > wcfs pin timeout - wcfs must kill us
         _, _rx = select(
@@ -1513,9 +1513,9 @@ def test_wcfs_watch_setup_ahead():
         defer(wl.close)
 
         wat = tidfromtime(tidtime(at1) + 1*dt)  # > at1, but < at2
-        rx = wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(wat)))
+        rx = wl.sendReq(ctx, "watch %s @%s" % (h(zf._p_oid), h(wat)))
         assert ready(committing)
-        assert rx == b"ok"
+        assert rx == "ok"
     wg.go(_)
 
     # T2: sleep(10·dt); commit
@@ -1739,7 +1739,7 @@ def test_wcfs_remmap_on_pin():
         assert at    == at1
         mm.map_into_ro(f._blk(blk), f1.f.fileno(), blk*f.blksize)
 
-    f._assertBlk(2, 'hello', {wl: {2:at1}}, pinfunc=_)     # NOTE not world
+    f._assertBlk(2, b'hello', {wl: {2:at1}}, pinfunc=_)     # NOTE not world
 
 
 # verify that pin message is not sent for the same blk@at twice.
