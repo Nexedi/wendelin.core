@@ -19,6 +19,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: c_string_encoding=utf8
 # distutils: language=c++
 
 # Package _wcfs provides Python-wrappers for C++ wcfs client package.

@@ -18,6 +18,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: c_string_type=str, c_string_encoding=utf8
 # distutils: language=c++
 
 """Module wcfs_test.pyx complements wcfs_test.py with things that cannot be

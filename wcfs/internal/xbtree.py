@@ -720,7 +720,7 @@ def __walkBFS(tree): # i[] of [](of _NodeInRange on each level)
             assert isinstance(rn.node, (Tree, Bucket))
             if isinstance(rn.node, Tree):
                 v = (rn.range.klo,) + rn.node.keyv + (rn.range.khi,)
-                rv = zip(v[:-1], v[1:])  # (klo,k1), (k1,k2), ..., (kN,khi)
+                rv = list(zip(v[:-1], v[1:]))  # (klo,k1), (k1,k2), ..., (kN,khi)
                 assert len(rv) == len(rn.node.children)
 
                 for i in range(len(rv)):
@@ -771,7 +771,7 @@ def __zwalkBFS(ztree): # i[] of [](of _NodeInRange on each level)
                     panic("bad tree kind %r" % kind)
 
                 v = [rn.range.klo] + keyv + [rn.range.khi]
-                rv = zip(v[:-1], v[1:])  # (klo,k1), (k1,k2), ..., (kN,khi)
+                rv = list(zip(v[:-1], v[1:]))  # (klo,k1), (k1,k2), ..., (kN,khi)
                 assert len(rv) == len(children)
 
                 for i in range(len(rv)):

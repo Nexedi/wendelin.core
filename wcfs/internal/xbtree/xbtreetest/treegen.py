@@ -191,13 +191,14 @@ class ZCtx(object):
         valdict = zctx.root.get('treegen/values', None)
         if valdict is None:
             valdict = zctx.root['treegen/values'] = PersistentMapping()
-        valv = b'abcdefghij'
+        valv = 'abcdefghij'
         for v in valv:
+            v_data = v.encode('ascii')
             zblk = valdict.get(v, None)
-            if zblk is not None and zblk.loadblkdata() == v:
+            if zblk is not None and zblk.loadblkdata() == v_data:
                 continue
             zblk = ZBlk()
-            zblk.setblkdata(v)
+            zblk.setblkdata(v_data)
             valdict[v] = zblk
         zctx.valdict = valdict
         commit('treegen/values: init %r' % valv, skipIfEmpty=True)
@@ -259,7 +260,7 @@ def TreesSrv(zstor, r):
             t, D = treetxt.split()
             assert D.startswith('D')
             kv = kvDecode(t[1:], zctx.vdecode)
-            zv = _kvDecode(D[1:], kdecode=lambda ktxt: ktxt, vdecode=lambda vtxt: vtxt)
+            zv = _kvDecode(D[1:], kdecode=lambda ktxt: ktxt, vdecode=lambda vtxt: vtxt.encode('ascii'))
             patch(ztree,    diff(ztree, kv), kv)
 
             # ~ patch(valdict, diff(valdict,zv))  but sets zblk.value on change

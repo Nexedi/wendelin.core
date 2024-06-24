@@ -67,6 +67,7 @@ The following environment variables can be used to control wcfs.py client:
 from __future__ import print_function, absolute_import
 
 import os, sys, hashlib, subprocess, stat
+import six
 import logging; log = logging.getLogger('wcfs')
 from os.path import dirname
 from stat import S_ISDIR
@@ -503,6 +504,9 @@ def _mntpt_4zurl(zurl):
     # with different paths to ssl keys, or with different order in the list of
     # masters, we still have them associated with the same wcfs mountpoint.
     zurl = zurl_normalize_main(zurl)
+
+    if isinstance(zurl, six.text_type):
+      zurl = zurl.encode("utf-8")
 
     m = hashlib.sha1()
     m.update(zurl)

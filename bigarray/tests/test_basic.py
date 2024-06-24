@@ -107,7 +107,7 @@ def test_bigarray_noobject(testbig):
 
     # NOTE str & unicode are fixed-size types - if size is not explicitly given
     # it will become S0 or U0
-    obj_dtypev = [numpy.object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
+    obj_dtypev = [object, 'O', 'i4, O', [('x', 'i4'), ('y', 'i4, O')]]
     for dtype_ in obj_dtypev:
         with raises(TypeError):
             BigArray((1,), dtype_, Zh)
