@@ -560,6 +560,8 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         ("neos://cluster@xyz:1?ca=α&key=β&cert=γ", "neos://cluster@xyz:1"),
         #   neo:// with anything SSL-related in query -> neos://
         ("neo://cluster@xyz:1?cert=c", "neos://cluster@xyz:1"),
+        #   client options
+        ("neo://cluster@xyz:1?compress=1&read-only=true&logfile=abc.log&cache-size=1024", "neo://cluster@xyz:1"),
     ],
 )
 def test_zurl_normalize_main(zurl, zurl_norm_ok):

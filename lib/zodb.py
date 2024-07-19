@@ -492,6 +492,11 @@ def _znormalize_neo(scheme, netloc, path, query, frag):
             # ca/cert/key is different than a URL with 'neos' scheme,
             # although both point to the same database.
             scheme = "neos"
+    # Drop client specific options.
+    # These options only affect the behaviour of the NEO client, but don't specify
+    # a different NEO server, and therefore need to be dropped.
+    for k in ("compress", "read-only", "logfile", "cache-size"):
+        q.pop(k, 0)
     query = urlparse.urlencode(q, doseq=True)
     # Sort multiple master nodes: if a NEO cluster has multiple master
     # nodes, there is no agreed on order in which the master node
