@@ -6,7 +6,7 @@ require (
 	github.com/golang/glog v1.2.2
 	github.com/hanwen/go-fuse/v2 v2.4.2 // replaced to -> kirr/go-fuse@y/nodefs-cancel
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
-	github.com/kisielk/og-rek v1.2.0
+	github.com/kisielk/og-rek v1.2.1-0.20240923165241-e691997e3596
 	github.com/pkg/errors v0.9.1
 	github.com/shirou/gopsutil/v4 v4.24.8
 	github.com/stretchr/testify v1.9.0
@@ -17,6 +17,7 @@ require (
 require (
 	crawshaw.io/sqlite v0.3.2 // indirect
 	github.com/DataDog/czlib v0.0.0-20210322182103-8087f4e14ae7 // indirect
+	github.com/aristanetworks/gomap v0.0.0-20230726210543-f4e41046dced // indirect
 	github.com/cznic/strutil v0.0.0-20181122101858-275e90344537 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
@@ -32,6 +33,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
