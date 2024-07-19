@@ -389,15 +389,14 @@ def zstor_2zurl(zstor):
 
     # NEO
     if ztype == "neo.client.Storage.Storage":
-        # neo(s)://[<credentials>@]<master>/<cluster>
+        # neo(s)://<cluster>@<master>?[<credentials>]
         app = zstor.app
         if not app.ssl:
             u = "neo://"
         else:
-            q = urlparse.quote_plus
             u = "neos://"
-            ca, cert, key = app.ssl_credentials # .ssl_credentials depend on kirr's patch
-            u += "ca=%s;cert=%s;key=%s@" % (q(ca), q(cert), q(key))
+
+        u += "%s@" % app.name
 
         masterv = app.nm.getMasterList()
         if len(masterv) == 0:
@@ -413,7 +412,11 @@ def zstor_2zurl(zstor):
             master_list.append("%s:%s" % (host, port))
 
         u += ",".join(master_list)
-        u += "/%s" % app.name
+
+        if app.ssl:
+            q = urlparse.quote_plus
+            ca, cert, key = app.ssl_credentials # .ssl_credentials depend on kirr's patch
+            u += "?ca=%s&cert=%s&key=%s" % (q(ca), q(cert), q(key))
 
         return u
 
@@ -453,7 +456,7 @@ def _is_ipv6(host):
 #
 # Example:
 #
-#   neos://ca=zzz@def:2,abc:1/cluster   ->  neos://abc:1,def:2/cluster
+#   neos://cluster@def:2,abc:1?ca=zzz   ->  neos://cluster@abc:1,def:2
 def zurl_normalize_main(zurl):
     scheme, netloc, path, query, frag = urlsplit(zurl)
     try:
@@ -481,14 +484,31 @@ def _znormalize_neo(scheme, netloc, path, query, frag):
     # The same database can be accessed from different clients with different
     # credentials, but we want to map them all to the same single WCFS
     # instance.
-    if "@" in netloc:
-        netloc = netloc[netloc.index("@") + 1 :]
+    q = urlparse.parse_qs(query)
+    for k in ("ca", "cert", "key"):
+        # NOTE: We only enforce SSL in case ca/cert/key are a non-empty
+        # string - this means "?ca=&cert=&key=" is interpreted as !SSL.
+        if q.pop(k, 0):
+            # Ensure we use 'neos' scheme (instead of 'neo' scheme),
+            # otherwise a normalized URL with 'neo' scheme but provided
+            # ca/cert/key is different than a URL with 'neos' scheme,
+            # although both point to the same database.
+            scheme = "neos"
+    # Explicitly sort query before reassembling into string to insure
+    # parameter order of input URI doesn't impact normalized URI.
+    query = urlparse.urlencode(tuple((k, q[k]) for k in sorted(q.keys())), doseq=True)
     # Sort multiple master nodes: if a NEO cluster has multiple master
     # nodes, there is no agreed on order in which the master node
     # addresses appear in the netloc. In order to insure we always
     # get the same mountpoint among different clients we explicitly
     # sort the master node addr order.
+    if "@" in netloc:
+        i = netloc.index("@") + 1
+        name, netloc = netloc[:i], netloc[i:]
+    else:
+        name = ""
     netloc = ",".join(sorted(netloc.split(',')))
+    netloc = "%s%s" % (name, netloc)
     return (scheme, netloc, path, query, frag)
 _znormalizer('neo',  _znormalize_neo)
 _znormalizer('neos', _znormalize_neo)
