@@ -561,6 +561,7 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         #   neo:// with anything SSL-related in query -> neos://
         ("neo://cluster@xyz:1?cert=c", "neos://cluster@xyz:1"),
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
         #   any order of options should result in the same normalized URI
         ("neo://cluster@xyz:1?a=1&c=10&b=2", "neo://cluster@xyz:1?a=1&b=2&c=10"),
@@ -568,6 +569,10 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         #   client options
         ("neo://cluster@xyz:1?compress=1&read-only=true&logfile=abc.log&cache-size=1024", "neo://cluster@xyz:1"),
 >>>>>>> 560c6f5c... fixup! lib/zodb: Update NEO URI format to be in sync with upstream NEO
+=======
+        #   client options
+        ("neo://cluster@xyz:1?compress=1&read-only=true&logfile=abc.log&cache-size=1024", "neo://cluster@xyz:1"),
+>>>>>>> e77273eb... lib/zodb: Drop client-only parameters from normalized NEO URI
     ],
 )
 def test_zurl_normalize_main(zurl, zurl_norm_ok):
