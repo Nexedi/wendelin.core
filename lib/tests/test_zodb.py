@@ -513,7 +513,7 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
 
     # sslp is the ssl encryption uri part of an encrypted NEO node
     q = quote_plus
-    sslp = ";".join(("%s=%s" % (q(k), q(v)) for k, v in sorted(neo_ssl_dict.items())))
+    sslp = "&".join(("%s=%s" % (q(k), q(v)) for k, v in sorted(neo_ssl_dict.items())))
 
     _ = assert_zurl_is_correct
     _(fs1("test.fs"),                         "file://%s/test.fs" % tmpdir)           # FileStorage
@@ -523,13 +523,13 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     _(zeo("test",  ("127.0.0.1", 1234)),      "zeo://127.0.0.1:1234?storage=test")    #   + non-default storage name
     _(zeo("1",     ("::1",       1234)),      "zeo://[::1]:1234")                     # ZEO/ip6
     _(zeo("test",  ("::1",       1234)),      "zeo://[::1]:1234?storage=test")        #   + non-default storage name
-    _(neo("test",  "127.0.0.1:1234"),         "neo://127.0.0.1:1234/test")            # NEO/ip4
-    _(neo("test",  "127.0.0.1:1234", 1),      "neos://%s@127.0.0.1:1234/test" % sslp) #   + ssl
-    _(neo("test",  "[::1]:1234"),             "neo://[::1]:1234/test")                # NEO/ip6
-    _(neo("test",  "[::1]:1234", 1),          "neos://%s@[::1]:1234/test" % sslp)     #   + ssl
+    _(neo("test",  "127.0.0.1:1234"),         "neo://test@127.0.0.1:1234")            # NEO/ip4
+    _(neo("test",  "127.0.0.1:1234", 1),      "neos://test@127.0.0.1:1234?%s" % sslp) #   + ssl
+    _(neo("test",  "[::1]:1234"),             "neo://test@[::1]:1234")                # NEO/ip6
+    _(neo("test",  "[::1]:1234", 1),          "neos://test@[::1]:1234?%s" % sslp)     #   + ssl
     _(neo("test",  "[::1]:1234\n[::2]:1234"),                                         #   + 2 master nodes
            # Master order is not specified, so we have 2 possible/acceptable zurl
-           "neo://[::1]:1234,[::2]:1234/test", "neo://[::2]:1234,[::1]:1234/test")
+           "neo://test@[::1]:1234,[::2]:1234", "neo://test@[::2]:1234,[::1]:1234")
     _(demo(zeo("base", ("1.2.3.4",  5)),                                              # DemoStorage
            fs1("delta.fs")),                  "demo:(zeo://1.2.3.4:5?storage=base)/(file://%s/delta.fs)" % tmpdir)
 
@@ -551,13 +551,23 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         # ZEO
         ("zeo://localhost:9001", "zeo://localhost:9001"),
         # NEO
-        ("neo://127.0.0.1:1234/cluster", "neo://127.0.0.1:1234/cluster"),
+        ("neo://cluster@127.0.0.1:1234", "neo://cluster@127.0.0.1:1234"),
         #   > 1 master nodes \w different order
-        ("neo://abc:1,def:2/cluster", "neo://abc:1,def:2/cluster"),
-        ("neo://def:2,abc:1/cluster", "neo://abc:1,def:2/cluster"),
+        ("neo://cluster@abc:1,def:2", "neo://cluster@abc:1,def:2"),
+        ("neo://cluster@def:2,abc:1", "neo://cluster@abc:1,def:2"),
         #   Different SSL paths
-        ("neos://ca=a&key=b&cert=c@xyz:1/cluster", "neos://xyz:1/cluster"),
-        ("neos://ca=α&key=β&cert=γ@xyz:1/cluster", "neos://xyz:1/cluster"),
+        ("neos://cluster@xyz:1?ca=a&key=b&cert=c", "neos://cluster@xyz:1"),
+        ("neos://cluster@xyz:1?ca=α&key=β&cert=γ", "neos://cluster@xyz:1"),
+        #   neo:// with anything SSL-related in query -> neos://
+        ("neo://cluster@xyz:1?cert=c", "neos://cluster@xyz:1"),
+<<<<<<< HEAD
+=======
+        #   any order of options should result in the same normalized URI
+        ("neo://cluster@xyz:1?a=1&c=10&b=2", "neo://cluster@xyz:1?a=1&b=2&c=10"),
+        ("neo://cluster@xyz:1?b=2&a=1&c=10", "neo://cluster@xyz:1?a=1&b=2&c=10"),
+        #   client options
+        ("neo://cluster@xyz:1?compress=1&read-only=true&logfile=abc.log&cache-size=1024", "neo://cluster@xyz:1"),
+>>>>>>> 560c6f5c... fixup! lib/zodb: Update NEO URI format to be in sync with upstream NEO
     ],
 )
 def test_zurl_normalize_main(zurl, zurl_norm_ok):
