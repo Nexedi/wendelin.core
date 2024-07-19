@@ -563,6 +563,8 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
         #   any order of options should result in the same normalized URI
         ("neo://cluster@xyz:1?a=1&c=10&b=2", "neo://cluster@xyz:1?a=1&b=2&c=10"),
         ("neo://cluster@xyz:1?b=2&a=1&c=10", "neo://cluster@xyz:1?a=1&b=2&c=10"),
+        #   client options
+        ("neo://cluster@xyz:1?compress=1&read-only=true&logfile=abc.log&cache-size=1024", "neo://cluster@xyz:1"),
     ],
 )
 def test_zurl_normalize_main(zurl, zurl_norm_ok):

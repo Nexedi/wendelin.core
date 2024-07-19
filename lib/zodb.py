@@ -494,6 +494,11 @@ def _znormalize_neo(scheme, netloc, path, query, frag):
             # ca/cert/key is different than a URL with 'neos' scheme,
             # although both point to the same database.
             scheme = "neos"
+    # Drop client specific options.
+    # These options only affect the behaviour of the NEO client, but don't specify
+    # a different NEO server, and therefore need to be dropped.
+    for k in ("compress", "read-only", "logfile", "cache-size"):
+        q.pop(k, 0)
     # Explicitly sort query before reassembling into string to insure
     # parameter order of input URI doesn't impact normalized URI.
     query = urlparse.urlencode(tuple((k, q[k]) for k in sorted(q.keys())), doseq=True)
