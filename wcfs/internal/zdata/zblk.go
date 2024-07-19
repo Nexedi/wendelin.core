@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -53,7 +53,6 @@ import (
 	"lab.nexedi.com/kirr/neo/go/zodb"
 	"lab.nexedi.com/kirr/neo/go/zodb/btree"
 
-	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/pycompat"
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xzodb"
 )
 
@@ -382,9 +381,9 @@ func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 		return fmt.Errorf("expect [2](); got [%d]()", len(t))
 	}
 
-	blksize, ok := pycompat.Int64(t[0])
-	if !ok {
-		return fmt.Errorf("blksize: expect integer; got %s", xzodb.TypeOf(t[0]))
+	blksize, err := pickle.AsInt64(t[0])
+	if err != nil {
+		return fmt.Errorf("blksize: %s", err)
 	}
 	if blksize <= 0 {
 		return fmt.Errorf("blksize: must be > 0; got %d", blksize)
