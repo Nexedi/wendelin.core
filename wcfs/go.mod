@@ -10,7 +10,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf
-	lab.nexedi.com/kirr/neo/go v0.0.0-20230802174919-db81e0de796a
+	lab.nexedi.com/kirr/neo/go v0.0.0-20240723085959-839ee634bd66
 )
 
 // we use kirr/go-fuse@y/nodefs-cancel
