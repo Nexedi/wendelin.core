@@ -91,10 +91,10 @@ on change pattern and works relatively good regarding both access speed and
 database size for append-like workloads::
 
   $WENDELIN_CORE_ZBLK_FMT
-      ZBlk0             fast reads
-      ZBlk1             small changes
-      auto  (default)   heuristically use either ZBlk0 or ZBlk1
-                        depending on change pattern
+      ZBlk0     fast reads                                  (default in !wcfs mode)
+      ZBlk1     small changes
+      auto      heuristically use either ZBlk0 or ZBlk1     (default in wcfs mode)
+                depending on change pattern
 
 Description of block formats follow:
 
@@ -491,8 +491,19 @@ ZBlk_fmt_registry = {
     'auto':     _ZBlk_auto,
 }
 
+# _default_use_wcfs returns whether default virtmem setting is to use wcfs or not.
+def _default_use_wcfs():
+    virtmem = os.environ.get("WENDELIN_CORE_VIRTMEM", "rw:uvmm")    # unset -> !wcfs
+    virtmem = virtmem.lower()
+    return {"r:wcfs+w:uvmm": True, "rw:uvmm": False}[virtmem]
+
 # format for updated blocks
-ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT', 'auto')
+ZBlk_fmt_write = os.environ.get('WENDELIN_CORE_ZBLK_FMT',
+                            # auto is used only with wcfs because !wcfs mode does
+                            # not handle BTree topology well leading to data corruption
+                            # https://lab.nexedi.com/nexedi/wendelin.core/commit/8c32c9f6
+                            'auto' if _default_use_wcfs() else
+                            'ZBlk0')
 if ZBlk_fmt_write not in ZBlk_fmt_registry:
     raise RuntimeError('E: Unknown ZBlk format %r' % ZBlk_fmt_write)
 
@@ -678,19 +689,11 @@ class ZBigFile(LivePersistent):
     # - not set -> behave according to global default
     def fileh_open(self, _use_wcfs=None):
         if _use_wcfs is None:
-            _use_wcfs = self._default_use_wcfs()
+            _use_wcfs = _default_use_wcfs()
 
         fileh = _ZBigFileH(self, _use_wcfs)
         self._v_filehset.add(fileh)
         return fileh
-
-
-    # _default_use_wcfs returns whether default virtmem setting is to use wcfs or not.
-    @staticmethod
-    def _default_use_wcfs():
-        virtmem = os.environ.get("WENDELIN_CORE_VIRTMEM", "rw:uvmm")    # unset -> !wcfs
-        virtmem = virtmem.lower()
-        return {"r:wcfs+w:uvmm": True, "rw:uvmm": False}[virtmem]
 
 
 
