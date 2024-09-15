@@ -542,6 +542,9 @@ type Root struct {
 	// directories + ZODB connections for @<rev>/
 	revMu  sync.Mutex
 	revTab map[zodb.Tid]*Head
+
+	// collected statistics
+	stats *Stats
 }
 
 // /(head|<rev>)/			- served by Head.
@@ -703,6 +706,14 @@ type blkPinState struct {
 	ready  chan struct{}
 	err    error
 }
+
+// Stats keeps collected statistics.
+//
+// The statistics is accessible via .wcfs/stats file served by _wcfs_Stats.
+type Stats struct {
+	pin     atomic.Int64 // # of times wcfs issued pin request
+}
+
 
 // -------- ZODB cache control --------
 
@@ -1472,6 +1483,7 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 
 	// perform IO without w.pinnedMu
 	w.pinnedMu.Unlock()
+	groot.stats.pin.Add(1)
 	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, revstr))
 	w.pinnedMu.Lock()
 
@@ -2362,6 +2374,74 @@ func (zh *_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse
 	return sk.File(), fuse.OK
 }
 
+
+// _wcfs_Stats serves .wcfs/stats reads.
+//
+// In the output:
+//
+//   - entries that start with capital letter, e.g. "Watch", indicate current
+//     number of named instances. This numbers can go up and down.
+//
+//   - entries that start with lowercase letter, e.g. "pin", indicate number of
+//     named event occurrences. This numbers are cumulative counters and should
+//     never go down.
+func _wcfs_Stats(fctx *fuse.Context) ([]byte, error) {
+	stats := ""
+	num := func(name string, value any) {
+		stats += fmt.Sprintf("%s\t: %d\n", name, value)
+	}
+
+	root  := groot
+	head  := root.head
+	bfdir := head.bfdir
+
+	// dump information detected at runtime
+	root.revMu.Lock()
+	lenRevTab := len(root.revTab)
+	root.revMu.Unlock()
+
+	head.wlinkMu.Lock()
+	ΣWatch     := 0
+	ΣPinnedBlk := 0
+	lenWLinkTab := len(head.wlinkTab)
+	for wlink := range head.wlinkTab {
+		wlink.byfileMu.Lock()
+		ΣWatch += len(wlink.byfile)
+		for _, w := range wlink.byfile {
+			w.atMu.RLock()
+			w.pinnedMu.Lock()
+			ΣPinnedBlk += len(w.pinned)
+			w.pinnedMu.Unlock()
+			w.atMu.RUnlock()
+		}
+		wlink.byfileMu.Unlock()
+	}
+	head.wlinkMu.Unlock()
+
+	head.zheadMu.RLock()
+	bfdir.fileMu.Lock()
+	lenFileTab := len(bfdir.fileTab)
+	bfdir.fileMu.Unlock()
+	head.zheadMu.RUnlock()
+
+	gdebug.zheadSockTabMu.Lock()
+	lenZHeadSockTab := len(gdebug.zheadSockTab)
+	gdebug.zheadSockTabMu.Unlock()
+
+	num("BigFile",     lenFileTab)		// # of head/BigFile
+	num("RevHead",     lenRevTab)		// # of @revX/ directories
+	num("ZHeadLink",   lenZHeadSockTab)	// # of open .wcfs/zhead handles
+	num("WatchLink",   lenWLinkTab)		// # of open watchlinks
+	num("Watch",       ΣWatch)		// # of setup watches
+	num("PinnedBlk",   ΣPinnedBlk)		// # of currently on-client pinned blocks
+
+	// dump information collected in root.stats
+	s := root.stats
+	num("pin",         s.pin.Load())
+
+	return []byte(stats), nil
+}
+
 // TODO -> enable/disable fuse debugging dynamically (by write to .wcfs/debug ?)
 
 func main() {
@@ -2465,6 +2545,7 @@ func _main() (err error) {
 		zdb:    zdb,
 		head:   head,
 		revTab: make(map[zodb.Tid]*Head),
+		stats:  &Stats{},
 	}
 
 	opts := &fuse.MountOptions{
@@ -2531,6 +2612,10 @@ func _main() (err error) {
 	mkfile(&_wcfs, "zhead", &_wcfs_Zhead{
 		fsNode: newFSNode(fSticky),
 	})
+
+	// .wcfs/stats - special file with collected statistics.
+	mkfile(&_wcfs, "stats", NewSmallFile(_wcfs_Stats))
+
 
 	// TODO handle autoexit
 	// (exit when kernel forgets all our inodes - wcfs.py keeps .wcfs/zurl

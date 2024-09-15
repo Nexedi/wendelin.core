@@ -367,6 +367,11 @@ class tWCFS(_tWCFS):
         go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
+        t._stats_prev = None
+        t.assertStats({'BigFile':   0,  'RevHead':  0,  'ZHeadLink':  0,
+                       'WatchLink': 0,  'Watch':    0,  'PinnedBlk':  0,
+                       'pin':       0})
+
     # _abort_ontimeout is in wcfs_test.pyx
 
     # close closes connection to wcfs, unmounts the filesystem and makes sure
@@ -393,6 +398,69 @@ class tWCFS(_tWCFS):
         defer(_)
         defer(t.wc.close)
         assert is_mountpoint(t.wc.mountpoint)
+
+    # assertStats asserts that content of .wcfs/stats eventually reaches expected state.
+    #
+    # For all keys k from kvok it verifies that eventually stats[k] == kvok[k]
+    # and that it stays that way.
+    #
+    # The state is asserted eventually instead of immediately - for both
+    # counters and instance values - because wcfs increments a counter
+    # _after_ corresponding event happened,
+    # and the tests can start to observe that state
+    # before wcfs actually does counter increment. For the similar reason we
+    # need to assert that the counters stay in expected state to make sure that
+    # no extra event happened. For instance values we need to assert
+    # eventually as well, because in many cases OS kernel sends events to wcfs
+    # asynchronously after client triggers an action.
+    #
+    # Note that the set of keys in kvok can be smaller than the full set of keys in stats.
+    def assertStats(t, kvok):
+        # kstats loads stats subset with kvok keys.
+        def kstats():
+            stats = t._loadStats()
+            kstats = {}
+            for k in kvok.keys():
+                kstats[k] = stats.get(k, None)
+            return kstats
+
+        # wait till stats reaches expected state
+        ctx = timeout()
+        while 1:
+            kv = kstats()
+            if kv == kvok:
+                break
+            if ctx.err() is not None:
+                assert kv == kvok, "stats did not reach expected state"
+            tdelay()
+
+        # make sure that it stays that way for some time
+        # we do not want to make the assertion time big because it will results
+        # in slowing down all tests
+        for _ in range(3):
+            tdelay()
+            kv = kstats()
+            assert kv == kvok, "stats did not stay at expected state"
+
+    # _loadStats loads content of .wcfs/stats .
+    def _loadStats(t): # -> {}
+        stats = {}
+        for l in t.wc._read(".wcfs/stats").splitlines():
+            # key : value
+            k, v = l.split(':')
+            k = k.strip()
+            v = v.strip()
+            stats[k] = int(v)
+
+        # verify that keys remains the same and that cumulative counters do not decrease
+        if t._stats_prev is not None:
+            assert stats.keys() == t._stats_prev.keys()
+            for k in stats.keys():
+                if k[0].islower():
+                    assert stats[k] >= t._stats_prev[k], k
+
+        t._stats_prev = stats
+        return stats
 
 
 class tDB(tWCFS):
@@ -464,6 +532,8 @@ class tDB(tWCFS):
         assert len(t._files)   == 0
         assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
+
+        t.assertStats({'PinnedBlk': 0})  # FIXME + WatchLink, Watch, ZHeadLink
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
