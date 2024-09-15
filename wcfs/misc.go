@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -427,6 +427,13 @@ func (f *skFile) Release() {
 	}
 }
 
+
+// fatalEIO switches filesystem into EIO mode and terminates the program.
+func fatalEIO() {
+	// log.Fatal terminates the program and so any attempt to access
+	// was-mounted filesystem starts to return ENOTCONN
+	log.Fatal("switching filesystem to EIO mode")
+}
 
 // ---- parsing ----
 

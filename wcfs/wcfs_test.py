@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2022  Nexedi SA and Contributors.
+# Copyright (C) 2018-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -54,7 +54,7 @@ from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
-from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _ready as ready, _rmdir_ifexists as rmdir_ifexists
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
 
 # setup:
@@ -1823,6 +1823,68 @@ def test_wcfs_watch_2files():
 # TODO @revX/ is automatically removed after some time
 
 # ----------------------------------------
+
+# verify that wcfs switches to EIO mode after zwatcher failure.
+# in EIO mode accessing anything on the filesystem returns ENOTCONN error.
+@func
+def test_wcfs_eio_after_zwatcher_fail(capfd):
+    # we will use low-level tWCFS instead of tDB for precise control of access
+    # to the filesystem. For example tDB keeps open connection to .wcfs/zhead
+    # and inspects it during commit which can break in various ways on switch
+    # to EIO mode. Do all needed actions by hand to avoid unneeded uncertainty.
+
+    # create ZBigFile
+    root = testdb.dbopen()
+    def _():
+        dbclose(root)
+    defer(_)
+    root['zfile'] = zf = ZBigFile(blksize)
+    transaction.commit()
+
+    # start wcfs
+    t = tWCFS()
+    def _():
+        with raises(IOError) as exc:
+            t.close()
+        assert exc.value.errno == ENOTCONN
+    defer(_)
+    t.wc._stat("head/bigfile/%s" % h(zf._p_oid))  # wcfs starts to track zf
+
+    # instead of simulating e.g. ZODB server failure we utilize the fact that
+    # currently zwatcher fails when there is ZBigFile epoch
+    zf.blksize += 1
+    transaction.commit()
+
+    # on new transaction with ZBigFile epoch wcfs should switch to EIO when it
+    # learns about that transaction
+    def _():
+        try:
+            t.wc._stat("head")
+        except:
+            return True
+        else:
+            return False
+    waitfor(timeout(), _)
+
+    # verify it was indeed switch to EIO
+    _ = capfd.readouterr()
+    assert not ready(t._wcfuseaborted)  # wcfs might have been killed on overall test timeout
+    assert "test timed out"                             not in _.err
+    assert "aborting wcfs fuse connection to unblock"   not in _.err
+    assert "zwatcher failed"                                in _.err
+    assert "switching filesystem to EIO mode"               in _.err
+
+    # verify that accessing any file returns ENOTCONN after the switch
+    def checkeio(path):
+        with raises(IOError) as exc:
+            t.wc._read(path)
+        assert exc.value.errno == ENOTCONN
+
+    checkeio(".wcfs/zurl")
+    checkeio("head/at")
+    checkeio("head/bigfile/%s" % h(zf._p_oid))
+    checkeio("anything")
+
 
 # verify that wcfs does not panic with "no current transaction" / "at out of
 # bounds" on read/invalidate/watch codepaths.

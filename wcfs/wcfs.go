@@ -2560,8 +2560,8 @@ func _main() (err error) {
 	err = root.zwatcher(serveCtx, zwatchq)
 	if errors.Cause(err) != context.Canceled {
 		log.Error(err)
-		log.Errorf("zwatcher failed -> switching filesystem to EIO mode (TODO)")
-		// TODO: switch fs to EIO mode
+		log.Error("zwatcher failed")
+		fatalEIO()
 	}
 
 	// wait for unmount
