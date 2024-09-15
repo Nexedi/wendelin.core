@@ -684,6 +684,12 @@ type Watch struct {
 	link *WatchLink // link to client
 	file *BigFile	// watching this file
 
+	// setupMu is used to allow only 1 watch request for particular file to
+	// be handled simultaneously for particular client. It complements atMu
+	// by continuing to protect setupWatch from another setupWatch when
+	// setupWatch non-atomically downgrades atMu.W to atMu.R .
+	setupMu sync.Mutex
+
 	// atMu, similarly to zheadMu, protects watch.at and pins associated with Watch.
 	// atMu.R guarantees that watch.at is not changing, but multiple
 	//        simultaneous pins could be running (used e.g. by readPinWatchers).
@@ -1665,6 +1671,10 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 		}
 	}
 
+	// allow only 1 setupWatch to run simultaneously for particular file
+	w.setupMu.Lock()
+	defer w.setupMu.Unlock()
+
 	f := w.file
 	f.watchMu.Lock()
 
@@ -1801,8 +1811,16 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 
 	// downgrade atMu.W -> atMu.R to let other clients to access the file.
 	// NOTE there is no primitive to do Wlock->Rlock atomically, but we are
-	// ok with that since we prepared everything to handle simultaneous pins
-	// from other reads.
+	// ok with that since:
+	//
+	//   * wrt readPinWatchers we prepared everything to handle
+	//     simultaneous pins from other reads.
+	//   * wrt setupWatch we can still be sure that no another setupWatch
+	//     started to run simultaneously during atMu.Unlock -> atMu.RLock
+	//     because we still hold setupMu.
+	//
+	// ( for the reference: pygolang provides RWMutex.UnlockToRLock while go
+	//   rejected it in golang.org/issues/38891 )
 	w.atMu.Unlock()
 	w.atMu.RLock()
 	defer w.atMu.RUnlock()
