@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -2470,8 +2470,6 @@ func _main() (err error) {
 		Name:   "wcfs",
 
 		// We retrieve kernel cache in ZBlk.blksize chunks, which are 2MB in size.
-		// XXX currently go-fuse caps MaxWrite to 128KB.
-		// TODO -> teach go-fuse to handle Init.MaxPages (Linux 4.20+).
 		MaxWrite:      2*1024*1024,
 
 		// TODO(?) tune MaxReadAhead? MaxBackground?
