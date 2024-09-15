@@ -960,6 +960,7 @@ retry:
 	}
 
 	// notify .wcfs/zhead
+	gdebug.zheadSockTabMu.Lock()
 	for sk := range gdebug.zheadSockTab {
 		_, err := fmt.Fprintf(xio.BindCtxW(sk, ctx), "%s\n", δZ.Tid)
 		if err != nil {
@@ -968,6 +969,7 @@ retry:
 			delete(gdebug.zheadSockTab, sk)
 		}
 	}
+	gdebug.zheadSockTabMu.Unlock()
 
 	// shrink δFtail not to grow indefinitely.
 	// cover history for at least 1 minute, but including all watches.
@@ -2331,11 +2333,11 @@ var gfsconn *nodefs.FileSystemConnector
 // so we still have to reference the root via path.
 var gmntpt string
 
-// debugging	(protected by zhead.W)
+// debugging
 var gdebug = struct {
 	// .wcfs/zhead opens
-	// protected by groot.head.zheadMu
-	zheadSockTab map[*FileSock]struct{}
+	zheadSockTabMu sync.Mutex
+	zheadSockTab   map[*FileSock]struct{}
 }{}
 
 func init() {
@@ -2352,11 +2354,11 @@ func (zh *_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse
 	sk := NewFileSock()
 	sk.CloseRead()
 
-	groot.head.zheadMu.Lock()         // TODO +fctx -> cancel
-	defer groot.head.zheadMu.Unlock()
-
 	// TODO del zheadSockTab[sk] on sk.File.Release (= client drops opened handle)
+	gdebug.zheadSockTabMu.Lock()      // TODO +fctx -> cancel
 	gdebug.zheadSockTab[sk] = struct{}{}
+	gdebug.zheadSockTabMu.Unlock()
+
 	return sk.File(), fuse.OK
 }
 
