@@ -1831,7 +1831,6 @@ func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fus
 	}
 
 	head.wlinkMu.Lock()
-	// XXX del wlinkTab[w] on w.sk.File.Release
 	head.wlinkTab[wlink] = struct{}{}
 	head.wlinkMu.Unlock()
 

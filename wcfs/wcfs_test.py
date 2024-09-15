@@ -541,7 +541,7 @@ class tDB(tWCFS):
         assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
 
-        t.assertStats({'PinnedBlk': 0, 'ZHeadLink': 0})  # FIXME + WatchLink, Watch
+        t.assertStats({'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0})
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
@@ -955,8 +955,11 @@ class tWatchLink(wcfs.WatchLink):
         # this tWatchLink currently watches the following files at particular state.
         t._watching = {}    # {} foid -> tWatch
 
+        tdb.assertStats({'WatchLink': len(tdb._wlinks)})
+
     def close(t):
-        t.tdb._wlinks.remove(t)
+        tdb = t.tdb
+        tdb._wlinks.remove(t)
         super(tWatchLink, t).close()
 
         # disable all established watches
@@ -964,6 +967,8 @@ class tWatchLink(wcfs.WatchLink):
             w.at     = z64
             w.pinned = {}
         t._watching = {}
+
+        tdb.assertStats({'WatchLink': len(tdb._wlinks)})
 
 
 # ---- infrastructure: watch setup/adjust ----
