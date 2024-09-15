@@ -973,12 +973,11 @@ retry:
 
 	// shrink δFtail not to grow indefinitely.
 	// cover history for at least 1 minute, but including all watches.
-	// No need to lock anything because we are holding zheadMu and
-	// setupWatch too runs with zheadMu locked.
 	//
 	// TODO shrink δFtail only once in a while - there is no need to compute
 	// revCut and cut δFtail on every transaction.
 	revCut := zodb.TidFromTime(zhead.At().Time().Add(-1*time.Minute))
+	head.wlinkMu.Lock()
 	for wlink := range head.wlinkTab {
 		for _, w := range wlink.byfile {
 			if w.at < revCut {
@@ -986,6 +985,7 @@ retry:
 			}
 		}
 	}
+	head.wlinkMu.Unlock()
 	bfdir.δFtail.ForgetPast(revCut)
 
 	// notify zhead.At waiters
