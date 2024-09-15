@@ -1887,8 +1887,6 @@ func (wlink *WatchLink) _serve() (err error) {
 	ctx, cancel := context.WithCancel(ctx0)
 	wg := xsync.NewWorkGroup(ctx)
 
-	r := bufio.NewReader(xio.BindCtxR(wlink.sk, ctx))
-
 	defer func() {
 		// cancel all handlers on both error and ok return.
 		// ( ok return is e.g. when we received "bye", so if client
@@ -1916,40 +1914,34 @@ func (wlink *WatchLink) _serve() (err error) {
 			_ = wlink.send(ctx0, 0, fmt.Sprintf("error: %s", err))
 		}
 
-		// close .sk.tx : this wakes up rx on client side.
-		err2 = wlink.sk.CloseWrite()
+		// close .sk
+		// closing .sk.tx wakes up rx on client side.
+		err2 = wlink.sk.Close()
 		if err == nil {
 			err = err2
 		}
 	}()
 
-	// close .sk.rx on error/wcfs stopping or return: this wakes up read(sk).
-	retq := make(chan struct{})
-	defer close(retq)
+	// cancel main thread on any watch handler error
+	ctx, mainCancel := context.WithCancel(ctx)
+	defer mainCancel()
 	wg.Go(func(ctx context.Context) error {
-		// monitor is always canceled - either at parent ctx cancel, or
-		// upon return from serve (see "cancel all handlers ..." ^^^).
-		// If it was return - report returned error to wg.Wait, not "canceled".
+		// monitor is always canceled - either due to parent ctx cancel, error in workgroup,
+		// or return from serve and running "cancel all handlers ..." above
 		<-ctx.Done()
-		e := ctx.Err()
-		select {
-		default:
-		case <-retq:
-			e = err // returned error
-		}
-
-		e2 := wlink.sk.CloseRead()
-		if e == nil {
-			e = e2
-		}
-		return e
+		mainCancel()
+		return nil
 	})
 
+	r := bufio.NewReader(xio.BindCtxR(wlink.sk, ctx))
 	for {
+		// NOTE r.Read is woken up by ctx cancel because wlink.sk implements xio.Reader natively
 		l, err := r.ReadString('\n') // TODO limit accepted line len to prevent DOS
 		if err != nil {
-			// r.Read is woken up by sk.CloseRead when serve decides to exit
-			if err == io.ErrClosedPipe || err == io.EOF {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			if errors.Is(err, ctx.Err()) {
 				err = nil
 			}
 			return err
