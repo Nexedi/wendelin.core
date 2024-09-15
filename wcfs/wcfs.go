@@ -2356,22 +2356,39 @@ func init() {
 	gdebug.zheadSockTab = make(map[*FileSock]struct{})
 }
 
-// _wcfs_Zhead serves .wcfs/zhead opens.
+// _wcfs_Zhead serves .wcfs/zhead .
 type _wcfs_Zhead struct {
 	fsNode
 }
 
-func (zh *_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+// _wcfs_ZheadH serves .wcfs/zhead opens.
+type _wcfs_ZheadH struct {
+	nodefs.File  // = .sk.file
+	sk *FileSock
+}
+
+func (*_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
 	// TODO(?) check flags
 	sk := NewFileSock()
 	sk.CloseRead()
+	zh := &_wcfs_ZheadH{
+		File: sk.file,
+		sk:   sk,
+	}
 
-	// TODO del zheadSockTab[sk] on sk.File.Release (= client drops opened handle)
 	gdebug.zheadSockTabMu.Lock()      // TODO +fctx -> cancel
 	gdebug.zheadSockTab[sk] = struct{}{}
 	gdebug.zheadSockTabMu.Unlock()
 
-	return sk.File(), fuse.OK
+	return WithOpenStreamFlags(zh), fuse.OK
+}
+
+func (zh *_wcfs_ZheadH) Release() {
+	gdebug.zheadSockTabMu.Lock()
+	delete(gdebug.zheadSockTab, zh.sk)
+	gdebug.zheadSockTabMu.Unlock()
+
+	zh.File.Release()
 }
 
 

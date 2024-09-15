@@ -321,11 +321,16 @@ func NewFileSock() *FileSock {
 // The handle should be given to kernel as result of a file open, for that file
 // to be connected to the socket.
 func (sk *FileSock) File() nodefs.File {
+	return WithOpenStreamFlags(sk.file)
+}
+
+// WithOpenStreamFlags wraps file handle with FUSE flags needed when opening stream IO.
+func WithOpenStreamFlags(file nodefs.File) nodefs.File {
 	// nonseekable & directio for opened file to have streaming semantic as
 	// if it was a socket. FOPEN_STREAM is used so that both read and write
 	// could be run simultaneously: git.kernel.org/linus/10dce8af3422
 	return &nodefs.WithFlags{
-		File:      sk.file,
+		File:      file,
 		FuseFlags: fuse.FOPEN_STREAM | fuse.FOPEN_NONSEEKABLE | fuse.FOPEN_DIRECT_IO,
 	}
 }

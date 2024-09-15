@@ -412,7 +412,12 @@ class tWCFS(_tWCFS):
     # need to assert that the counters stay in expected state to make sure that
     # no extra event happened. For instance values we need to assert
     # eventually as well, because in many cases OS kernel sends events to wcfs
-    # asynchronously after client triggers an action.
+    # asynchronously after client triggers an action. For example for ZHeadLink
+    # after client closes corresponding file handle, the kernel sends RELEASE
+    # to wcfs asynchronously, and it is only after that final RELEASE when wcfs
+    # removes corresponding entry from zheadSockTab. So if we would assert on
+    # instance values immediately after close, it could happen before wcfs
+    # received corresponding RELEASE and the assertion would fail.
     #
     # Note that the set of keys in kvok can be smaller than the full set of keys in stats.
     def assertStats(t, kvok):
@@ -513,6 +518,9 @@ class tDB(tWCFS):
         t._files    = set()
         t._wlinks   = set()
 
+        t.assertStats({'ZHeadLink': 1})
+
+
     @property
     def head(t):
         return t.dFtail[-1].rev
@@ -533,7 +541,7 @@ class tDB(tWCFS):
         assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
 
-        t.assertStats({'PinnedBlk': 0})  # FIXME + WatchLink, Watch, ZHeadLink
+        t.assertStats({'PinnedBlk': 0, 'ZHeadLink': 0})  # FIXME + WatchLink, Watch
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
