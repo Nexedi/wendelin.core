@@ -1548,8 +1548,15 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 	blkrevRough := true
 
 	wg := xsync.NewWorkGroup(ctx)
+	defer func() {
+		err2 := wg.Wait()
+		if err == nil {
+			err = err2
+		}
+	}()
 
 	f.watchMu.RLock()
+	defer f.watchMu.RUnlock()
 	for w := range f.watchTab {
 		w := w
 
@@ -1600,9 +1607,8 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 			return w.pin(ctx, blk, pinrev)
 		})
 	}
-	f.watchMu.RUnlock()
 
-	return wg.Wait()
+	return nil
 }
 
 // setupWatch sets up or updates a Watch when client sends `watch <file> @<at>` request.
