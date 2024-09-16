@@ -350,7 +350,7 @@ class DFile:
 # TODO(?) print -> t.trace/debug() + t.verbose depending on py.test -v -v ?
 class tWCFS(_tWCFS):
     @func
-    def __init__(t):
+    def __init__(t, multiproc=False):
         assert not os.path.exists(testmntpt)
         wc = wcfs.join(testzurl, autostart=True)
         assert wc.mountpoint == testmntpt
@@ -358,6 +358,9 @@ class tWCFS(_tWCFS):
         assert is_mountpoint(wc.mountpoint)
         t.wc = wc
         t.pintimeout = float(t.wc._read(".wcfs/pintimeout"))
+
+        # multiproc=True indicates that wcfs server will be used by multiple client processes
+        t.multiproc=multiproc
 
         # the whole test is limited in time to detect deadlocks
         # NOTE with_timeout must be << timeout
@@ -488,7 +491,7 @@ class tDB(tWCFS):
     # create before wcfs startup. old_data is []changeDelta - see .commit
     # and .change for details.
     @func
-    def __init__(t, old_data=[]):
+    def __init__(t, old_data=[], **kw):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -518,7 +521,7 @@ class tDB(tWCFS):
             t._commit(t.zfile, changeDelta)
 
         # start wcfs after testdb is created and initial data is committed
-        super(tDB, t).__init__()
+        super(tDB, t).__init__(**kw)
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
@@ -968,7 +971,8 @@ class tWatchLink(wcfs.WatchLink):
         # this tWatchLink currently watches the following files at particular state.
         t._watching = {}    # {} foid -> tWatch
 
-        tdb.assertStats({'WatchLink': len(tdb._wlinks)})
+        if not tdb.multiproc:
+            tdb.assertStats({'WatchLink': len(tdb._wlinks)})
 
     def close(t):
         tdb = t.tdb
@@ -981,7 +985,8 @@ class tWatchLink(wcfs.WatchLink):
             w.pinned = {}
         t._watching = {}
 
-        tdb.assertStats({'WatchLink': len(tdb._wlinks)})
+        if not tdb.multiproc:
+            tdb.assertStats({'WatchLink': len(tdb._wlinks)})
 
 
 # ---- infrastructure: watch setup/adjust ----
@@ -2056,6 +2061,13 @@ class tAt(bytes):
                     return "@at%d (%s)" % (i, h(at))
         return "@" + h(at)
     __str__ = __repr__
+
+    # raw returns raw bytes form of at.
+    # It should be used in contexts where at needs to be pickled, because tAt
+    # is unpicklable due to .tdb being unpicklable.
+    @property
+    def raw(at):
+        return fromhex(h(at))
 
 # hpin returns human-readable representation for {}blk->rev.
 @func(tDB)
