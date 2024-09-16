@@ -265,6 +265,10 @@ def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
     p.send("start watch")
     assert p.recv(t.ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
 
+    # issue our watch request - it should be served well and without any delay
+    wl = t.openwatch()
+    wl.watch(zf, at1, {2:at1})
+
     # the faulty client must become killed by wcfs
     p.join(t.ctx)
     assert p.exitcode is not None
