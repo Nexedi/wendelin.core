@@ -236,13 +236,7 @@ def _bad_watch_no_pin_reply(ctx, f, at):
         f.cout.send(req.msg)
 
         # sleep > wcfs pin timeout - wcfs must kill us
-        _, _rx = select(
-            ctx.done().recv,                    # 0
-            time.after(2*f.pintimeout).recv,    # 1
-        )
-        if _ == 0:
-            raise ctx.err()
-        raise AssertionError("wcfs did not kill stuck client")
+        f.assertKilled(ctx, "wcfs did not kill stuck client")
     wg.go(_)
     wg.wait()
 
@@ -272,3 +266,16 @@ def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
     # the faulty client must become killed by wcfs
     p.join(t.ctx)
     assert p.exitcode is not None
+
+
+# assertKilled assert that the current process becomes killed after time goes after pintimeout.
+@func(tFaultyClient)
+def assertKilled(f, ctx, failmsg):
+    # sleep > wcfs pin timeout - wcfs must kill us
+    _, _rx = select(
+        ctx.done().recv,                    # 0
+        time.after(2*f.pintimeout).recv,    # 1
+    )
+    if _ == 0:
+        raise ctx.err()
+    raise AssertionError(failmsg)
