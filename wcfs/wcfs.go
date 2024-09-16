@@ -1899,9 +1899,11 @@ func (wlink *WatchLink) _serve() (err error) {
 		delete(head.wlinkTab, wlink)
 		head.wlinkMu.Unlock()
 
-		// write to peer if it was logical error on client side
+		// give client a chance to be notified if it was due to some logical error
 		if err != nil {
-			_ = wlink.send(ctx0, 0, fmt.Sprintf("error: %s", err))
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			_ = wlink.send(ctx, 0, fmt.Sprintf("error: %s", err))
 		}
 
 		// close .sk
