@@ -300,11 +300,13 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
 # many tests need to be run with some reasonable timeout to detect lack of wcfs
 # response. with_timeout and timeout provide syntactic shortcuts to do so.
-def with_timeout(parent=context.background()):  # -> ctx, cancel
-    return context.with_timeout(parent, 3*time.second)
+def with_timeout(parent=context.background(), dt=None):  # -> ctx, cancel
+    if dt is None:
+        dt = 3*time.second
+    return context.with_timeout(parent, dt)
 
-def timeout(parent=context.background()):   # -> ctx
-    ctx, _ = with_timeout()
+def timeout(parent=context.background(), dt=None):   # -> ctx
+    ctx, _ = with_timeout(parent, dt)
     return ctx
 
 # tdelay is used in places where we need to delay a bit in order to e.g.
@@ -798,8 +800,11 @@ class tFile:
     #
     # The automatic computation of pinokByWLink is verified against explicitly
     # provided pinokByWLink when it is present.
+    #
+    # The whole read operation must complete in specified time.
+    # The default timeout is used if timeout is not explicitly given.
     @func
-    def assertBlk(t, blk, dataok, pinokByWLink=None):
+    def assertBlk(t, blk, dataok, pinokByWLink=None, timeout=None):
         # TODO -> assertCtx('blk #%d' % blk)
         def _():
             assertCtx = 'blk #%d' % blk
@@ -812,10 +817,10 @@ class tFile:
         dataok = b(dataok)
         blkdata, _ = t.tdb._blkDataAt(t.zf, blk, t.at)
         assert blkdata == dataok, "computed vs explicit data"
-        t._assertBlk(blk, dataok, pinokByWLink)
+        t._assertBlk(blk, dataok, pinokByWLink, timeout=timeout)
 
     @func
-    def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None):
+    def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None, timeout=None):
         assert len(dataok) <= t.blksize
         dataok += b'\0'*(t.blksize - len(dataok))   # tailing zeros
         assert blk < t._sizeinblk()
@@ -863,6 +868,9 @@ class tFile:
             pinokByWLink[wlink] = (t.zf, pinok)
 
         # access 1 byte on the block and verify that wcfs sends us correct pins
+        ctx, cancel = with_timeout(t.tdb.ctx, timeout)
+        defer(cancel)
+
         blkview = t._blk(blk)
         assert t.cached()[blk] == cached
 
@@ -901,7 +909,7 @@ class tFile:
             b = _rx
 
             ev.append('read ' + b)
-        ev = doCheckingPin(_, pinokByWLink, pinfunc)
+        ev = doCheckingPin(ctx, _, pinokByWLink, pinfunc)
 
         # XXX hack - wlinks are notified and emit events simultaneously - we
         # check only that events begin and end with read pre/post and that pins
@@ -1119,7 +1127,7 @@ def _watch(twlink, zf, at, pinok, replyok):
         else:
             assert reply == replyok
 
-    doCheckingPin(_, {twlink: (zf, pinok)})
+    doCheckingPin(timeout(twlink.tdb.ctx), _, {twlink: (zf, pinok)})
 
 
 # doCheckingPin calls f and verifies that wcfs sends expected pins during the
@@ -1131,14 +1139,14 @@ def _watch(twlink, zf, at, pinok, replyok):
 #
 # pinfunc is called after pin request is received from wcfs, but before pin ack
 # is replied back. Pinfunc must not block.
-def doCheckingPin(f, pinokByWLink, pinfunc=None): # -> []event(str)
+def doCheckingPin(ctx, f, pinokByWLink, pinfunc=None): # -> []event(str)
     # call f and check that we receive pins as specified.
     # Use timeout to detect wcfs replying less pins than expected.
     #
     # XXX detect not sent pins via ack'ing previous pins as they come in (not
     # waiting for all of them) and then seeing that we did not received expected
     # pin when f completes?
-    ctx, cancel = with_timeout()
+    ctx, cancel = context.with_cancel(ctx)
     wg = sync.WorkGroup(ctx)
     ev = []
 
