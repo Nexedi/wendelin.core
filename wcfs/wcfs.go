@@ -1872,11 +1872,6 @@ func (wlink *WatchLink) serve() {
 	if err != nil {
 		log.Error(err)
 	}
-
-	head := wlink.head
-	head.wlinkMu.Lock()
-	delete(head.wlinkTab, wlink)
-	head.wlinkMu.Unlock()
 }
 
 func (wlink *WatchLink) _serve() (err error) {
@@ -1885,20 +1880,9 @@ func (wlink *WatchLink) _serve() (err error) {
 	ctx0 := context.TODO() // TODO ctx = merge(ctx of wcfs running, ctx of wlink timeout)
 
 	ctx, cancel := context.WithCancel(ctx0)
-	wg := xsync.NewWorkGroup(ctx)
 
+	// final watchlink cleanup is done on serve exit
 	defer func() {
-		// cancel all handlers on both error and ok return.
-		// ( ok return is e.g. when we received "bye", so if client
-		//   sends "bye" and some pin handlers are in progress - they
-		//   anyway don't need to wait for client replies anymore )
-		cancel()
-
-		err2 := wg.Wait()
-		if err == nil {
-			err = err2
-		}
-
 		// unregister all watches created on this wlink
 		wlink.byfileMu.Lock()
 		for _, w := range wlink.byfile {
@@ -1909,6 +1893,12 @@ func (wlink *WatchLink) _serve() (err error) {
 		wlink.byfile = nil
 		wlink.byfileMu.Unlock()
 
+		// unregister wlink itself
+		head := wlink.head
+		head.wlinkMu.Lock()
+		delete(head.wlinkTab, wlink)
+		head.wlinkMu.Unlock()
+
 		// write to peer if it was logical error on client side
 		if err != nil {
 			_ = wlink.send(ctx0, 0, fmt.Sprintf("error: %s", err))
@@ -1916,10 +1906,31 @@ func (wlink *WatchLink) _serve() (err error) {
 
 		// close .sk
 		// closing .sk.tx wakes up rx on client side.
-		err2 = wlink.sk.Close()
+		err2 := wlink.sk.Close()
 		if err == nil {
 			err = err2
 		}
+	}()
+
+	// watch handlers are spawned in dedicated workgroup
+	//
+	// Pin handlers are run either inside - for pins run from setupWatch, or,
+	// for pins run from readPinWatchers, outside.
+	// Upon serve exit we cancel watch and pin handlers ran inside and wait for their completion.
+	wg := xsync.NewWorkGroup(ctx)
+	defer func() {
+		// cancel all handlers on both error and ok return.
+		// ( ok return is e.g. when we received "bye", so if client
+		//   sends "bye" and some pin handlers are in progress - they
+		//   anyway don't need to wait for client replies anymore )
+		cancel()
+
+		// wait for setupWatch and pin handlers spawned from it to complete
+		err2 := wg.Wait()
+		if err == nil {
+			err = err2
+		}
+
 	}()
 
 	// cancel main thread on any watch handler error
