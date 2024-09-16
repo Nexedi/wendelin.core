@@ -358,6 +358,13 @@ class tWCFS(_tWCFS):
         assert is_mountpoint(wc.mountpoint)
         t.wc = wc
 
+        # the whole test is limited in time to detect deadlocks
+        # NOTE with_timeout must be << timeout
+        # NOTE wcfs_pin_timeout must be >> timeout
+        timeout = 10*time.second
+        t.ctx, t._ctx_cancel = context.with_timeout(context.background(), timeout)
+
+        # make sure any stuck FUSE request is aborted. To do so
         # force-unmount wcfs on timeout to unstuck current test and let it fail.
         # Force-unmount can be done reliably only by writing into
         # /sys/fs/fuse/connections/<X>/abort. For everything else there are
@@ -366,7 +373,7 @@ class tWCFS(_tWCFS):
         #   still wait for request completion even after fatal signal )
         nogilready = chan(dtype='C.structZ')
         t._wcfuseabort = os.dup(wc._wcsrv._fuseabort.fileno())
-        go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        go(t._abort_ontimeout, t._wcfuseabort, timeout, t.ctx.done(), nogilready)
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
         t._stats_prev = None
@@ -380,6 +387,7 @@ class tWCFS(_tWCFS):
     # that wcfs server exits.
     @func
     def close(t):
+        defer(t._ctx_cancel)
         def _():
             os.close(t._wcfuseabort)
         defer(_)
