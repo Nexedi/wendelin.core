@@ -214,7 +214,10 @@ class tFaultyClient:
 # ---- tests ----
 
 
-# verify that wcfs kills slow/faulty client who does not reply to pin in time.
+# verify that wcfs kills slow/faulty client who does not reply to pin
+# notifications in time during watch setup.
+#
+# This verifies setupWatch codepath.
 
 @func
 def _bad_watch_no_pin_reply(ctx, f, at):
@@ -242,7 +245,7 @@ def _bad_watch_no_pin_reply(ctx, f, at):
 
 @xfail  # protection against faulty/slow clients
 @func
-def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
+def test_wcfs_pintimeout_kill_on_watch(with_prompt_pintimeout):
     t = tDB(multiproc=True); zf = t.zfile
     defer(t.close)
 
@@ -264,6 +267,65 @@ def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
     wl.watch(zf, at1, {2:at1})
 
     # the faulty client must become killed by wcfs
+    p.join(t.ctx)
+    assert p.exitcode is not None
+
+
+# verify that wcfs kills slow/faulty client who does not reply to pin
+# notifications in time caused by asynchronous read access.
+#
+# This verifies readPinWatchers codepath.
+
+@func
+def _bad_pinh_no_pin_reply(ctx, f, at):
+    wl = wcfs.WatchLink(f.wc)   ; defer(wl.close)
+
+    # initial watch setup goes ok
+    _ = wl.sendReq(ctx, b"watch %s @%s" % (h(f.zfile_oid), h(at)))
+    assert _ == b"ok",  _
+    f.cout.send("f: watch setup ok")
+
+    # wait for "pin ..." due to read access in the parent
+    req = wl.recvReq(ctx)
+    assert req is not None
+    f.cout.send(req.msg)
+
+    # sleep > wcfs pin timeout - wcfs must kill us
+    f.assertKilled(ctx, "wcfs did not kill stuck client")
+
+@xfail  # protection against faulty/slow clients
+@func
+def test_wcfs_pintimeout_kill_on_access(with_prompt_pintimeout):
+    t = tDB(multiproc=True); zf = t.zfile; at0=t.at0
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+    f = t.open(zf)
+    f.assertData(['','','c2'])
+
+    # issue our watch request - it should be served well
+    wl = t.openwatch()
+    wl.watch(zf, at1, {2:at1})
+
+    # spawn faulty client and wait until it setups its watch
+    p = tFaultySubProcess(t, _bad_pinh_no_pin_reply, at=at2)
+    defer(p.close)
+    assert p.recv(t.ctx) == "f: watch setup ok"
+
+    # commit new transaction and issue read access to modified block
+    # our read should be served well even though faulty client is stuck.
+    # As the result the faulty client should be killed by wcfs.
+    at3 = t.commit(zf, {1:'b3'})
+    wg = sync.WorkGroup(t.ctx)
+    def _(ctx):
+        f.assertBlk(1, 'b3', {wl: {1:at0}}, timeout=2*t.pintimeout)
+    wg.go(_)
+    def _(ctx):
+        assert p.recv(ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 1, h(at0))
+    wg.go(_)
+    wg.wait()
+
     p.join(t.ctx)
     assert p.exitcode is not None
 
