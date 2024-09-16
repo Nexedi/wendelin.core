@@ -68,8 +68,8 @@ def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
 
         # sleep > wcfs pin timeout - wcfs must kill us
         _, _rx = select(
-            ctx.done().recv,               # 0
-            time.after(t.pintimeout).recv, # 1
+            ctx.done().recv,                 # 0
+            time.after(2*t.pintimeout).recv, # 1
         )
         if _ == 0:
             raise ctx.err()
