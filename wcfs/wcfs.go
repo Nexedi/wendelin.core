@@ -543,6 +543,9 @@ type Root struct {
 	revMu  sync.Mutex
 	revTab map[zodb.Tid]*Head
 
+	// time budget for a client to handle pin notification (TODO)
+	pinTimeout time.Duration
+
 	// collected statistics
 	stats *Stats
 }
@@ -2498,6 +2501,7 @@ func main() {
 func _main() (err error) {
 	debug := flag.Bool("d", false, "debug")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
+	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2580,12 +2584,13 @@ func _main() (err error) {
 	head.bfdir = bfdir
 
 	root := &Root{
-		fsNode: newFSNode(fSticky),
-		zstor:  zstor,
-		zdb:    zdb,
-		head:   head,
-		revTab: make(map[zodb.Tid]*Head),
-		stats:  &Stats{},
+		fsNode:     newFSNode(fSticky),
+		zstor:      zstor,
+		zdb:        zdb,
+		head:       head,
+		revTab:     make(map[zodb.Tid]*Head),
+		pinTimeout: *pintimeout,
+		stats:      &Stats{},
 	}
 
 	opts := &fuse.MountOptions{
@@ -2641,6 +2646,7 @@ func _main() (err error) {
 	_wcfs := newFSNode(fSticky)
 	mkdir(root, ".wcfs", &_wcfs)
 	mkfile(&_wcfs, "zurl", NewStaticFile([]byte(zurl)))
+	mkfile(&_wcfs, "pintimeout", NewStaticFile([]byte(fmt.Sprintf("%.1f", float64(root.pinTimeout) / float64(time.Second)))))
 
 	// .wcfs/zhead - special file channel that sends zhead.at.
 	//

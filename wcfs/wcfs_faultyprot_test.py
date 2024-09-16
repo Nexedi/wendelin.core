@@ -26,18 +26,24 @@ from golang import select, func, defer
 from golang import context, sync, time
 
 import pytest; xfail = pytest.mark.xfail
-from pytest import fail
+from pytest import fail, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, \
         setup_module, teardown_module, setup_function, teardown_function
+
+
+# tests in this module require WCFS to promptly react to pin handler
+# timeouts so that verifying WCFS killing logic does not take a lot of time.
+@fixture
+def with_prompt_pintimeout(monkeypatch):
+    tkill = 3*time.second
+    return monkeypatch.setenv("WENDELIN_CORE_WCFS_OPTIONS", "-pintimeout %.1fs" % tkill, prepend=" ")
 
 
 # verify that wcfs kills slow/faulty client who does not reply to pin in time.
 @xfail  # protection against faulty/slow clients
 @func
-def test_wcfs_pintimeout_kill():
-    # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
-    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
+def test_wcfs_pintimeout_kill(with_prompt_pintimeout):
+    t = tDB(); zf = t.zfile
     defer(t.close)
 
     at1 = t.commit(zf, {2:'c1'})
@@ -46,7 +52,7 @@ def test_wcfs_pintimeout_kill():
     f.assertData(['','','c2'])
 
     # XXX move into subprocess not to kill whole testing
-    ctx, _ = context.with_timeout(context.background(), 2*tkill)
+    ctx, _ = context.with_timeout(context.background(), 2*t.pintimeout)
 
     wl = t.openwatch()
     wg = sync.WorkGroup(ctx)
@@ -62,8 +68,8 @@ def test_wcfs_pintimeout_kill():
 
         # sleep > wcfs pin timeout - wcfs must kill us
         _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
+            ctx.done().recv,               # 0
+            time.after(t.pintimeout).recv, # 1
         )
         if _ == 0:
             raise ctx.err()

@@ -357,10 +357,13 @@ class tWCFS(_tWCFS):
         assert os.path.exists(wc.mountpoint)
         assert is_mountpoint(wc.mountpoint)
         t.wc = wc
+        t.pintimeout = float(t.wc._read(".wcfs/pintimeout"))
 
         # the whole test is limited in time to detect deadlocks
         # NOTE with_timeout must be << timeout
-        # NOTE wcfs_pin_timeout must be >> timeout
+        # NOTE pintimeout can be either
+        #      * >> timeout (most of the test), or
+        #      * << timeout (faulty protection tests)
         timeout = 10*time.second
         t.ctx, t._ctx_cancel = context.with_timeout(context.background(), timeout)
 
