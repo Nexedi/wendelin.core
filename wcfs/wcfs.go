@@ -205,7 +205,16 @@
 //
 // Lacking OS primitives to change address space of another process and not
 // being able to work it around with ptrace in userspace, wcfs takes approach
-// to kill a slow client on 30 seconds timeout by default.
+// to kill a slow or faulty client on 30 seconds timeout or on any other pin
+// handling error. This way wcfs achieves progress and safety properties:
+// processing does not get stuck even if there is a hung client, and there is
+// no corruption in the data that is provided to all live and well-behaving
+// clients.
+//
+// Killing a client with SIGBUS is similar to how OS kernel sends SIGBUS when
+// a memory-mapped file is accessed and loading file data results in EIO. It is
+// also similar to wendelin.core 1 where SIGBUS is raised if loading file block
+// results in an error.
 //
 //
 // Writes
@@ -543,7 +552,7 @@ type Root struct {
 	revMu  sync.Mutex
 	revTab map[zodb.Tid]*Head
 
-	// time budget for a client to handle pin notification (TODO)
+	// time budget for a client to handle pin notification
 	pinTimeout time.Duration
 
 	// collected statistics
@@ -687,6 +696,8 @@ type WatchLink struct {
 	down1       sync.Once
 	down        chan struct{}  // ready after shutdown completes
 	pinWG       sync.WaitGroup // all pin handlers are accounted here
+
+	client *os.Process // client that opened the WatchLink
 }
 
 // Watch represents watching for changes to 1 BigFile over particular watch link.
@@ -728,6 +739,7 @@ type blkPinState struct {
 // The statistics is accessible via .wcfs/stats file served by _wcfs_Stats.
 type Stats struct {
 	pin     atomic.Int64 // # of times wcfs issued pin request
+	pinkill atomic.Int64 // # of times a client was killed due to badly handling pin
 }
 
 
@@ -1438,15 +1450,15 @@ func traceIso(format string, argv ...interface{}) {
 // rev = zodb.TidMax means @head; otherwise rev must be ≤ w.at and there must
 // be no rev_next changing file[blk]: rev < rev_next ≤ w.at.
 //
-// Pinning works under WatchLink.serveCtx instead of explicitly
-// specified context because pinning is critical operation whose failure will lead
+// Pinning works under WatchLink.serveCtx + pinTimeout instead of explicitly
+// specified context because pinning is critical operation whose failure leads
 // to client being SIGBUS'ed and so pinning should not be interrupted arbitrarily.
 //
 // Corresponding watchlink is shutdown on any error.
 //
-// No error is returned as currently pin handles all errors itself inside, and
-// in the future the only error that pin will not be able to handle itself inside
-// will be considered to be fatal and the filesystem will be switched to EIO mode on that.
+// No error is returned as the only error that pin cannot handle itself inside
+// is considered to be fatal and the filesystem is switched to EIO mode on that.
+// See badPinKill documentation for details.
 //
 // pin is invoked by BigFile.readPinWatchers . It is called with atMu rlocked.
 func (w *Watch) pin(blk int64, rev zodb.Tid) {
@@ -1473,13 +1485,30 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) {
 	}
 }
 
+// PinError indicates to WatchLink shutdown that pinning a block failed and so
+// badPinKill needs to be run.
+type PinError struct {
+	blk int64
+	rev zodb.Tid
+	err error
+}
+
+func (e *PinError) Error() string {
+	return fmt.Sprintf("pin #%d @%s: %s", e.blk, isoRevstr(e.rev), e.err)
+}
+
+func (e *PinError) Unwrap() error {
+	return e.err
+}
+
 func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
+	defer func() {
+		if err != nil {
+			err = &PinError{blk, rev, err}
+		}
+	}()
+
 	foid := w.file.zfile.POid()
-	revstr := rev.String()
-	if rev == zodb.TidMax {
-		revstr = "head"
-	}
-	defer xerr.Contextf(&err, "pin #%d @%s", blk, revstr)
 
 	if !(rev == zodb.TidMax || rev <= w.at) {
 		panicf("f<%s>: wlink%d: pin #%d @%s: watch.at (%s) < rev",
@@ -1526,7 +1555,7 @@ func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) 
 	// perform IO without w.pinnedMu
 	w.pinnedMu.Unlock()
 	groot.stats.pin.Add(1)
-	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, revstr))
+	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, isoRevstr(rev)))
 	w.pinnedMu.Lock()
 
 	// check IO reply & verify/signal blkpin is ready
@@ -1556,6 +1585,92 @@ func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) 
 	}
 
 	return nil
+}
+
+// badPinKill is invoked by shutdown to kill client that did not handle pin
+// notification correctly and in time.
+//
+// Because proper pin handling is critical for safety it is considered to be a
+// fatal error if the client could not be killed as wcfs no longer can
+// continue to provide correct uncorrupted data to it. The filesystem is
+// switched to EIO mode in such case.
+func (wlink *WatchLink) badPinKill(reason error) {
+	pid := wlink.client.Pid
+
+	logf := func(format string, argv ...any) {
+		emsg := fmt.Sprintf("pid%d: ", pid)
+		emsg += fmt.Sprintf(format, argv...)
+		log.Error(emsg)
+	}
+	logf("client failed to handle pin notification correctly and timely in %s: %s", groot.pinTimeout, reason)
+	logf("-> killing it because else 1) all other clients will remain stuck, and 2) we no longer can provide correct data to the faulty client.")
+	logf(`   (see "Protection against slow or faulty clients" in wcfs description for details)`)
+
+	err := wlink._badPinKill()
+	if err != nil {
+		logf("failed to kill it: %s", err)
+		logf("this is major unexpected event.")
+		fatalEIO()
+	}
+
+	logf("terminated")
+	groot.stats.pinkill.Add(1)
+}
+
+func (wlink *WatchLink) _badPinKill() error {
+	client := wlink.client
+	pid    := client.Pid
+
+	// time budget for pin + wait + fatal-notify + kill = pinTimeout + 1 + 1/3·pinTimeout
+	//                                                  < 2  ·pinTimeout      if pinTimeout > 3/2
+	//
+	// NOTE wcfs_faultyprot_test.py waits for 2·pinTimeout to reliably
+	//      detect whether client was killed or not.
+	timeout := groot.pinTimeout/3
+	ctx := context.Background()
+	ctx1, cancel := context.WithTimeout(ctx, timeout*1/2)
+	defer cancel()
+
+	ctx2, cancel := context.WithTimeout(ctx, timeout*2/2)
+	defer cancel()
+
+	//	SIGBUS => wait for some time; if still alive => SIGKILL
+	// TODO kirr: "The kernel then sends SIGBUS on such case with the details about
+	// access to which address generated this error going in si_addr field of
+	// siginfo structure. It would be good if we can mimic that behaviour to a
+	// reasonable extent if possible."
+	log.Errorf("pid%d: <- SIGBUS", pid)
+	err := client.Signal(syscall.SIGBUS)
+	if err != nil {
+		return err
+	}
+
+	ok, err := waitProcessEnd(ctx1, client)
+	if err != nil && !errors.Is(err, ctx1.Err()) {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	log.Errorf("pid%d:    is still alive after SIGBUS", pid)
+	log.Errorf("pid%d: <- SIGKILL", pid)
+	err = client.Signal(syscall.SIGKILL)
+	if err != nil {
+		return err
+	}
+
+	ok, err = waitProcessEnd(ctx2, client)
+	if err != nil && !errors.Is(err, ctx2.Err()) {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	err = fmt.Errorf("is still alive after SIGKILL")
+	log.Errorf("pid%d:    %s", pid, err)
+	return err
 }
 
 // readPinWatchers complements readBlk: it sends `pin blk` for watchers of the file
@@ -1643,7 +1758,7 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 			//fmt.Printf("S: read #%d: watch @%s: pin -> @%s\n", blk, w.at, pinrev)
 
 			// NOTE we do not propagate context to pin. Ideally update
-			// watchers should be synchronous, and in practice we just use 30s timeout (TODO).
+			// watchers should be synchronous, and in practice we just use 30s timeout.
 			// A READ interrupt should not cause watch update failure.
 			w.pin(blk, pinrev) // only fatal error
 			return nil
@@ -1880,8 +1995,22 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 
 // Open serves /head/watch opens.
 func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	node, err := wnode.open(flags, fctx)
+	return node, err2LogStatus(err)
+}
+
+func (wnode *WatchNode) open(flags uint32, fctx *fuse.Context) (_ nodefs.File, err error) {
+	defer xerr.Contextf(&err, "/head/watch: open")
+
 	// TODO(?) check flags
 	head := wnode.head
+
+	// remember our client who opened the watchlink.
+	// We will need to kill the client if it will be e.g. slow to respond to pin notifications.
+	client, err := findAliveProcess(int(fctx.Caller.Pid))
+	if err != nil {
+		return nil, err
+	}
 
 	serveCtx, serveCancel := context.WithCancel(context.TODO() /*TODO ctx of wcfs running*/)
 	wlink := &WatchLink{
@@ -1893,6 +2022,7 @@ func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fus
 		serveCtx:    serveCtx,
 		serveCancel: serveCancel,
 		down:        make(chan struct{}),
+		client:      client,
 	}
 
 	head.wlinkMu.Lock()
@@ -1900,12 +2030,13 @@ func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fus
 	head.wlinkMu.Unlock()
 
 	go wlink.serve(serveCtx)
-	return wlink.sk.File(), fuse.OK
+	return wlink.sk.File(), nil
 }
 
 // shutdown shuts down communication over watchlink due to specified reason and
 // marks the watchlink as no longer active.
 //
+// The client is killed if the reason is due to "failed to pin".
 // Only the first shutdown call has the effect, but all calls wait for the
 // actual shutdown to complete.
 //
@@ -1916,10 +2047,23 @@ func (wlink *WatchLink) shutdown(reason error) {
 		wlink.serveCancel()
 
 		// give client a chance to be notified if shutdown was due to some logical error
+		kill := false
 		if reason != nil {
+			_, kill = reason.(*PinError)
+			emsg := "error: "
+			if kill {
+				emsg = "fatal: "
+			}
+			emsg += reason.Error()
+
 			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 			defer cancel()
-			_ = wlink.send(ctx, 0, fmt.Sprintf("error: %s", reason))
+			_ = wlink.send(ctx, 0, emsg)
+		}
+
+		// kill client if shutdown is due to faulty pin handling
+		if kill {
+			wlink.badPinKill(reason) // only fatal error
 		}
 
 		// NOTE unregistering watches and wlink itself is done on serve exit, not
@@ -1969,6 +2113,9 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 		if err == nil {
 			err = err2
 		}
+
+		// release client process
+		wlink.client.Release()
 	}()
 
 	// watch handlers are spawned in dedicated workgroup
@@ -1986,7 +2133,7 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 		//
 		// For error return, we want any in-progress, and so will
 		// become failed, pin handler to result in corresponding client
-		// to become killed (TODO). That's why we trigger only cancel
+		// to become killed. That's why we trigger only cancel
 		// ourselves and let failed pin handlers to invoke shutdown
 		// with their specific reason.
 		//
@@ -2562,6 +2709,7 @@ func _wcfs_Stats(fctx *fuse.Context) ([]byte, error) {
 	// dump information collected in root.stats
 	s := root.stats
 	num("pin",         s.pin.Load())
+	num("pinkill",     s.pinkill.Load())
 
 	return []byte(stats), nil
 }

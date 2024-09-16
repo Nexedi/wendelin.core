@@ -387,7 +387,7 @@ class tWCFS(_tWCFS):
         t._stats_prev = None
         t.assertStats({'BigFile':   0,  'RevHead':  0,  'ZHeadLink':  0,
                        'WatchLink': 0,  'Watch':    0,  'PinnedBlk':  0,
-                       'pin':       0})
+                       'pin':       0,  'pinkill':  0})
 
     # _abort_ontimeout is in wcfs_test.pyx
 
@@ -424,8 +424,8 @@ class tWCFS(_tWCFS):
     #
     # The state is asserted eventually instead of immediately - for both
     # counters and instance values - because wcfs increments a counter
-    # _after_ corresponding event happened,
-    # and the tests can start to observe that state
+    # _after_ corresponding event happened, for example pinkill after actually
+    # killing client process, and the tests can start to observe that state
     # before wcfs actually does counter increment. For the similar reason we
     # need to assert that the counters stay in expected state to make sure that
     # no extra event happened. For instance values we need to assert
@@ -559,7 +559,10 @@ class tDB(tWCFS):
         assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
 
-        t.assertStats({'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0})
+        zstats = {'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0}
+        if not t.multiproc:
+            zstats['pinkill'] = 0
+        t.assertStats(zstats)
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.

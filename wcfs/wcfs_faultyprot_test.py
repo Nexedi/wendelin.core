@@ -30,7 +30,6 @@ import six
 from golang import select, func, defer
 from golang import context, sync, time
 
-import pytest; xfail = pytest.mark.xfail
 from pytest import mark, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, eprint, \
         setup_module, teardown_module, setup_function, teardown_function
@@ -281,7 +280,6 @@ def __bad_watch_pinh(ctx, f, at, pinh, pinhFailReason):
 def _bad_watch_no_pin_reply (ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_no_pin_reply,  "is stuck")
 def _bad_watch_nak_pin_reply(ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_nak_pin_reply, "replies nak")
 
-@xfail  # protection against faulty/slow clients
 @mark.parametrize('faulty', [
     _bad_watch_no_pin_read,
     _bad_watch_no_pin_reply,
@@ -301,6 +299,7 @@ def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
     # launch faulty process that should be killed by wcfs on problematic pin during watch setup
     p = tFaultySubProcess(t, faulty, at=at1)
     defer(p.close)
+    t.assertStats({'pinkill': 0})
 
     # wait till faulty client issues its watch, receives pin and pauses/misbehaves
     p.send("start watch")
@@ -314,6 +313,7 @@ def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
     # the faulty client must become killed by wcfs
     p.join(t.ctx)
     assert p.exitcode is not None
+    t.assertStats({'pinkill': 1})
 
 
 # verify that wcfs kills slow/faulty client who does not handle pin
@@ -371,7 +371,6 @@ def __bad_pinh(ctx, f, at, pinh):
 def _bad_pinh_no_pin_reply (ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_no_pin_reply)
 def _bad_pinh_nak_pin_reply(ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_nak_pin_reply)
 
-@xfail  # protection against faulty/slow clients
 @mark.parametrize('faulty', [
     _bad_pinh_no_pin_read,
     _bad_pinh_no_pin_reply,
@@ -396,6 +395,7 @@ def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
     p = tFaultySubProcess(t, faulty, at=at2)
     defer(p.close)
     assert p.recv(t.ctx) == "f: watch setup ok"
+    t.assertStats({'pinkill': 0})
 
     # commit new transaction and issue read access to modified block
     # our read should be served well even though faulty client is either stuck
@@ -414,6 +414,7 @@ def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
 
     p.join(t.ctx)
     assert p.exitcode is not None
+    t.assertStats({'pinkill': 1})
 
 
 # _pinner_<problem> simulates faulty pinner inside client that behaves in
