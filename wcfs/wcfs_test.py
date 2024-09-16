@@ -1459,7 +1459,8 @@ def test_wcfs_watch_robust():
         "file not yet known to wcfs or is not a ZBigFile"
     wl.close()
 
-    # closeTX/bye cancels blocked pin handlers
+    # closeTX gently with "bye" cancels blocked pin handlers without killing client
+    # (closing abruptly is verified in wcfs_faultyprot_test.py)
     f = t.open(zf)
     f.assertBlk(2, 'c2')
     f.assertCache([0,0,1])
@@ -1467,23 +1468,15 @@ def test_wcfs_watch_robust():
     wl = t.openwatch()
     wg = sync.WorkGroup(timeout())
     def _(ctx):
-        # TODO clarify what wcfs should do if pin handler closes wlink TX:
-        #   - reply error + close, or
-        #   - just close
-        # t = when reviewing WatchLink.serve in wcfs.go
-        #assert wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1))) == \
-        #        "error setup watch f<%s> @%s: " % (h(zf._p_oid), h(at1)) + \
-        #        "pin #%d @%s: context canceled" % (2, h(at1))
-        #with raises(error, match="unexpected EOF"):
         with raises(error, match="recvReply: link is down"):
             wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-
     wg.go(_)
     def _(ctx):
         req = wl.recvReq(ctx)
         assert req is not None
         assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
         # don't reply to req - close instead
+        # NOTE this closes watchlink gently with first sending "bye" message
         wl.closeWrite()
     wg.go(_)
     wg.wait()

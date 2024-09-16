@@ -31,7 +31,7 @@ from golang import select, func, defer
 from golang import context, sync, time
 
 import pytest; xfail = pytest.mark.xfail
-from pytest import fixture
+from pytest import mark, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, eprint, \
         setup_module, teardown_module, setup_function, teardown_function
 
@@ -214,14 +214,53 @@ class tFaultyClient:
 # ---- tests ----
 
 
-# verify that wcfs kills slow/faulty client who does not reply to pin
-# notifications in time during watch setup.
+# verify that wcfs kills slow/faulty client who does not handle pin
+# notifications correctly and in time during watch setup.
 #
 # This verifies setupWatch codepath.
 
-@func
-def _bad_watch_no_pin_reply(ctx, f, at):
-    wl = wcfs.WatchLink(f.wc)    ; defer(wl.close)
+@func   # faulty client that does not read pin notifications during watch setup.
+def _bad_watch_no_pin_read(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # wait for command to start watching
+    _ = f.cin.recv()
+    assert _ == "start watch", _
+
+    # send watch; the write should go ok.
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+
+    # there is no pin handler, because noone reads pin notifications
+    # -> wcfs must kill us after timing out with sending pin request
+    f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
+
+@func   # faulty client that terminates connnection abruptly after receiving pin during watch setup.
+def _bad_watch_eof_pin_reply(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # wait for command to start watching
+    _ = f.cin.recv()
+    assert _ == "start watch", _
+
+    # send watch; the write should go ok.
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+
+    # pin notification must be coming
+    _ = wlf.readline()
+    assert _.startswith(b"2 pin "), _
+    f.cout.send(_[2:].rstrip())  # received message without sequence number and trailing \n
+
+    # we don't reply to pin notification and just close the connection instead
+    # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
+    wlf.close()
+
+    # wcfs must kill us right after receiving EOF
+    f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
+
+
+@func   # faulty client that behaves in problematic way in its pin handler during watch setup.
+def __bad_watch_pinh(ctx, f, at, pinh, pinhFailReason):
+    wl = wcfs.WatchLink(f.wc)   ; defer(wl.close)
 
     # wait for command to start watching
     _ = f.cin.recv()
@@ -229,23 +268,28 @@ def _bad_watch_no_pin_reply(ctx, f, at):
 
     wg = sync.WorkGroup(ctx)
     def _(ctx):
-        # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(f.zfile_oid), h(at)))
-        raise AssertionError("watch request completed (should not as pin handler is stuck)")
+        # send watch. The pin handler either won't be replying or will reply with an error
+        # -> we should never get reply here.
+        _ = wl.sendReq(ctx, b"watch %s @%s" % (h(f.zfile_oid), h(at)))
+        raise AssertionError("watch request completed (should not as pin handler %s); reply: %r" % (pinhFailReason, _))
     wg.go(_)
     def _(ctx):
-        req = wl.recvReq(ctx)
-        assert req is not None
-        f.cout.send(req.msg)
-
-        # sleep > wcfs pin timeout - wcfs must kill us
-        f.assertKilled(ctx, "wcfs did not kill stuck client")
+        pinh(ctx, wl)
     wg.go(_)
     wg.wait()
 
+def _bad_watch_no_pin_reply (ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_no_pin_reply,  "is stuck")
+def _bad_watch_nak_pin_reply(ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_nak_pin_reply, "replies nak")
+
 @xfail  # protection against faulty/slow clients
+@mark.parametrize('faulty', [
+    _bad_watch_no_pin_read,
+    _bad_watch_no_pin_reply,
+    _bad_watch_eof_pin_reply,
+    _bad_watch_nak_pin_reply,
+])
 @func
-def test_wcfs_pintimeout_kill_on_watch(with_prompt_pintimeout):
+def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
     t = tDB(multiproc=True); zf = t.zfile
     defer(t.close)
 
@@ -255,12 +299,13 @@ def test_wcfs_pintimeout_kill_on_watch(with_prompt_pintimeout):
     f.assertData(['','','c2'])
 
     # launch faulty process that should be killed by wcfs on problematic pin during watch setup
-    p = tFaultySubProcess(t, _bad_watch_no_pin_reply, at=at1)
+    p = tFaultySubProcess(t, faulty, at=at1)
     defer(p.close)
 
     # wait till faulty client issues its watch, receives pin and pauses/misbehaves
     p.send("start watch")
-    assert p.recv(t.ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+    if faulty != _bad_watch_no_pin_read:
+        assert p.recv(t.ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
 
     # issue our watch request - it should be served well and without any delay
     wl = t.openwatch()
@@ -271,13 +316,48 @@ def test_wcfs_pintimeout_kill_on_watch(with_prompt_pintimeout):
     assert p.exitcode is not None
 
 
-# verify that wcfs kills slow/faulty client who does not reply to pin
-# notifications in time caused by asynchronous read access.
+# verify that wcfs kills slow/faulty client who does not handle pin
+# notifications correctly and in time caused by asynchronous read access.
 #
 # This verifies readPinWatchers codepath.
 
-@func
-def _bad_pinh_no_pin_reply(ctx, f, at):
+@func   # faulty client that does not read pin notifications triggered by read.
+def _bad_pinh_no_pin_read(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # initial watch setup goes ok
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+    _ = wlf.readline()
+    assert _ == b"1 ok\n",  _
+    f.cout.send("f: watch setup ok")
+
+    # sleep > wcfs pin timeout - wcfs must kill us
+    f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
+
+@func   # faulty client that terminates connnection abruptly after receiving pin triggered by read.
+def _bad_pinh_eof_pin_reply(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # initial watch setup goes ok
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+    _ = wlf.readline()
+    assert _ == b"1 ok\n",  _
+    f.cout.send("f: watch setup ok")
+
+    # wait for "pin ..." due to read access in the parent
+    _ = wlf.readline()
+    assert _.startswith(b"2 pin "), _
+    f.cout.send(_[2:].rstrip())
+
+    # close connection abruptly.
+    # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
+    wlf.close()
+
+    # wcfs must kill us right after receiving EOF
+    f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
+
+@func   # faulty client that behaves in problematic way in its pin notifications triggered by read.
+def __bad_pinh(ctx, f, at, pinh):
     wl = wcfs.WatchLink(f.wc)   ; defer(wl.close)
 
     # initial watch setup goes ok
@@ -286,16 +366,20 @@ def _bad_pinh_no_pin_reply(ctx, f, at):
     f.cout.send("f: watch setup ok")
 
     # wait for "pin ..." due to read access in the parent
-    req = wl.recvReq(ctx)
-    assert req is not None
-    f.cout.send(req.msg)
+    pinh(ctx, wl)
 
-    # sleep > wcfs pin timeout - wcfs must kill us
-    f.assertKilled(ctx, "wcfs did not kill stuck client")
+def _bad_pinh_no_pin_reply (ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_no_pin_reply)
+def _bad_pinh_nak_pin_reply(ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_nak_pin_reply)
 
 @xfail  # protection against faulty/slow clients
+@mark.parametrize('faulty', [
+    _bad_pinh_no_pin_read,
+    _bad_pinh_no_pin_reply,
+    _bad_pinh_eof_pin_reply,
+    _bad_pinh_nak_pin_reply,
+])
 @func
-def test_wcfs_pintimeout_kill_on_access(with_prompt_pintimeout):
+def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
     t = tDB(multiproc=True); zf = t.zfile; at0=t.at0
     defer(t.close)
 
@@ -309,12 +393,13 @@ def test_wcfs_pintimeout_kill_on_access(with_prompt_pintimeout):
     wl.watch(zf, at1, {2:at1})
 
     # spawn faulty client and wait until it setups its watch
-    p = tFaultySubProcess(t, _bad_pinh_no_pin_reply, at=at2)
+    p = tFaultySubProcess(t, faulty, at=at2)
     defer(p.close)
     assert p.recv(t.ctx) == "f: watch setup ok"
 
     # commit new transaction and issue read access to modified block
-    # our read should be served well even though faulty client is stuck.
+    # our read should be served well even though faulty client is either stuck
+    # or behaves in problematic way in its pin handler.
     # As the result the faulty client should be killed by wcfs.
     at3 = t.commit(zf, {1:'b3'})
     wg = sync.WorkGroup(t.ctx)
@@ -322,12 +407,37 @@ def test_wcfs_pintimeout_kill_on_access(with_prompt_pintimeout):
         f.assertBlk(1, 'b3', {wl: {1:at0}}, timeout=2*t.pintimeout)
     wg.go(_)
     def _(ctx):
-        assert p.recv(ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 1, h(at0))
+        if faulty != _bad_pinh_no_pin_read:
+            assert p.recv(ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 1, h(at0))
     wg.go(_)
     wg.wait()
 
     p.join(t.ctx)
     assert p.exitcode is not None
+
+
+# _pinner_<problem> simulates faulty pinner inside client that behaves in
+# problematic way in its pin notification handler.
+
+@func(tFaultyClient)
+def _pinner_no_pin_reply(f, ctx, wl):
+    req = wl.recvReq(ctx)
+    assert req is not None
+    f.cout.send(req.msg)
+
+    # sleep > wcfs pin timeout - wcfs must kill us
+    f.assertKilled(ctx, "wcfs did not kill stuck client")
+
+@func(tFaultyClient)
+def _pinner_nak_pin_reply(f, ctx, wl):
+    req = wl.recvReq(ctx)
+    assert req is not None
+    f.cout.send(req.msg)
+
+    wl.replyReq(ctx, req, b"nak")
+
+    # wcfs must kill us right after receiving the nak
+    f.assertKilled(ctx, "wcfs did not kill client that replied nak to pin")
 
 
 # assertKilled assert that the current process becomes killed after time goes after pintimeout.
