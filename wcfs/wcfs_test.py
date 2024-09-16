@@ -22,6 +22,9 @@
 Virtmem layer provided by wcfs client package is unit-tested by
 wcfs/client/client_test.py .
 
+Protection from slow or faulty clients is unit-tested by
+wcfs/wcfs_faultyprot_test.py .
+
 At functional level, the whole wendelin.core test suite is used to verify
 wcfs.py/wcfs.go while running tox tests in wcfs mode.
 """
@@ -49,7 +52,6 @@ from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
@@ -1533,45 +1535,7 @@ def test_wcfs_watch_going_back():
     wl.close()
 
 
-# verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
-@func
-def test_wcfs_pintimeout_kill():
-    # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
-    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
-    defer(t.close)
-
-    at1 = t.commit(zf, {2:'c1'})
-    at2 = t.commit(zf, {2:'c2'})
-    f = t.open(zf)
-    f.assertData(['','','c2'])
-
-    # XXX move into subprocess not to kill whole testing
-    ctx, _ = context.with_timeout(context.background(), 2*tkill)
-
-    wl = t.openwatch()
-    wg = sync.WorkGroup(ctx)
-    def _(ctx):
-        # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-        fail("watch request completed (should not as pin handler is stuck)")
-    wg.go(_)
-    def _(ctx):
-        req = wl.recvReq(ctx)
-        assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
-
-        # sleep > wcfs pin timeout - wcfs must kill us
-        _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
-        )
-        if _ == 0:
-            raise ctx.err()
-        fail("wcfs did not killed stuck client")
-    wg.go(_)
-    wg.wait()
+# tests for "Protection against slow or faulty clients" are in wcfs_faultyprot_test.py
 
 
 # watch with @at > head - must wait for head to become >= at.
