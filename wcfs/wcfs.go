@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -205,7 +205,16 @@
 //
 // Lacking OS primitives to change address space of another process and not
 // being able to work it around with ptrace in userspace, wcfs takes approach
-// to kill a slow client on 30 seconds timeout by default.
+// to kill a slow or faulty client on 30 seconds timeout or on any other pin
+// handling error. This way wcfs achieves progress and safety properties:
+// processing does not get stuck even if there is a hung client, and there is
+// no corruption in the data that is provided to all live and well-behaving
+// clients.
+//
+// Killing a client with SIGBUS is similar to how OS kernel sends SIGBUS when
+// a memory-mapped file is accessed and loading file data results in EIO. It is
+// also similar to wendelin.core 1 where SIGBUS is raised if loading file block
+// results in an error.
 //
 //
 // Writes
@@ -542,6 +551,12 @@ type Root struct {
 	// directories + ZODB connections for @<rev>/
 	revMu  sync.Mutex
 	revTab map[zodb.Tid]*Head
+
+	// time budget for a client to handle pin notification
+	pinTimeout time.Duration
+
+	// collected statistics
+	stats *Stats
 }
 
 // /(head|<rev>)/			- served by Head.
@@ -674,12 +689,27 @@ type WatchLink struct {
 	txMu    sync.Mutex
 	rxMu    sync.Mutex
 	rxTab   map[/*stream*/uint64]chan string // client replies go via here
+
+	// serve operates under .serveCtx and can be requested to stop via serveCancel
+	serveCtx    context.Context
+	serveCancel context.CancelFunc
+	down1       sync.Once
+	down        chan struct{}  // ready after shutdown completes
+	pinWG       sync.WaitGroup // all pin handlers are accounted here
+
+	client *os.Process // client that opened the WatchLink
 }
 
 // Watch represents watching for changes to 1 BigFile over particular watch link.
 type Watch struct {
 	link *WatchLink // link to client
 	file *BigFile	// watching this file
+
+	// setupMu is used to allow only 1 watch request for particular file to
+	// be handled simultaneously for particular client. It complements atMu
+	// by continuing to protect setupWatch from another setupWatch when
+	// setupWatch non-atomically downgrades atMu.W to atMu.R .
+	setupMu sync.Mutex
 
 	// atMu, similarly to zheadMu, protects watch.at and pins associated with Watch.
 	// atMu.R guarantees that watch.at is not changing, but multiple
@@ -703,6 +733,15 @@ type blkPinState struct {
 	ready  chan struct{}
 	err    error
 }
+
+// Stats keeps collected statistics.
+//
+// The statistics is accessible via .wcfs/stats file served by _wcfs_Stats.
+type Stats struct {
+	pin     atomic.Int64 // # of times wcfs issued pin request
+	pinkill atomic.Int64 // # of times a client was killed due to badly handling pin
+}
+
 
 // -------- ZODB cache control --------
 
@@ -960,6 +999,7 @@ retry:
 	}
 
 	// notify .wcfs/zhead
+	gdebug.zheadSockTabMu.Lock()
 	for sk := range gdebug.zheadSockTab {
 		_, err := fmt.Fprintf(xio.BindCtxW(sk, ctx), "%s\n", δZ.Tid)
 		if err != nil {
@@ -968,15 +1008,15 @@ retry:
 			delete(gdebug.zheadSockTab, sk)
 		}
 	}
+	gdebug.zheadSockTabMu.Unlock()
 
 	// shrink δFtail not to grow indefinitely.
 	// cover history for at least 1 minute, but including all watches.
-	// No need to lock anything because we are holding zheadMu and
-	// setupWatch too runs with zheadMu locked.
 	//
 	// TODO shrink δFtail only once in a while - there is no need to compute
 	// revCut and cut δFtail on every transaction.
 	revCut := zodb.TidFromTime(zhead.At().Time().Add(-1*time.Minute))
+	head.wlinkMu.Lock()
 	for wlink := range head.wlinkTab {
 		for _, w := range wlink.byfile {
 			if w.at < revCut {
@@ -984,6 +1024,7 @@ retry:
 			}
 		}
 	}
+	head.wlinkMu.Unlock()
 	bfdir.δFtail.ForgetPast(revCut)
 
 	// notify zhead.At waiters
@@ -1277,7 +1318,6 @@ func (f *BigFile) readBlk(ctx context.Context, blk int64, dest []byte) (err erro
 		δFtail.Track(f.zfile, blk, treepath, blkcov, zblk)
 
 		// we have the data - it can be used after watchers are updated
-		// XXX should we use ctx here? (see readPinWatchers comments)
 		err = f.readPinWatchers(ctx, blk, blkrevMax)
 		if err != nil {
 			blkdata = nil
@@ -1410,21 +1450,65 @@ func traceIso(format string, argv ...interface{}) {
 // rev = zodb.TidMax means @head; otherwise rev must be ≤ w.at and there must
 // be no rev_next changing file[blk]: rev < rev_next ≤ w.at.
 //
-// must be called with atMu rlocked.
+// Pinning works under WatchLink.serveCtx + pinTimeout instead of explicitly
+// specified context because pinning is critical operation whose failure leads
+// to client being SIGBUS'ed and so pinning should not be interrupted arbitrarily.
 //
-// TODO close watch on any error
-func (w *Watch) pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
-	defer xerr.Contextf(&err, "wlink%d: f<%s>", w.link.id, w.file.zfile.POid())
-	return w._pin(ctx, blk, rev)
+// Corresponding watchlink is shutdown on any error.
+//
+// No error is returned as the only error that pin cannot handle itself inside
+// is considered to be fatal and the filesystem is switched to EIO mode on that.
+// See badPinKill documentation for details.
+//
+// pin is invoked by BigFile.readPinWatchers . It is called with atMu rlocked.
+func (w *Watch) pin(blk int64, rev zodb.Tid) {
+	w._pin(w.link.serveCtx, blk, rev)
 }
 
-func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
-	foid := w.file.zfile.POid()
-	revstr := rev.String()
-	if rev == zodb.TidMax {
-		revstr = "head"
+// _pin serves pin and is also invoked directly by WatchLink.setupWatch .
+//
+// It is invoked with ctx being either WatchLink.serveCtx or descendant of it.
+// In all cases it is called with atMu rlocked.
+func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) {
+	if ctx.Err() != nil {
+		return // don't enter pinWG if watchlink is down
 	}
-	defer xerr.Contextf(&err, "pin #%d @%s", blk, revstr)
+	w.link.pinWG.Add(1)
+	defer w.link.pinWG.Done()
+
+	ctx, cancel := context.WithTimeout(ctx, groot.pinTimeout)
+	defer cancel()
+
+	err := w.__pin(ctx, blk, rev)
+	if err != nil {
+		w.link.shutdown(err)
+	}
+}
+
+// PinError indicates to WatchLink shutdown that pinning a block failed and so
+// badPinKill needs to be run.
+type PinError struct {
+	blk int64
+	rev zodb.Tid
+	err error
+}
+
+func (e *PinError) Error() string {
+	return fmt.Sprintf("pin #%d @%s: %s", e.blk, isoRevstr(e.rev), e.err)
+}
+
+func (e *PinError) Unwrap() error {
+	return e.err
+}
+
+func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
+	defer func() {
+		if err != nil {
+			err = &PinError{blk, rev, err}
+		}
+	}()
+
+	foid := w.file.zfile.POid()
 
 	if !(rev == zodb.TidMax || rev <= w.at) {
 		panicf("f<%s>: wlink%d: pin #%d @%s: watch.at (%s) < rev",
@@ -1470,7 +1554,8 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 
 	// perform IO without w.pinnedMu
 	w.pinnedMu.Unlock()
-	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, revstr))
+	groot.stats.pin.Add(1)
+	ack, err := w.link.sendReq(ctx, fmt.Sprintf("pin %s #%d @%s", foid, blk, isoRevstr(rev)))
 	w.pinnedMu.Lock()
 
 	// check IO reply & verify/signal blkpin is ready
@@ -1502,6 +1587,92 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 	return nil
 }
 
+// badPinKill is invoked by shutdown to kill client that did not handle pin
+// notification correctly and in time.
+//
+// Because proper pin handling is critical for safety it is considered to be a
+// fatal error if the client could not be killed as wcfs no longer can
+// continue to provide correct uncorrupted data to it. The filesystem is
+// switched to EIO mode in such case.
+func (wlink *WatchLink) badPinKill(reason error) {
+	pid := wlink.client.Pid
+
+	logf := func(format string, argv ...any) {
+		emsg := fmt.Sprintf("pid%d: ", pid)
+		emsg += fmt.Sprintf(format, argv...)
+		log.Error(emsg)
+	}
+	logf("client failed to handle pin notification correctly and timely in %s: %s", groot.pinTimeout, reason)
+	logf("-> killing it because else 1) all other clients will remain stuck, and 2) we no longer can provide correct data to the faulty client.")
+	logf(`   (see "Protection against slow or faulty clients" in wcfs description for details)`)
+
+	err := wlink._badPinKill()
+	if err != nil {
+		logf("failed to kill it: %s", err)
+		logf("this is major unexpected event.")
+		fatalEIO()
+	}
+
+	logf("terminated")
+	groot.stats.pinkill.Add(1)
+}
+
+func (wlink *WatchLink) _badPinKill() error {
+	client := wlink.client
+	pid    := client.Pid
+
+	// time budget for pin + wait + fatal-notify + kill = pinTimeout + 1 + 1/3·pinTimeout
+	//                                                  < 2  ·pinTimeout      if pinTimeout > 3/2
+	//
+	// NOTE wcfs_faultyprot_test.py waits for 2·pinTimeout to reliably
+	//      detect whether client was killed or not.
+	timeout := groot.pinTimeout/3
+	ctx := context.Background()
+	ctx1, cancel := context.WithTimeout(ctx, timeout*1/2)
+	defer cancel()
+
+	ctx2, cancel := context.WithTimeout(ctx, timeout*2/2)
+	defer cancel()
+
+	//	SIGBUS => wait for some time; if still alive => SIGKILL
+	// TODO kirr: "The kernel then sends SIGBUS on such case with the details about
+	// access to which address generated this error going in si_addr field of
+	// siginfo structure. It would be good if we can mimic that behaviour to a
+	// reasonable extent if possible."
+	log.Errorf("pid%d: <- SIGBUS", pid)
+	err := client.Signal(syscall.SIGBUS)
+	if err != nil {
+		return err
+	}
+
+	ok, err := waitProcessEnd(ctx1, client)
+	if err != nil && !errors.Is(err, ctx1.Err()) {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	log.Errorf("pid%d:    is still alive after SIGBUS", pid)
+	log.Errorf("pid%d: <- SIGKILL", pid)
+	err = client.Signal(syscall.SIGKILL)
+	if err != nil {
+		return err
+	}
+
+	ok, err = waitProcessEnd(ctx2, client)
+	if err != nil && !errors.Is(err, ctx2.Err()) {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	err = fmt.Errorf("is still alive after SIGKILL")
+	log.Errorf("pid%d:    %s", pid, err)
+	return err
+}
+
 // readPinWatchers complements readBlk: it sends `pin blk` for watchers of the file
 // after a block was loaded from ZODB but before block data is returned to kernel.
 //
@@ -1509,10 +1680,6 @@ func (w *Watch) _pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
 //
 // Must be called only for f under head/
 // Must be called with f.head.zheadMu rlocked.
-//
-// XXX do we really need to use/propagate caller context here? ideally update
-// watchers should be synchronous, and in practice we just use 30s timeout (TODO).
-// Should a READ interrupt cause watch update failure? -> probably no
 func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb.Tid) (err error) {
 	defer xerr.Context(&err, "pin watchers") // f.path and blk is already put into context by readBlk
 
@@ -1534,8 +1701,15 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 	blkrevRough := true
 
 	wg := xsync.NewWorkGroup(ctx)
+	defer func() {
+		err2 := wg.Wait()
+		if err == nil {
+			err = err2
+		}
+	}()
 
 	f.watchMu.RLock()
+	defer f.watchMu.RUnlock()
 	for w := range f.watchTab {
 		w := w
 
@@ -1582,13 +1756,16 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 				return err
 			}
 			//fmt.Printf("S: read #%d: watch @%s: pin -> @%s\n", blk, w.at, pinrev)
-			// TODO close watcher on any error
-			return w.pin(ctx, blk, pinrev)
+
+			// NOTE we do not propagate context to pin. Ideally update
+			// watchers should be synchronous, and in practice we just use 30s timeout.
+			// A READ interrupt should not cause watch update failure.
+			w.pin(blk, pinrev) // only fatal error
+			return nil
 		})
 	}
-	f.watchMu.RUnlock()
 
-	return wg.Wait()
+	return nil
 }
 
 // setupWatch sets up or updates a Watch when client sends `watch <file> @<at>` request.
@@ -1644,6 +1821,10 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 			pinned: make(map[int64]*blkPinState),
 		}
 	}
+
+	// allow only 1 setupWatch to run simultaneously for particular file
+	w.setupMu.Lock()
+	defer w.setupMu.Unlock()
 
 	f := w.file
 	f.watchMu.Lock()
@@ -1781,8 +1962,16 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 
 	// downgrade atMu.W -> atMu.R to let other clients to access the file.
 	// NOTE there is no primitive to do Wlock->Rlock atomically, but we are
-	// ok with that since we prepared everything to handle simultaneous pins
-	// from other reads.
+	// ok with that since:
+	//
+	//   * wrt readPinWatchers we prepared everything to handle
+	//     simultaneous pins from other reads.
+	//   * wrt setupWatch we can still be sure that no another setupWatch
+	//     started to run simultaneously during atMu.Unlock -> atMu.RLock
+	//     because we still hold setupMu.
+	//
+	// ( for the reference: pygolang provides RWMutex.UnlockToRLock while go
+	//   rejected it in golang.org/issues/38891 )
 	w.atMu.Unlock()
 	w.atMu.RLock()
 	defer w.atMu.RUnlock()
@@ -1792,12 +1981,13 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 		blk := blk
 		rev := rev
 		wg.Go(func(ctx context.Context) error {
-			return w._pin(ctx, blk, rev)
+			w._pin(ctx, blk, rev) // only fatal error
+			return nil
 		})
 	}
 	err = wg.Wait()
 	if err != nil {
-		return err
+		return err // should not fail
 	}
 
 	return nil
@@ -1805,62 +1995,102 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 
 // Open serves /head/watch opens.
 func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	node, err := wnode.open(flags, fctx)
+	return node, err2LogStatus(err)
+}
+
+func (wnode *WatchNode) open(flags uint32, fctx *fuse.Context) (_ nodefs.File, err error) {
+	defer xerr.Contextf(&err, "/head/watch: open")
+
 	// TODO(?) check flags
 	head := wnode.head
 
+	// remember our client who opened the watchlink.
+	// We will need to kill the client if it will be e.g. slow to respond to pin notifications.
+	client, err := findAliveProcess(int(fctx.Caller.Pid))
+	if err != nil {
+		return nil, err
+	}
+
+	serveCtx, serveCancel := context.WithCancel(context.TODO() /*TODO ctx of wcfs running*/)
 	wlink := &WatchLink{
-		sk:     NewFileSock(),
-		id:     atomic.AddInt32(&wnode.idNext, +1),
-		head:   head,
-		byfile: make(map[zodb.Oid]*Watch),
-		rxTab:  make(map[uint64]chan string),
+		sk:          NewFileSock(),
+		id:          atomic.AddInt32(&wnode.idNext, +1),
+		head:        head,
+		byfile:      make(map[zodb.Oid]*Watch),
+		rxTab:       make(map[uint64]chan string),
+		serveCtx:    serveCtx,
+		serveCancel: serveCancel,
+		down:        make(chan struct{}),
+		client:      client,
 	}
 
 	head.wlinkMu.Lock()
-	// XXX del wlinkTab[w] on w.sk.File.Release
 	head.wlinkTab[wlink] = struct{}{}
 	head.wlinkMu.Unlock()
 
-	go wlink.serve()
-	return wlink.sk.File(), fuse.OK
+	go wlink.serve(serveCtx)
+	return wlink.sk.File(), nil
+}
+
+// shutdown shuts down communication over watchlink due to specified reason and
+// marks the watchlink as no longer active.
+//
+// The client is killed if the reason is due to "failed to pin".
+// Only the first shutdown call has the effect, but all calls wait for the
+// actual shutdown to complete.
+//
+// NOTE shutdown can be invoked under atMu.R from pin.
+func (wlink *WatchLink) shutdown(reason error) {
+	wlink.down1.Do(func() {
+		// mark wlink as down; this signals serve loop to exit and cancels all in-progress pins
+		wlink.serveCancel()
+
+		// give client a chance to be notified if shutdown was due to some logical error
+		kill := false
+		if reason != nil {
+			_, kill = reason.(*PinError)
+			emsg := "error: "
+			if kill {
+				emsg = "fatal: "
+			}
+			emsg += reason.Error()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			_ = wlink.send(ctx, 0, emsg)
+		}
+
+		// kill client if shutdown is due to faulty pin handling
+		if kill {
+			wlink.badPinKill(reason) // only fatal error
+		}
+
+		// NOTE unregistering watches and wlink itself is done on serve exit, not
+		//      here, to avoid AB-BA deadlock on atMu and e.g. WatchLink.byfileMu .
+		//	It is ok to leave some watches still present in BigFile.watchTab
+		//	until final cleanup because pin becomes noop on down watchlink.
+
+		close(wlink.down)
+	})
+
+	<-wlink.down
 }
 
 // serve serves client initiated watch requests and routes client replies to
 // wcfs initiated pin requests.
-func (wlink *WatchLink) serve() {
-	err := wlink._serve()
+func (wlink *WatchLink) serve(ctx context.Context) {
+	err := wlink._serve(ctx)
 	if err != nil {
 		log.Error(err)
 	}
-
-	head := wlink.head
-	head.wlinkMu.Lock()
-	delete(head.wlinkTab, wlink)
-	head.wlinkMu.Unlock()
 }
 
-func (wlink *WatchLink) _serve() (err error) {
+func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 	defer xerr.Contextf(&err, "wlink %d: serve rx", wlink.id)
 
-	ctx0 := context.TODO() // TODO ctx = merge(ctx of wcfs running, ctx of wlink timeout)
-
-	ctx, cancel := context.WithCancel(ctx0)
-	wg := xsync.NewWorkGroup(ctx)
-
-	r := bufio.NewReader(xio.BindCtxR(wlink.sk, ctx))
-
+	// final watchlink cleanup is done on serve exit
 	defer func() {
-		// cancel all handlers on both error and ok return.
-		// ( ok return is e.g. when we received "bye", so if client
-		//   sends "bye" and some pin handlers are in progress - they
-		//   anyway don't need to wait for client replies anymore )
-		cancel()
-
-		err2 := wg.Wait()
-		if err == nil {
-			err = err2
-		}
-
 		// unregister all watches created on this wlink
 		wlink.byfileMu.Lock()
 		for _, w := range wlink.byfile {
@@ -1871,45 +2101,83 @@ func (wlink *WatchLink) _serve() (err error) {
 		wlink.byfile = nil
 		wlink.byfileMu.Unlock()
 
-		// write to peer if it was logical error on client side
-		if err != nil {
-			_ = wlink.send(ctx0, 0, fmt.Sprintf("error: %s", err))
-		}
+		// unregister wlink itself
+		head := wlink.head
+		head.wlinkMu.Lock()
+		delete(head.wlinkTab, wlink)
+		head.wlinkMu.Unlock()
 
-		// close .sk.tx : this wakes up rx on client side.
-		err2 = wlink.sk.CloseWrite()
+		// close .sk
+		// closing .sk.tx wakes up rx on client side.
+		err2 := wlink.sk.Close()
 		if err == nil {
 			err = err2
 		}
+
+		// release client process
+		wlink.client.Release()
 	}()
 
-	// close .sk.rx on error/wcfs stopping or return: this wakes up read(sk).
-	retq := make(chan struct{})
-	defer close(retq)
-	wg.Go(func(ctx context.Context) error {
-		// monitor is always canceled - either at parent ctx cancel, or
-		// upon return from serve (see "cancel all handlers ..." ^^^).
-		// If it was return - report returned error to wg.Wait, not "canceled".
-		<-ctx.Done()
-		e := ctx.Err()
-		select {
-		default:
-		case <-retq:
-			e = err // returned error
+	// watch handlers are spawned in dedicated workgroup
+	//
+	// Pin handlers are run either inside - for pins run from setupWatch, or,
+	// for pins run from readPinWatchers, under wlink.pinWG.
+	// Upon serve exit we cancel them all and wait for their completion.
+	wg := xsync.NewWorkGroup(ctx)
+	defer func() {
+		// cancel all watch and pin handlers on both error and ok return.
+		//
+		// For ok return, when we received "bye", we want to cancel
+		// in-progress pin handlers without killing clients. That's why
+		// we call shutdown ourselves.
+		//
+		// For error return, we want any in-progress, and so will
+		// become failed, pin handler to result in corresponding client
+		// to become killed. That's why we trigger only cancel
+		// ourselves and let failed pin handlers to invoke shutdown
+		// with their specific reason.
+		//
+		// NOTE this affects pin handlers invoked by both setupWatch and readPinWatchers.
+		if err != nil {
+			wlink.serveCancel()
+		} else {
+			wlink.shutdown(nil)
 		}
 
-		e2 := wlink.sk.CloseRead()
-		if e == nil {
-			e = e2
+		// wait for setupWatch and pin handlers spawned from it to complete
+		err2 := wg.Wait()
+		if err == nil {
+			err = err2
 		}
-		return e
+
+		// wait for all other pin handlers to complete
+		wlink.pinWG.Wait()
+
+		// make sure that shutdown is actually invoked if it was an
+		// error and there were no in-progress pin handlers
+		wlink.shutdown(err)
+	}()
+
+	// cancel main thread on any watch handler error
+	ctx, mainCancel := context.WithCancel(ctx)
+	defer mainCancel()
+	wg.Go(func(ctx context.Context) error {
+		// monitor is always canceled - either due to parent ctx cancel, error in workgroup,
+		// or return from serve and running "cancel all watch handlers ..." above.
+		<-ctx.Done()
+		mainCancel()
+		return nil
 	})
 
+	r := bufio.NewReader(xio.BindCtxR(wlink.sk, ctx))
 	for {
+		// NOTE r.Read is woken up by ctx cancel because wlink.sk implements xio.Reader natively
 		l, err := r.ReadString('\n') // TODO limit accepted line len to prevent DOS
 		if err != nil {
-			// r.Read is woken up by sk.CloseRead when serve decides to exit
-			if err == io.ErrClosedPipe || err == io.EOF {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			if errors.Is(err, ctx.Err()) {
 				err = nil
 			}
 			return err
@@ -2331,33 +2599,119 @@ var gfsconn *nodefs.FileSystemConnector
 // so we still have to reference the root via path.
 var gmntpt string
 
-// debugging	(protected by zhead.W)
+// debugging
 var gdebug = struct {
 	// .wcfs/zhead opens
-	// protected by groot.head.zheadMu
-	zheadSockTab map[*FileSock]struct{}
+	zheadSockTabMu sync.Mutex
+	zheadSockTab   map[*FileSock]struct{}
 }{}
 
 func init() {
 	gdebug.zheadSockTab = make(map[*FileSock]struct{})
 }
 
-// _wcfs_Zhead serves .wcfs/zhead opens.
+// _wcfs_Zhead serves .wcfs/zhead .
 type _wcfs_Zhead struct {
 	fsNode
 }
 
-func (zh *_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+// _wcfs_ZheadH serves .wcfs/zhead opens.
+type _wcfs_ZheadH struct {
+	nodefs.File  // = .sk.file
+	sk *FileSock
+}
+
+func (*_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
 	// TODO(?) check flags
 	sk := NewFileSock()
 	sk.CloseRead()
+	zh := &_wcfs_ZheadH{
+		File: sk.file,
+		sk:   sk,
+	}
 
-	groot.head.zheadMu.Lock()         // TODO +fctx -> cancel
-	defer groot.head.zheadMu.Unlock()
-
-	// TODO del zheadSockTab[sk] on sk.File.Release (= client drops opened handle)
+	gdebug.zheadSockTabMu.Lock()      // TODO +fctx -> cancel
 	gdebug.zheadSockTab[sk] = struct{}{}
-	return sk.File(), fuse.OK
+	gdebug.zheadSockTabMu.Unlock()
+
+	return WithOpenStreamFlags(zh), fuse.OK
+}
+
+func (zh *_wcfs_ZheadH) Release() {
+	gdebug.zheadSockTabMu.Lock()
+	delete(gdebug.zheadSockTab, zh.sk)
+	gdebug.zheadSockTabMu.Unlock()
+
+	zh.File.Release()
+}
+
+
+// _wcfs_Stats serves .wcfs/stats reads.
+//
+// In the output:
+//
+//   - entries that start with capital letter, e.g. "Watch", indicate current
+//     number of named instances. This numbers can go up and down.
+//
+//   - entries that start with lowercase letter, e.g. "pin", indicate number of
+//     named event occurrences. This numbers are cumulative counters and should
+//     never go down.
+func _wcfs_Stats(fctx *fuse.Context) ([]byte, error) {
+	stats := ""
+	num := func(name string, value any) {
+		stats += fmt.Sprintf("%s\t: %d\n", name, value)
+	}
+
+	root  := groot
+	head  := root.head
+	bfdir := head.bfdir
+
+	// dump information detected at runtime
+	root.revMu.Lock()
+	lenRevTab := len(root.revTab)
+	root.revMu.Unlock()
+
+	head.wlinkMu.Lock()
+	ΣWatch     := 0
+	ΣPinnedBlk := 0
+	lenWLinkTab := len(head.wlinkTab)
+	for wlink := range head.wlinkTab {
+		wlink.byfileMu.Lock()
+		ΣWatch += len(wlink.byfile)
+		for _, w := range wlink.byfile {
+			w.atMu.RLock()
+			w.pinnedMu.Lock()
+			ΣPinnedBlk += len(w.pinned)
+			w.pinnedMu.Unlock()
+			w.atMu.RUnlock()
+		}
+		wlink.byfileMu.Unlock()
+	}
+	head.wlinkMu.Unlock()
+
+	head.zheadMu.RLock()
+	bfdir.fileMu.Lock()
+	lenFileTab := len(bfdir.fileTab)
+	bfdir.fileMu.Unlock()
+	head.zheadMu.RUnlock()
+
+	gdebug.zheadSockTabMu.Lock()
+	lenZHeadSockTab := len(gdebug.zheadSockTab)
+	gdebug.zheadSockTabMu.Unlock()
+
+	num("BigFile",     lenFileTab)		// # of head/BigFile
+	num("RevHead",     lenRevTab)		// # of @revX/ directories
+	num("ZHeadLink",   lenZHeadSockTab)	// # of open .wcfs/zhead handles
+	num("WatchLink",   lenWLinkTab)		// # of open watchlinks
+	num("Watch",       ΣWatch)		// # of setup watches
+	num("PinnedBlk",   ΣPinnedBlk)		// # of currently on-client pinned blocks
+
+	// dump information collected in root.stats
+	s := root.stats
+	num("pin",         s.pin.Load())
+	num("pinkill",     s.pinkill.Load())
+
+	return []byte(stats), nil
 }
 
 // TODO -> enable/disable fuse debugging dynamically (by write to .wcfs/debug ?)
@@ -2376,6 +2730,7 @@ func main() {
 func _main() (err error) {
 	debug := flag.Bool("d", false, "debug")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
+	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2458,11 +2813,13 @@ func _main() (err error) {
 	head.bfdir = bfdir
 
 	root := &Root{
-		fsNode: newFSNode(fSticky),
-		zstor:  zstor,
-		zdb:    zdb,
-		head:   head,
-		revTab: make(map[zodb.Tid]*Head),
+		fsNode:     newFSNode(fSticky),
+		zstor:      zstor,
+		zdb:        zdb,
+		head:       head,
+		revTab:     make(map[zodb.Tid]*Head),
+		pinTimeout: *pintimeout,
+		stats:      &Stats{},
 	}
 
 	opts := &fuse.MountOptions{
@@ -2470,8 +2827,6 @@ func _main() (err error) {
 		Name:   "wcfs",
 
 		// We retrieve kernel cache in ZBlk.blksize chunks, which are 2MB in size.
-		// XXX currently go-fuse caps MaxWrite to 128KB.
-		// TODO -> teach go-fuse to handle Init.MaxPages (Linux 4.20+).
 		MaxWrite:      2*1024*1024,
 
 		// TODO(?) tune MaxReadAhead? MaxBackground?
@@ -2520,6 +2875,7 @@ func _main() (err error) {
 	_wcfs := newFSNode(fSticky)
 	mkdir(root, ".wcfs", &_wcfs)
 	mkfile(&_wcfs, "zurl", NewStaticFile([]byte(zurl)))
+	mkfile(&_wcfs, "pintimeout", NewStaticFile([]byte(fmt.Sprintf("%.1f", float64(root.pinTimeout) / float64(time.Second)))))
 
 	// .wcfs/zhead - special file channel that sends zhead.at.
 	//
@@ -2531,6 +2887,10 @@ func _main() (err error) {
 	mkfile(&_wcfs, "zhead", &_wcfs_Zhead{
 		fsNode: newFSNode(fSticky),
 	})
+
+	// .wcfs/stats - special file with collected statistics.
+	mkfile(&_wcfs, "stats", NewSmallFile(_wcfs_Stats))
+
 
 	// TODO handle autoexit
 	// (exit when kernel forgets all our inodes - wcfs.py keeps .wcfs/zurl
@@ -2562,8 +2922,8 @@ func _main() (err error) {
 	err = root.zwatcher(serveCtx, zwatchq)
 	if errors.Cause(err) != context.Canceled {
 		log.Error(err)
-		log.Errorf("zwatcher failed -> switching filesystem to EIO mode (TODO)")
-		// TODO: switch fs to EIO mode
+		log.Error("zwatcher failed")
+		fatalEIO()
 	}
 
 	// wait for unmount

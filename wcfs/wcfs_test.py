@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2022  Nexedi SA and Contributors.
+# Copyright (C) 2018-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -21,6 +21,9 @@
 
 Virtmem layer provided by wcfs client package is unit-tested by
 wcfs/client/client_test.py .
+
+Protection from slow or faulty clients is unit-tested by
+wcfs/wcfs_faultyprot_test.py .
 
 At functional level, the whole wendelin.core test suite is used to verify
 wcfs.py/wcfs.go while running tox tests in wcfs mode.
@@ -49,12 +52,11 @@ from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-import pytest; xfail = pytest.mark.xfail
 from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
-from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _ready as ready, _rmdir_ifexists as rmdir_ifexists
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
 
 # setup:
@@ -298,11 +300,13 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
 # many tests need to be run with some reasonable timeout to detect lack of wcfs
 # response. with_timeout and timeout provide syntactic shortcuts to do so.
-def with_timeout(parent=context.background()):  # -> ctx, cancel
-    return context.with_timeout(parent, 3*time.second)
+def with_timeout(parent=context.background(), dt=None):  # -> ctx, cancel
+    if dt is None:
+        dt = 3*time.second
+    return context.with_timeout(parent, dt)
 
-def timeout(parent=context.background()):   # -> ctx
-    ctx, _ = with_timeout()
+def timeout(parent=context.background(), dt=None):   # -> ctx
+    ctx, _ = with_timeout(parent, dt)
     return ctx
 
 # tdelay is used in places where we need to delay a bit in order to e.g.
@@ -348,14 +352,27 @@ class DFile:
 # TODO(?) print -> t.trace/debug() + t.verbose depending on py.test -v -v ?
 class tWCFS(_tWCFS):
     @func
-    def __init__(t):
+    def __init__(t, multiproc=False):
         assert not os.path.exists(testmntpt)
         wc = wcfs.join(testzurl, autostart=True)
         assert wc.mountpoint == testmntpt
         assert os.path.exists(wc.mountpoint)
         assert is_mountpoint(wc.mountpoint)
         t.wc = wc
+        t.pintimeout = float(t.wc._read(".wcfs/pintimeout"))
 
+        # multiproc=True indicates that wcfs server will be used by multiple client processes
+        t.multiproc=multiproc
+
+        # the whole test is limited in time to detect deadlocks
+        # NOTE with_timeout must be << timeout
+        # NOTE pintimeout can be either
+        #      * >> timeout (most of the test), or
+        #      * << timeout (faulty protection tests)
+        timeout = 10*time.second
+        t.ctx, t._ctx_cancel = context.with_timeout(context.background(), timeout)
+
+        # make sure any stuck FUSE request is aborted. To do so
         # force-unmount wcfs on timeout to unstuck current test and let it fail.
         # Force-unmount can be done reliably only by writing into
         # /sys/fs/fuse/connections/<X>/abort. For everything else there are
@@ -364,8 +381,13 @@ class tWCFS(_tWCFS):
         #   still wait for request completion even after fatal signal )
         nogilready = chan(dtype='C.structZ')
         t._wcfuseabort = os.dup(wc._wcsrv._fuseabort.fileno())
-        go(t._abort_ontimeout, t._wcfuseabort, 10*time.second, nogilready)   # NOTE must be: with_timeout << · << wcfs_pin_timeout
+        go(t._abort_ontimeout, t._wcfuseabort, timeout, t.ctx.done(), nogilready)
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
+
+        t._stats_prev = None
+        t.assertStats({'BigFile':   0,  'RevHead':  0,  'ZHeadLink':  0,
+                       'WatchLink': 0,  'Watch':    0,  'PinnedBlk':  0,
+                       'pin':       0,  'pinkill':  0})
 
     # _abort_ontimeout is in wcfs_test.pyx
 
@@ -373,6 +395,7 @@ class tWCFS(_tWCFS):
     # that wcfs server exits.
     @func
     def close(t):
+        defer(t._ctx_cancel)
         def _():
             os.close(t._wcfuseabort)
         defer(_)
@@ -394,6 +417,74 @@ class tWCFS(_tWCFS):
         defer(t.wc.close)
         assert is_mountpoint(t.wc.mountpoint)
 
+    # assertStats asserts that content of .wcfs/stats eventually reaches expected state.
+    #
+    # For all keys k from kvok it verifies that eventually stats[k] == kvok[k]
+    # and that it stays that way.
+    #
+    # The state is asserted eventually instead of immediately - for both
+    # counters and instance values - because wcfs increments a counter
+    # _after_ corresponding event happened, for example pinkill after actually
+    # killing client process, and the tests can start to observe that state
+    # before wcfs actually does counter increment. For the similar reason we
+    # need to assert that the counters stay in expected state to make sure that
+    # no extra event happened. For instance values we need to assert
+    # eventually as well, because in many cases OS kernel sends events to wcfs
+    # asynchronously after client triggers an action. For example for ZHeadLink
+    # after client closes corresponding file handle, the kernel sends RELEASE
+    # to wcfs asynchronously, and it is only after that final RELEASE when wcfs
+    # removes corresponding entry from zheadSockTab. So if we would assert on
+    # instance values immediately after close, it could happen before wcfs
+    # received corresponding RELEASE and the assertion would fail.
+    #
+    # Note that the set of keys in kvok can be smaller than the full set of keys in stats.
+    def assertStats(t, kvok):
+        # kstats loads stats subset with kvok keys.
+        def kstats():
+            stats = t._loadStats()
+            kstats = {}
+            for k in kvok.keys():
+                kstats[k] = stats.get(k, None)
+            return kstats
+
+        # wait till stats reaches expected state
+        ctx = timeout()
+        while 1:
+            kv = kstats()
+            if kv == kvok:
+                break
+            if ctx.err() is not None:
+                assert kv == kvok, "stats did not reach expected state"
+            tdelay()
+
+        # make sure that it stays that way for some time
+        # we do not want to make the assertion time big because it will results
+        # in slowing down all tests
+        for _ in range(3):
+            tdelay()
+            kv = kstats()
+            assert kv == kvok, "stats did not stay at expected state"
+
+    # _loadStats loads content of .wcfs/stats .
+    def _loadStats(t): # -> {}
+        stats = {}
+        for l in t.wc._read(".wcfs/stats").splitlines():
+            # key : value
+            k, v = l.split(':')
+            k = k.strip()
+            v = v.strip()
+            stats[k] = int(v)
+
+        # verify that keys remains the same and that cumulative counters do not decrease
+        if t._stats_prev is not None:
+            assert stats.keys() == t._stats_prev.keys()
+            for k in stats.keys():
+                if k[0].islower():
+                    assert stats[k] >= t._stats_prev[k], k
+
+        t._stats_prev = stats
+        return stats
+
 
 class tDB(tWCFS):
     # __init__ initializes test database and wcfs.
@@ -402,7 +493,7 @@ class tDB(tWCFS):
     # create before wcfs startup. old_data is []changeDelta - see .commit
     # and .change for details.
     @func
-    def __init__(t, old_data=[]):
+    def __init__(t, old_data=[], **kw):
         t.root = testdb.dbopen()
         def _(): # close/unlock db if __init__ fails
             exc = sys.exc_info()[1]
@@ -432,7 +523,7 @@ class tDB(tWCFS):
             t._commit(t.zfile, changeDelta)
 
         # start wcfs after testdb is created and initial data is committed
-        super(tDB, t).__init__()
+        super(tDB, t).__init__(**kw)
 
         # fh(.wcfs/zhead) + history of zhead read from there
         t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
@@ -444,6 +535,9 @@ class tDB(tWCFS):
         # tracked opened tFiles & tWatchLinks
         t._files    = set()
         t._wlinks   = set()
+
+        t.assertStats({'ZHeadLink': 1})
+
 
     @property
     def head(t):
@@ -464,6 +558,11 @@ class tDB(tWCFS):
         assert len(t._files)   == 0
         assert len(t._wlinks)  == 0
         t._wc_zheadfh.close()
+
+        zstats = {'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0}
+        if not t.multiproc:
+            zstats['pinkill'] = 0
+        t.assertStats(zstats)
 
     # open opens wcfs file corresponding to zf@at and starts to track it.
     # see returned tFile for details.
@@ -704,8 +803,11 @@ class tFile:
     #
     # The automatic computation of pinokByWLink is verified against explicitly
     # provided pinokByWLink when it is present.
+    #
+    # The whole read operation must complete in specified time.
+    # The default timeout is used if timeout is not explicitly given.
     @func
-    def assertBlk(t, blk, dataok, pinokByWLink=None):
+    def assertBlk(t, blk, dataok, pinokByWLink=None, timeout=None):
         # TODO -> assertCtx('blk #%d' % blk)
         def _():
             assertCtx = 'blk #%d' % blk
@@ -718,10 +820,10 @@ class tFile:
         dataok = b(dataok)
         blkdata, _ = t.tdb._blkDataAt(t.zf, blk, t.at)
         assert blkdata == dataok, "computed vs explicit data"
-        t._assertBlk(blk, dataok, pinokByWLink)
+        t._assertBlk(blk, dataok, pinokByWLink, timeout=timeout)
 
     @func
-    def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None):
+    def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None, timeout=None):
         assert len(dataok) <= t.blksize
         dataok += b'\0'*(t.blksize - len(dataok))   # tailing zeros
         assert blk < t._sizeinblk()
@@ -769,6 +871,9 @@ class tFile:
             pinokByWLink[wlink] = (t.zf, pinok)
 
         # access 1 byte on the block and verify that wcfs sends us correct pins
+        ctx, cancel = with_timeout(t.tdb.ctx, timeout)
+        defer(cancel)
+
         blkview = t._blk(blk)
         assert t.cached()[blk] == cached
 
@@ -807,7 +912,7 @@ class tFile:
             b = _rx
 
             ev.append('read ' + b)
-        ev = doCheckingPin(_, pinokByWLink, pinfunc)
+        ev = doCheckingPin(ctx, _, pinokByWLink, pinfunc)
 
         # XXX hack - wlinks are notified and emit events simultaneously - we
         # check only that events begin and end with read pre/post and that pins
@@ -877,8 +982,12 @@ class tWatchLink(wcfs.WatchLink):
         # this tWatchLink currently watches the following files at particular state.
         t._watching = {}    # {} foid -> tWatch
 
+        if not tdb.multiproc:
+            tdb.assertStats({'WatchLink': len(tdb._wlinks)})
+
     def close(t):
-        t.tdb._wlinks.remove(t)
+        tdb = t.tdb
+        tdb._wlinks.remove(t)
         super(tWatchLink, t).close()
 
         # disable all established watches
@@ -886,6 +995,9 @@ class tWatchLink(wcfs.WatchLink):
             w.at     = z64
             w.pinned = {}
         t._watching = {}
+
+        if not tdb.multiproc:
+            tdb.assertStats({'WatchLink': len(tdb._wlinks)})
 
 
 # ---- infrastructure: watch setup/adjust ----
@@ -1018,7 +1130,7 @@ def _watch(twlink, zf, at, pinok, replyok):
         else:
             assert reply == replyok
 
-    doCheckingPin(_, {twlink: (zf, pinok)})
+    doCheckingPin(timeout(twlink.tdb.ctx), _, {twlink: (zf, pinok)})
 
 
 # doCheckingPin calls f and verifies that wcfs sends expected pins during the
@@ -1030,14 +1142,14 @@ def _watch(twlink, zf, at, pinok, replyok):
 #
 # pinfunc is called after pin request is received from wcfs, but before pin ack
 # is replied back. Pinfunc must not block.
-def doCheckingPin(f, pinokByWLink, pinfunc=None): # -> []event(str)
+def doCheckingPin(ctx, f, pinokByWLink, pinfunc=None): # -> []event(str)
     # call f and check that we receive pins as specified.
     # Use timeout to detect wcfs replying less pins than expected.
     #
     # XXX detect not sent pins via ack'ing previous pins as they come in (not
     # waiting for all of them) and then seeing that we did not received expected
     # pin when f completes?
-    ctx, cancel = with_timeout()
+    ctx, cancel = context.with_cancel(ctx)
     wg = sync.WorkGroup(ctx)
     ev = []
 
@@ -1350,7 +1462,8 @@ def test_wcfs_watch_robust():
         "file not yet known to wcfs or is not a ZBigFile"
     wl.close()
 
-    # closeTX/bye cancels blocked pin handlers
+    # closeTX gently with "bye" cancels blocked pin handlers without killing client
+    # (closing abruptly is verified in wcfs_faultyprot_test.py)
     f = t.open(zf)
     f.assertBlk(2, 'c2')
     f.assertCache([0,0,1])
@@ -1358,23 +1471,15 @@ def test_wcfs_watch_robust():
     wl = t.openwatch()
     wg = sync.WorkGroup(timeout())
     def _(ctx):
-        # TODO clarify what wcfs should do if pin handler closes wlink TX:
-        #   - reply error + close, or
-        #   - just close
-        # t = when reviewing WatchLink.serve in wcfs.go
-        #assert wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1))) == \
-        #        "error setup watch f<%s> @%s: " % (h(zf._p_oid), h(at1)) + \
-        #        "pin #%d @%s: context canceled" % (2, h(at1))
-        #with raises(error, match="unexpected EOF"):
         with raises(error, match="recvReply: link is down"):
             wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-
     wg.go(_)
     def _(ctx):
         req = wl.recvReq(ctx)
         assert req is not None
         assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
         # don't reply to req - close instead
+        # NOTE this closes watchlink gently with first sending "bye" message
         wl.closeWrite()
     wg.go(_)
     wg.wait()
@@ -1450,45 +1555,7 @@ def test_wcfs_watch_going_back():
     wl.close()
 
 
-# verify that wcfs kills slow/faulty client who does not reply to pin in time.
-@xfail  # protection against faulty/slow clients
-@func
-def test_wcfs_pintimeout_kill():
-    # adjusted wcfs timeout to kill client who is stuck not providing pin reply
-    tkill = 3*time.second
-    t = tDB(); zf = t.zfile     # XXX wcfs args += tkill=<small>
-    defer(t.close)
-
-    at1 = t.commit(zf, {2:'c1'})
-    at2 = t.commit(zf, {2:'c2'})
-    f = t.open(zf)
-    f.assertData(['','','c2'])
-
-    # XXX move into subprocess not to kill whole testing
-    ctx, _ = context.with_timeout(context.background(), 2*tkill)
-
-    wl = t.openwatch()
-    wg = sync.WorkGroup(ctx)
-    def _(ctx):
-        # send watch. The pin handler won't be replying -> we should never get reply here.
-        wl.sendReq(ctx, b"watch %s @%s" % (h(zf._p_oid), h(at1)))
-        fail("watch request completed (should not as pin handler is stuck)")
-    wg.go(_)
-    def _(ctx):
-        req = wl.recvReq(ctx)
-        assert req is not None
-        assert req.msg == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
-
-        # sleep > wcfs pin timeout - wcfs must kill us
-        _, _rx = select(
-            ctx.done().recv,        # 0
-            time.after(tkill).recv, # 1
-        )
-        if _ == 0:
-            raise ctx.err()
-        fail("wcfs did not killed stuck client")
-    wg.go(_)
-    wg.wait()
+# tests for "Protection against slow or faulty clients" are in wcfs_faultyprot_test.py
 
 
 # watch with @at > head - must wait for head to become >= at.
@@ -1824,6 +1891,68 @@ def test_wcfs_watch_2files():
 
 # ----------------------------------------
 
+# verify that wcfs switches to EIO mode after zwatcher failure.
+# in EIO mode accessing anything on the filesystem returns ENOTCONN error.
+@func
+def test_wcfs_eio_after_zwatcher_fail(capfd):
+    # we will use low-level tWCFS instead of tDB for precise control of access
+    # to the filesystem. For example tDB keeps open connection to .wcfs/zhead
+    # and inspects it during commit which can break in various ways on switch
+    # to EIO mode. Do all needed actions by hand to avoid unneeded uncertainty.
+
+    # create ZBigFile
+    root = testdb.dbopen()
+    def _():
+        dbclose(root)
+    defer(_)
+    root['zfile'] = zf = ZBigFile(blksize)
+    transaction.commit()
+
+    # start wcfs
+    t = tWCFS()
+    def _():
+        with raises(IOError) as exc:
+            t.close()
+        assert exc.value.errno == ENOTCONN
+    defer(_)
+    t.wc._stat("head/bigfile/%s" % h(zf._p_oid))  # wcfs starts to track zf
+
+    # instead of simulating e.g. ZODB server failure we utilize the fact that
+    # currently zwatcher fails when there is ZBigFile epoch
+    zf.blksize += 1
+    transaction.commit()
+
+    # on new transaction with ZBigFile epoch wcfs should switch to EIO when it
+    # learns about that transaction
+    def _():
+        try:
+            t.wc._stat("head")
+        except:
+            return True
+        else:
+            return False
+    waitfor(timeout(), _)
+
+    # verify it was indeed switch to EIO
+    _ = capfd.readouterr()
+    assert not ready(t._wcfuseaborted)  # wcfs might have been killed on overall test timeout
+    assert "test timed out"                             not in _.err
+    assert "aborting wcfs fuse connection to unblock"   not in _.err
+    assert "zwatcher failed"                                in _.err
+    assert "switching filesystem to EIO mode"               in _.err
+
+    # verify that accessing any file returns ENOTCONN after the switch
+    def checkeio(path):
+        with raises(IOError) as exc:
+            t.wc._read(path)
+        assert exc.value.errno == ENOTCONN
+
+    checkeio(".wcfs/zurl")
+    checkeio("head/at")
+    checkeio("head/bigfile/%s" % h(zf._p_oid))
+    checkeio("anything")
+
+
 # verify that wcfs does not panic with "no current transaction" / "at out of
 # bounds" on read/invalidate/watch codepaths.
 @func
@@ -1936,6 +2065,13 @@ class tAt(bytes):
                     return "@at%d (%s)" % (i, h(at))
         return "@" + h(at)
     __str__ = __repr__
+
+    # raw returns raw bytes form of at.
+    # It should be used in contexts where at needs to be pickled, because tAt
+    # is unpicklable due to .tdb being unpicklable.
+    @property
+    def raw(at):
+        return fromhex(h(at))
 
 # hpin returns human-readable representation for {}blk->rev.
 @func(tDB)

@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -25,17 +25,21 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	log "github.com/golang/glog"
 
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/hanwen/go-fuse/v2/fuse/nodefs"
 	"github.com/pkg/errors"
 
+	"lab.nexedi.com/kirr/go123/xerr"
 	"lab.nexedi.com/kirr/go123/xio"
 
 	"lab.nexedi.com/kirr/neo/go/zodb"
@@ -321,11 +325,16 @@ func NewFileSock() *FileSock {
 // The handle should be given to kernel as result of a file open, for that file
 // to be connected to the socket.
 func (sk *FileSock) File() nodefs.File {
+	return WithOpenStreamFlags(sk.file)
+}
+
+// WithOpenStreamFlags wraps file handle with FUSE flags needed when opening stream IO.
+func WithOpenStreamFlags(file nodefs.File) nodefs.File {
 	// nonseekable & directio for opened file to have streaming semantic as
 	// if it was a socket. FOPEN_STREAM is used so that both read and write
 	// could be run simultaneously: git.kernel.org/linus/10dce8af3422
 	return &nodefs.WithFlags{
-		File:      sk.file,
+		File:      file,
 		FuseFlags: fuse.FOPEN_STREAM | fuse.FOPEN_NONSEEKABLE | fuse.FOPEN_DIRECT_IO,
 	}
 }
@@ -428,7 +437,14 @@ func (f *skFile) Release() {
 }
 
 
-// ---- parsing ----
+// fatalEIO switches filesystem into EIO mode and terminates the program.
+func fatalEIO() {
+	// log.Fatal terminates the program and so any attempt to access
+	// was-mounted filesystem starts to return ENOTCONN
+	log.Fatal("switching filesystem to EIO mode")
+}
+
+// ---- parsing / formatting ----
 
 // parseWatchFrame parses line going through /head/watch into (stream, msg)
 //
@@ -489,6 +505,17 @@ func parseWatch(msg string) (oid zodb.Oid, at zodb.Tid, err error) {
 	return oid, at, nil
 }
 
+// isoRevstr returns string form of revision as used in isolation protocol.
+//
+// It is almost the same as standard string form of ZODB revision except that
+// zodb.TidMax is represented as "head".
+func isoRevstr(rev zodb.Tid) string {
+	if rev == zodb.TidMax {
+		return "head"
+	}
+	return rev.String()
+}
+
 // ---- make df happy (else it complains "function not supported") ----
 
 func (root *Root) StatFs() *fuse.StatfsOut {
@@ -514,4 +541,88 @@ func (root *Root) StatFs() *fuse.StatfsOut {
 
 func panicf(format string, argv ...interface{}) {
 	panic(fmt.Sprintf(format, argv...))
+}
+
+// findAliveProces lookups process by pid and makes sure it is alive.
+//
+// NOTE: starting from go1.23 it, via os.FindProcess, uses pidfd which avoids potential
+// race of later signalling to pid of already long-gone and replaced process.
+func findAliveProcess(pid int) (_ *os.Process, err error) {
+	defer xerr.Contextf(&err, "findAlive pid%d", pid)
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return nil, err
+	}
+	// verify that found process is actually good because
+	// os.FindProcess returns "done" stub instead of an error
+	alive, err := isProcessAlive(proc)
+	if err != nil {
+		return nil, err
+	}
+	if !alive {
+		proc.Release()
+		return nil, syscall.ESRCH
+	}
+
+	return proc, nil
+}
+
+// isProcessAlive returns whether process is alive or not.
+func isProcessAlive(proc *os.Process) (_ bool, err error) {
+	defer xerr.Contextf(&err, "isAlive pid%d", proc.Pid)
+
+	// verify that proc's pid exists
+	// proc.Signal(0) returns ok even for zombie, but zombie is not alive
+	err = proc.Signal(syscall.Signal(0))
+	if err != nil {
+		var e syscall.Errno
+		if errors.As(err, &e) && e == syscall.EPERM {
+			return false, err
+		}
+		return false, nil
+	}
+
+	// pid exists. Check if proc is not zombie
+	gproc, err := process.NewProcess(int32(proc.Pid))
+	if err != nil {
+		return false, err
+	}
+	statusv, err := gproc.Status()
+	if err != nil {
+		return false, err
+	}
+	for _, status := range statusv {
+		if status == process.Zombie {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// waitProcessEnd waits for process to end.
+//
+// Contrary to os.Process.Wait it does not require the caller to be a parent of proc.
+func waitProcessEnd(ctx context.Context, proc *os.Process) (_ bool, err error) {
+	defer xerr.Contextf(&err, "waitEnd pid%d", proc.Pid)
+
+	tick := time.NewTicker(100*time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		alive, err := isProcessAlive(proc)
+		if err != nil {
+			return false, err
+		}
+		if !alive {
+			return true, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-tick.C:
+			// ok
+		}
+	}
 }
