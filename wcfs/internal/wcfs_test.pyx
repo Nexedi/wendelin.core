@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2021  Nexedi SA and Contributors.
+# Copyright (C) 2019-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -33,7 +33,7 @@ from posix.types cimport off_t
 
 from cpython.exc cimport PyErr_SetFromErrno
 
-from golang cimport chan, pychan, select, panic, topyexc, cbool
+from golang cimport chan, pychan, select, panic, topyexc, cbool, structZ
 from golang cimport sync, time
 
 # _tWCFS is pyx part of tWCFS.
@@ -53,16 +53,15 @@ cdef class _tWCFS:
     # but pin handler is failing one way or another - select will wake-up
     # but, if _abort_ontimeout uses GIL, won't continue to run trying to lock
     # GIL -> deadlock.
-    def _abort_ontimeout(_tWCFS t, int fdabort, double dt, pychan nogilready not None):
-        cdef chan[double] timeoutch = time.after(dt)
+    def _abort_ontimeout(_tWCFS t, int fdabort, double dt, pychan timeoutch not None, pychan nogilready not None):
         emsg1 = "\nC: test timed out after %.1fs\n" % (dt / time.second)
         cdef char *_emsg1 = emsg1
         with nogil:
             # tell main thread that we entered nogil world
             nogilready.chan_structZ().close()
-            t.__abort_ontimeout(dt, timeoutch, fdabort, _emsg1)
+            t.__abort_ontimeout(timeoutch.chan_structZ(), fdabort, _emsg1)
 
-    cdef void __abort_ontimeout(_tWCFS t, double dt, chan[double] timeoutch,
+    cdef void __abort_ontimeout(_tWCFS t, chan[structZ] timeoutch,
                 int fdabort, const char *emsg1) nogil except +topyexc:
         _ = select([
             timeoutch.recvs(),                  # 0
