@@ -2285,6 +2285,7 @@ func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, 
 		return "", err
 	}
 
+	defer xerr.Contextf(&err, "waiting for reply")
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
