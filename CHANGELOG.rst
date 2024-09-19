@@ -1,6 +1,13 @@
 Wendelin.core change history
 ============================
 
+- `2.0.alpha4`__ (2024-09-19)  More fixes discovered by on-field usage,
+  added new ZBlk format auto and implemented
+  protection against faulty clients.
+
+  __ https://lab.nexedi.com/nexedi/wendelin.core/compare/63153845...ed6a71c1
+
+
 - `2.0.alpha3`__ (2022-12-21)  More fixes discovered by on-field usage.
 
   __ https://lab.nexedi.com/nexedi/wendelin.core/compare/5e5ad598...7ce0978d
