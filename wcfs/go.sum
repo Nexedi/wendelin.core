@@ -221,3 +221,5 @@ lab.nexedi.com/kirr/neo/go v0.0.0-20240723085959-839ee634bd66 h1:xAQcab3p0CiJ36a
 lab.nexedi.com/kirr/neo/go v0.0.0-20240723085959-839ee634bd66/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
 lab.nexedi.com/kirr/neo/go v0.0.0-20240806095154-6fb93a602cbe h1:E8qMqhZJlVtsNTzVxdj2zsDq8XJx/QOBODGhid9gqxM=
 lab.nexedi.com/kirr/neo/go v0.0.0-20240806095154-6fb93a602cbe/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
+lab.nexedi.com/kirr/neo/go v0.0.0-20240918161556-efde5253dc81 h1:eleDgtjbfZ2jz89tyyJCQAjFC1d6lGtzYLREpCORfrI=
+lab.nexedi.com/kirr/neo/go v0.0.0-20240918161556-efde5253dc81/go.mod h1:YzPDKaJIPNRCvRrpLDHP54ggZbLKlH3lErGX8NILtCQ=
