@@ -11,7 +11,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.24.8
 	github.com/stretchr/testify v1.9.0
 	lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf
-	lab.nexedi.com/kirr/neo/go v0.0.0-20240806095154-6fb93a602cbe
+	lab.nexedi.com/kirr/neo/go v0.0.0-20240918161556-efde5253dc81
 )
 
 require (
