@@ -54,7 +54,7 @@ cdef class _tWCFS:
     # but, if _abort_ontimeout uses GIL, won't continue to run trying to lock
     # GIL -> deadlock.
     def _abort_ontimeout(_tWCFS t, int fdabort, double dt, pychan timeoutch not None, pychan nogilready not None):
-        emsg1 = "\nC: test timed out after %.1fs\n" % (dt / time.second)
+        emsg1 = b"\nC: test timed out after %.1fs\n" % (dt / time.second)
         cdef char *_emsg1 = emsg1
         with nogil:
             # tell main thread that we entered nogil world
