@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2021  Nexedi SA and Contributors.
+# Copyright (C) 2018-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -26,6 +26,7 @@
 # See _wcfs.pxd for package overview.
 
 from golang cimport pychan, pyerror, nil
+from golang import b as pyb  # TODO cimport directly after https://lab.nexedi.com/nexedi/pygolang/-/merge_requests/21 is merged
 from golang cimport io
 
 cdef extern from *:
@@ -40,9 +41,9 @@ cdef class PyWCFS:
 
     property mountpoint:
         def __get__(PyWCFS pywc):
-            return pywc.wc.mountpoint
-        def __set__(PyWCFS pywc, string v):
-            pywc.wc.mountpoint = v
+            return str(pyb(pywc.wc.mountpoint)) # TODO remove str(·) after bstr can be mixed with unicode in os.path.join
+        def __set__(PyWCFS pywc, v):
+            pywc.wc.mountpoint = pyb(v)
 
     def connect(PyWCFS pywc, pyat): # -> PyConn
         cdef Tid at = u64(pyat)
@@ -197,7 +198,8 @@ cdef class PyWatchLink:
             raise pyerr(err)
 
 
-    def sendReq(PyWatchLink pywlink, context.PyContext pyctx, string req):  # -> reply(string)
+    def sendReq(PyWatchLink pywlink, context.PyContext pyctx, pyreq):  # -> reply(bstr)
+        cdef string req = pyb(pyreq)
         with nogil:
             _ = wlink_sendReq_pyexc(pywlink.wlink, pyctx.ctx, req)
             reply = _.first
@@ -206,7 +208,7 @@ cdef class PyWatchLink:
         if err != nil:
             raise pyerr(err)
 
-        return reply
+        return pyb(reply)
 
     def recvReq(PyWatchLink pywlink, context.PyContext pyctx):  # -> PinReq | None when EOF
         cdef PyPinReq pyreq = PyPinReq.__new__(PyPinReq)
@@ -220,7 +222,8 @@ cdef class PyWatchLink:
 
         return pyreq
 
-    def replyReq(PyWatchLink pywlink, context.PyContext pyctx, PyPinReq pyreq, string reply):
+    def replyReq(PyWatchLink pywlink, context.PyContext pyctx, PyPinReq pyreq, pyreply):
+        cdef string reply = pyb(pyreply)
         with nogil:
             err = wlink_replyReq_pyexc(pywlink.wlink, pyctx.ctx, &pyreq.pinreq, reply)
 
@@ -259,11 +262,11 @@ cdef class PyPinReq:
     # wcfs_test.py uses req.msg in several places
     property msg:
         def __get__(PyPinReq pypin):
-            return pypin.pinreq.msg
+            return pyb(pypin.pinreq.msg)
 
 
-def _tpywlinkwrite(PyWatchLink pywlink, bytes pypkt):
-    cdef string pkt = pypkt
+def _tpywlinkwrite(PyWatchLink pywlink, pypkt):
+    cdef string pkt = pyb(pypkt)
     with nogil:
         err = _twlinkwrite_pyexc(pywlink.wlink, pkt)
     if err != nil:
