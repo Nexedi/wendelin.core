@@ -1,5 +1,5 @@
 # Wendelin. Testing utilities
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -249,16 +249,11 @@ class TestDB_ZEO(TestDB_Base):
         self.zeo_forker = forker
 
         # .z5 represents whether we are running with ZEO5 or earlier
-        dzodb3  = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZODB3'))
         dzeo    = pkg_resources.working_set.find(pkg_resources.Requirement.parse('ZEO'))
         v5      = pkg_resources.parse_version('5.0dev')
-        v311    = pkg_resources.parse_version('3.11dev')
 
-        if dzodb3 is not None and dzodb3.parsed_version < v311:
-            self.z5 = False # ZODB 3.11 just requires latest ZODB & ZEO
-        else:
-            assert dzeo is not None
-            self.z5 = (dzeo.parsed_version >= v5)
+        assert dzeo is not None
+        self.z5 = (dzeo.parsed_version >= v5)
 
 
     def setup(self):
