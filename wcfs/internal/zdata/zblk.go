@@ -79,7 +79,7 @@ type ZBlk0 struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	blkdata string
+	blkdata pickle.ByteString
 }
 
 type zBlk0State ZBlk0 // hide state methods from public API
@@ -96,7 +96,7 @@ func (zb *zBlk0State) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zb *zBlk0State) PySetState(pystate interface{}) error {
-	blkdata, ok := pystate.(string)
+	blkdata, ok := pystate.(pickle.ByteString)
 	if !ok {
 		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
 	}
@@ -115,7 +115,7 @@ func (zb *ZBlk0) LoadBlkData(ctx context.Context) (_ []byte, _ zodb.Tid, err err
 	}
 	defer zb.PDeactivate()
 
-	return mem.Bytes(zb.blkdata), zb.PSerial(), nil
+	return mem.Bytes(string(zb.blkdata)), zb.PSerial(), nil
 }
 
 // ---- ZBlk1 ---
@@ -125,7 +125,7 @@ type ZData struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	data string
+	data pickle.ByteString
 }
 
 type zDataState ZData // hide state methods from public API
@@ -142,7 +142,7 @@ func (zd *zDataState) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zd *zDataState) PySetState(pystate interface{}) error {
-	data, ok := pystate.(string)
+	data, ok := pystate.(pickle.ByteString)
 	if !ok {
 		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
 	}

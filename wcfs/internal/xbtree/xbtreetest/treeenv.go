@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2021  Nexedi SA and Contributors.
+// Copyright (C) 2020-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -26,6 +26,7 @@ import (
 	"sort"
 	"testing"
 
+	pickle "github.com/kisielk/og-rek"
 	"lab.nexedi.com/kirr/go123/exc"
 	"lab.nexedi.com/kirr/neo/go/transaction"
 	"lab.nexedi.com/kirr/neo/go/zodb"
@@ -289,7 +290,7 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 	err = zroot.PActivate(ctx); X(err)
 	defer zroot.PDeactivate()
 
-	xzblkdir, ok := zroot.Data["treegen/values"]
+	xzblkdir, ok := zroot.Get_("treegen/values")
 	if !ok {
 		exc.Raisef("root['treegen/values'] missing")
 	}
@@ -301,8 +302,8 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 	err = zblkdir.PActivate(ctx); X(err)
 	defer zblkdir.PDeactivate()
 
-	for xname, xzblk := range zblkdir.Data {
-		name, ok := xname.(string)
+	zblkdir.Iter()(func(xname, xzblk any) bool {
+		name, ok := xname.(pickle.ByteString)
 		if !ok {
 			exc.Raisef("root['treegen/values']: key [%q]: expected str, got %T", xname, xname)
 		}
@@ -314,8 +315,10 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 
 		oid := zblk.POid()
 		data := xzgetBlkData(ctx, zconn, oid)
-		blkTab[oid] = ZBlkInfo{name, data}
-	}
+		blkTab[oid] = ZBlkInfo{string(name), data}
+
+		return true
+	})
 
 	return blkTab
 }
