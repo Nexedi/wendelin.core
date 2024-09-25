@@ -67,9 +67,6 @@ func TestZBlk(t *testing.T) {
 	for _, zkind := range zkindv {
 		z := zblkTestDataRegistry[zkind]
 		t.Run(zkind, func(t *testing.T) {
-			if zkind == "py3_pickle3" {
-				t.Skip("xfail")
-			}
 			_TestZBlk(t, z)
 		})
 	}

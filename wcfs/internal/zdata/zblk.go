@@ -29,7 +29,7 @@ package zdata
 //	.blktab		LOBtree{}  blk -> ZBlk*(blkdata)
 //
 // ZBlk0 (aliased as ZBlk)
-//	str with trailing '\0' removed.
+//	bytes|bytestr with trailing '\0' removed.
 //
 // ZBlk1
 //	.chunktab	IOBtree{}  offset -> ZData(chunk)
@@ -79,7 +79,7 @@ type ZBlk0 struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	blkdata pickle.ByteString
+	blkdata pickle.Bytes
 }
 
 type zBlk0State ZBlk0 // hide state methods from public API
@@ -96,9 +96,9 @@ func (zb *zBlk0State) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zb *zBlk0State) PySetState(pystate interface{}) error {
-	blkdata, ok := pystate.(pickle.ByteString)
-	if !ok {
-		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
+	blkdata, err := pickle.AsBytes(pystate)
+	if err != nil {
+		return err
 	}
 
 	zb.blkdata = blkdata
@@ -125,7 +125,7 @@ type ZData struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	data pickle.ByteString
+	data pickle.Bytes
 }
 
 type zDataState ZData // hide state methods from public API
@@ -142,9 +142,9 @@ func (zd *zDataState) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zd *zDataState) PySetState(pystate interface{}) error {
-	data, ok := pystate.(pickle.ByteString)
-	if !ok {
-		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
+	data, err := pickle.AsBytes(pystate)
+	if err != nil {
+		return err
 	}
 
 	zd.data = data
