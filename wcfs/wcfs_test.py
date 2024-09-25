@@ -952,7 +952,10 @@ class tFile:
         assert st.st_blksize == t.blksize
         assert st.st_size == len(dataokv)*t.blksize
         if mtime is not None:
-            assert st.st_mtime == tidtime(mtime)
+            # st_mtime comes from wcfs via tidtime/go
+            # ZODB/py vs ZODB/go time resolution is not better than 1µs
+            # see e.g. https://lab.nexedi.com/kirr/neo/commit/9112f21e
+            assert abs(st.st_mtime - tidtime(mtime)) <= 1e-6
 
         cachev = t.cached()
         for blk, dataok in enumerate(dataokv):
@@ -2007,13 +2010,7 @@ def writefile(path, data):
 
 # tidtime converts tid to transaction commit time.
 def tidtime(tid):
-    t = TimeStamp(tid).timeTime()
-
-    # ZODB/py vs ZODB/go time resolution is not better than 1µs
-    # see e.g. https://lab.nexedi.com/kirr/neo/commit/9112f21e
-    #
-    # NOTE pytest.approx supports only ==, not e.g. <, so we use plain round.
-    return round(t, 6)
+    return TimeStamp(tid).timeTime()
 
 # tidfromtime converts time into corresponding transaction ID.
 def tidfromtime(t):
@@ -2025,8 +2022,8 @@ def tidfromtime(t):
     ts = TimeStamp(_.tm_year, _.tm_mon, _.tm_mday, _.tm_hour, _.tm_min, s)
     return ts.raw()
 
-# verify that tidtime is precise enough to show difference in between transactions.
-# verify that tidtime -> tidfromtime is identity within rounding tolerance.
+# verify that tidtime is precise to show difference in between transactions.
+# verify that tidtime -> tidfromtime is identity.
 @func
 def test_tidtime():
     t = tDB()
@@ -2044,7 +2041,7 @@ def test_tidtime():
         tat  = tidtime(at)
         at_  = tidfromtime(tat)
         tat_ = tidtime(at_)
-        assert abs(tat_ - tat) <= 2E-6
+        assert tat_ == tat
 
 
 # tAt is bytes whose repr returns human readable string considering it as `at` under tDB.
