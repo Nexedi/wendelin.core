@@ -303,9 +303,9 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 	defer zblkdir.PDeactivate()
 
 	zblkdir.Iter()(func(xname, xzblk any) bool {
-		name, ok := xname.(pickle.ByteString)
-		if !ok {
-			exc.Raisef("root['treegen/values']: key [%q]: expected str, got %T", xname, xname)
+		name, err := pickle.AsString(xname)
+		if err != nil {
+			exc.Raisef("root['treegen/values']: key [%q]: %s", xname, err)
 		}
 
 		zblk, ok := xzblk.(zodb.IPersistent)
@@ -315,7 +315,7 @@ func xGetBlkTab(db *zodb.DB, at zodb.Tid) map[zodb.Oid]ZBlkInfo {
 
 		oid := zblk.POid()
 		data := xzgetBlkData(ctx, zconn, oid)
-		blkTab[oid] = ZBlkInfo{string(name), data}
+		blkTab[oid] = ZBlkInfo{name, data}
 
 		return true
 	})

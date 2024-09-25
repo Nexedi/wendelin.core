@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# Copyright (C) 2020-2021  Nexedi SA and Contributors.
+# Copyright (C) 2020-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -133,7 +133,7 @@ by `treegen trees`:
 from __future__ import print_function, absolute_import
 
 import sys
-from golang import func, defer, panic
+from golang import func, defer, panic, b
 from golang import time
 from ZODB import DB
 from ZODB.Connection import Connection
@@ -174,6 +174,21 @@ BTrees.LOBTree.LOBTree = XLOTree
 from BTrees.LOBTree import LOBTree
 
 
+# Treegen works in strings domain. To help this:
+#
+#   - loadblkstr loads ZBlk data as   string.
+#   - setblkstr  sets  ZBlk data from string.
+#
+# We and ΔBtail/ΔFtail tests store into ZBlks only small set of letters with
+# optional digit suffix (e.g. "c" and "d4"), so using strings to handle ZBlk
+# data is ok and convenient. Besides ZBlk everything else in treegen uses
+# strings natively.
+def loadblkstr(zblk): # -> bstr
+    return b(zblk.loadblkdata())
+def setblkstr(zblk, strdata):
+    zblk.setblkdata(b(strdata))
+
+
 # ZCtx represent treegen-level connection to ZODB.
 # It wraps zconn + provides treegen-specif integration.
 class ZCtx(object):
@@ -191,13 +206,13 @@ class ZCtx(object):
         valdict = zctx.root.get('treegen/values', None)
         if valdict is None:
             valdict = zctx.root['treegen/values'] = PersistentMapping()
-        valv = b'abcdefghij'
+        valv = 'abcdefghij'
         for v in valv:
             zblk = valdict.get(v, None)
-            if zblk is not None and zblk.loadblkdata() == v:
+            if zblk is not None and loadblkstr(zblk) == v:
                 continue
             zblk = ZBlk()
-            zblk.setblkdata(v)
+            setblkstr(zblk, v)
             valdict[v] = zblk
         zctx.valdict = valdict
         commit('treegen/values: init %r' % valv, skipIfEmpty=True)
@@ -270,14 +285,14 @@ def TreesSrv(zstor, r):
                 zblk = valdict.get(k)
                 v1 = None
                 if zblk is not None:
-                    v1 = zblk.loadblkdata()
+                    v1 = loadblkstr(zblk)
                 v2 = zv.get(k)
                 if v1 != v2:
                     if v1 is None:
                         zblk = ZBlk()
                         valdict[k] = zblk
                     if v2 is not None:
-                        zblk.setblkdata(v2)
+                        setblkstr(zblk, v2)
                         zblk._p_changed = True
                     elif v2 is None:
                         del valdict[k]
