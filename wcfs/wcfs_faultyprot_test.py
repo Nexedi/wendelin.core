@@ -452,3 +452,128 @@ def assertKilled(f, ctx, failmsg):
     if _ == 0:
         raise ctx.err()
     raise AssertionError(failmsg)
+
+
+# verify that wcfs doesn't attempt to kill already dead client who does not handle pin
+# notifications correctly and in time during watch setup.
+#
+# This verifies setupWatch codepath.
+
+@func  # client that stops itself just after it received pin request
+def _bad_watch_suicide(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # wait for command to start watching
+    _ = f.cin.recv()
+    assert _ == "start watch", _
+
+    # send watch; the write should go ok.
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+
+    f.cout.send(wlf.readline())
+
+    # Instead of replying to pin request: just exit
+    # (simulate client that stops itself).
+
+@func  # client that is stopped by other process just after it received pin request
+def _bad_watch_killed_by_other(ctx, f, at):
+    _bad_watch_suicide(ctx, f, at)
+    f.assertKilled(ctx, "test didn't kill bad client")
+
+@mark.xfail
+@mark.parametrize('faulty,dokill', [
+    [_bad_watch_suicide, False],
+    [_bad_watch_killed_by_other, True],
+])
+@func
+def test_wcfs_pinhdead_not_kill_on_watch(faulty, dokill, with_prompt_pintimeout):
+    t = tDB(multiproc=True); zf = t.zfile
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    at2 = t.commit(zf, {2:'c2'})
+    f = t.open(zf)
+    f.assertData(['','','c2'])
+
+    # launch faulty process that should exit or be killed by test
+    p = tFaultySubProcess(t, faulty, at=at1)
+    defer(p.close)
+    t.assertStats({'pinkill': 0})
+
+    # wait till faulty client issues its watch, receives pin and pauses/misbehaves
+    p.send("start watch")
+    assert p.recv(t.ctx) == b"2 pin %s #%d @%s\n" % (h(zf._p_oid), 2, h(at1))
+
+    # issue our watch request - it should be served well and without any delay
+    wl = t.openwatch()
+    wl.watch(zf, at1, {2:at1})
+
+    if dokill:
+        p.close()
+
+    # the faulty client must be killed by test or by itself
+    p.join(t.ctx)
+    assert p.exitcode is not None
+    t.assertStats({'pinkill': 0})
+
+
+# verify that wcfs doesn't attempt to kill already dead client who does not handle pin
+# notifications correctly and in time caused by asynchronous read access.
+#
+# This verifies readPinWatchers codepath.
+
+@func  # client that stops itself just after it received pin request
+def _bad_pin_suicide(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    # initial watch setup goes ok
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+    _ = wlf.readline()
+    assert _ == b"1 ok\n",  _
+    f.cout.send("f: watch setup ok")
+    f.cout.send(wlf.readline())
+    # Instead of replying to pin request: just exit
+    # (simulate client that stops itself).
+
+@func  # client that is stopped by other process just after it received pin request
+def _bad_pin_killed_by_other(ctx, f, at):
+    _bad_pin_suicide(ctx, f, at)
+    f.assertKilled(ctx, "test did not kill")
+
+@mark.xfail
+@mark.parametrize('faulty,dokill', [
+    [_bad_pin_suicide, False],
+    [_bad_pin_killed_by_other, True],
+])
+@func
+def test_wcfs_pinhdead_not_kill_on_access(faulty, dokill, with_prompt_pintimeout):
+    t = tDB(multiproc=True); zf = t.zfile; at0=t.at0
+    defer(t.close)
+
+    at1 = t.commit(zf, {2:'c1'})
+    f = t.open(zf)
+    f.assertData(['','','c1'])
+
+    # spawn faulty client and wait until it setups its watch
+    p = tFaultySubProcess(t, faulty, at=at1)
+    defer(p.close)
+    assert p.recv(t.ctx) == "f: watch setup ok"
+    t.assertStats({'pinkill': 0})
+
+    # commit new transaction and issue read access to modified block.
+    # ensure pin request is received by faulty client.
+    at2 = t.commit(zf, {2:'c2'})
+    wg = sync.WorkGroup(t.ctx)
+    def _(ctx):
+        f.assertBlk(2, 'c2', timeout=2*t.pintimeout)
+    wg.go(_)
+    def _(ctx):
+        assert p.recv(ctx) == b"2 pin %s #%d @%s\n" % (h(zf._p_oid), 2, h(at1))
+        if dokill:
+            p.close()
+    wg.go(_)
+    wg.wait()
+
+    p.join(t.ctx)
+    assert p.exitcode is not None
+    # Client is killed by suicide or by other process and must not be killed by wcfs.
+    t.assertStats({'pinkill': 0})
