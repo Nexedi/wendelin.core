@@ -29,9 +29,12 @@ from wendelin import wcfs
 from golang import select, func, defer
 from golang import context, sync, time
 
+import pytest
 from pytest import mark, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, \
         setup_module, teardown_module, setup_function, teardown_function
+
+import os
 
 
 # tests in this module require WCFS to promptly react to pin handler
@@ -135,6 +138,14 @@ def _bad_watch_eof_pin_reply(ctx, f, at):
         f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
     __bad_rawwatch_pinh(ctx, f, at, _)
 
+# client that stops itself just after it received pin request.
+def _bad_watch_stop_on_pin (ctx, f, at):
+    def _(wlf):
+        # instead of replying to pin request: just exit
+        # (simulate client process being killed).
+        # NOTE not sys.exit, because sys.exit does graceful shutdown invoking all cleanup handlers
+        os._exit(1)
+    __bad_rawwatch_pinh(ctx, f, at, _)
 
 
 @func   # faulty client that behaves in problematic way in its pin handler during watch setup.
@@ -163,6 +174,7 @@ def _bad_watch_nak_pin_reply(ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinne
 @mark.parametrize('faulty', [
     _bad_watch_no_pin_read,
     _bad_watch_no_pin_reply,
+    pytest.param(_bad_watch_stop_on_pin, marks=mark.xfail),
     _bad_watch_eof_pin_reply,
     _bad_watch_nak_pin_reply,
 ])
@@ -191,9 +203,15 @@ def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
     wl.watch(zf, at1, {2:at1})
 
     # the faulty client must become killed by wcfs
+    # but client that stops itself, must not be killed
+    must_kill = (faulty != _bad_watch_stop_on_pin)
+    if not must_kill:
+        # give time to wcfs to detect wlink close and potentially initiate pinkill
+        # do not wait on the process yet, so it remains in the OS process table in Z state
+        xsleep(t.ctx, 2*t.pintimeout)
     p.join(t.ctx)
     assert p.exitcode is not None
-    t.assertStats({'pinkill': 1})
+    t.assertStats({'pinkill': int(must_kill)})
 
 
 # verify that wcfs kills slow/faulty client who does not handle pin
@@ -237,6 +255,12 @@ def _bad_pinh_eof_pin_reply(ctx, f, at):
         f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
     __bad_rawpinh(ctx, f, at, _)
 
+# client that stops itself just after receiving pin request triggered by read.
+def _bad_pinh_stop_on_pin(ctx, f, at):
+    def _(wlf):
+        os._exit(1)
+    __bad_rawpinh(ctx, f, at, _)
+
 
 @func   # faulty client that behaves in problematic way in its pin notifications triggered by read.
 def __bad_pinh(ctx, f, at, pinh):
@@ -256,6 +280,7 @@ def _bad_pinh_nak_pin_reply(ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_nak_p
 @mark.parametrize('faulty', [
     _bad_pinh_no_pin_read,
     _bad_pinh_no_pin_reply,
+    pytest.param(_bad_pinh_stop_on_pin, marks=mark.xfail),
     _bad_pinh_eof_pin_reply,
     _bad_pinh_nak_pin_reply,
 ])
@@ -294,9 +319,12 @@ def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
     wg.go(_)
     wg.wait()
 
+    must_kill = (faulty != _bad_pinh_stop_on_pin)
+    if not must_kill:
+        xsleep(t.ctx, 2*t.pintimeout)
     p.join(t.ctx)
     assert p.exitcode is not None
-    t.assertStats({'pinkill': 1})
+    t.assertStats({'pinkill': int(must_kill)})
 
 
 # _pinner_<problem> simulates faulty pinner inside client that behaves in
@@ -327,10 +355,16 @@ def _pinner_nak_pin_reply(f, ctx, wl):
 @func(tFaultyClient)
 def assertKilled(f, ctx, failmsg):
     # sleep > wcfs pin timeout - wcfs must kill us
+    xsleep(ctx, 2*f.pintimeout)
+    raise AssertionError(failmsg)
+
+
+# xsleep is like sleep but stops pausing on ctx cancel.
+@func
+def xsleep(ctx, dt):
     _, _rx = select(
-        ctx.done().recv,                    # 0
-        time.after(2*f.pintimeout).recv,    # 1
+        ctx.done().recv,        # 0
+        time.after(dt).recv,    # 1
     )
     if _ == 0:
         raise ctx.err()
-    raise AssertionError(failmsg)
