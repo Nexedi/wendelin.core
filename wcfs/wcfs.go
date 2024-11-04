@@ -2839,11 +2839,26 @@ func _main() (err error) {
 
 		DisableXAttrs: true,        // we don't use
 		Debug:         *tracefuse,  // go-fuse "Debug" is mostly logging FUSE messages
+
+		// If true, WCFS allows access by other users (requires "user_allow_other"
+		// in /etc/fuse.conf). This is needed for multi-user setups where WCFS
+		// clients run under different system users than the one that started
+		// the server. We set the default to true to attempt multi-user support;
+		// if mounting fails, it is automatically disabled (set to false).
+		AllowOther: true,
 	}
 
 	fssrv, fsconn, err := mount(mntpt, root, opts)
 	if err != nil {
-		return err
+		opts.AllowOther = false
+		w1 := fmt.Sprintf("mounting WCFS failed: %v", err)
+		w2 := "-> retrying mounting without 'allow_other' (disables multi-user access)..."
+		w3 := "-> to enable multi-user access, add 'user_allow_other' to /etc/fuse.conf"
+		log.Error(w1); log.Error(w2); log.Error(w3)
+		fssrv, fsconn, err = mount(mntpt, root, opts)
+		if err != nil {
+			return err
+		}
 	}
 	groot   = root   // FIXME temp workaround (see ^^^)
 	gfsconn = fsconn // FIXME ----//----
