@@ -480,7 +480,6 @@ def _bad_watch_killed_by_other(ctx, f, at):
     _bad_watch_suicide(ctx, f, at)
     f.assertKilled(ctx, "test didn't kill bad client")
 
-@mark.xfail
 @mark.parametrize('faulty,dokill', [
     [_bad_watch_suicide, False],
     [_bad_watch_killed_by_other, True],
@@ -539,7 +538,6 @@ def _bad_pin_killed_by_other(ctx, f, at):
     _bad_pin_suicide(ctx, f, at)
     f.assertKilled(ctx, "test did not kill")
 
-@mark.xfail
 @mark.parametrize('faulty,dokill', [
     [_bad_pin_suicide, False],
     [_bad_pin_killed_by_other, True],
