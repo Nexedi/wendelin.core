@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -2063,7 +2063,28 @@ func (wlink *WatchLink) shutdown(reason error) {
 
 		// kill client if shutdown is due to faulty pin handling
 		if kill {
-			wlink.badPinKill(reason) // only fatal error
+			alreadyDead := false
+			if errors.Is(reason, context.Canceled) {
+				// If pinning failed because client disconnected, wait some time to
+				// allow graceful shutdown of client before force killing.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := waitProcessEnd(ctx, wlink.client); err == nil {
+					alreadyDead = true
+				}
+			} else {
+				// Could be
+				//	- context.DeadlineExceeded (not responding client)
+				//	- msg mismatch             (badly responding client)
+				// => kill ASAP
+				alive, err := isProcessAlive(wlink.client)
+				if err == nil {
+					alreadyDead = !alive
+				}
+			}
+			if !alreadyDead {
+				wlink.badPinKill(reason) // only fatal error
+			}
 		}
 
 		// NOTE unregistering watches and wlink itself is done on serve exit, not
