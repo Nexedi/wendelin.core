@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -122,6 +123,8 @@ func err2LogStatus(err error) fuse.Status {
 // fsNode behaviour can be additionally controlled via fsOptions.
 //
 // fsNode should be created via newFSNode.
+//
+// NOTE as wcfs is mostly read-only fsNode returns read-only mode in default GetAttr implementation.
 type fsNode struct {
 	nodefs.Node
 
@@ -183,6 +186,15 @@ func (n *fsNode) path() string {
 	return path
 }
 
+func (n *fsNode) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fuse.Status {
+	if n.Inode().IsDir() {
+		out.Mode = fuse.S_IFDIR | 0550 // r-xr-x---
+	} else {
+		out.Mode = fuse.S_IFREG | 0440 // r--r-----
+	}
+	return fuse.OK
+}
+
 
 // NewStaticFile creates nodefs.Node for file with static data.
 //
@@ -230,7 +242,7 @@ func (f *SmallFile) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) f
 		return err2LogStatus(err)
 	}
 	out.Size = uint64(len(data))
-	out.Mode = fuse.S_IFREG | 0644
+	out.Mode = fuse.S_IFREG | 0440
 	return fuse.OK
 }
 
@@ -265,10 +277,11 @@ func mkfile(parent nodefs.Node, name string, child nodefs.Node) {
 }
 
 
-// mount is like nodefs.MountRoot but allows to pass in full fuse.MountOptions.
-func mount(mntpt string, root nodefs.Node, opts *fuse.MountOptions) (*fuse.Server, *nodefs.FileSystemConnector, error) {
+// mount is like nodefs.MountRoot but allows to pass in full fuse.MountOptions and fuse.Owner.
+func mount(mntpt string, root nodefs.Node, opts *fuse.MountOptions, owner *fuse.Owner) (*fuse.Server, *nodefs.FileSystemConnector, error) {
 	nodefsOpts := nodefs.NewOptions()
 	nodefsOpts.Debug = opts.Debug
+	nodefsOpts.Owner = owner
 
 	return nodefs.Mount(mntpt, root, opts, nodefsOpts)
 }
@@ -515,6 +528,29 @@ func isoRevstr(rev zodb.Tid) string {
 		return "head"
 	}
 	return rev.String()
+}
+
+// parseSharewith returns the GID to use based on the optional -sharewith flag.
+//
+//	-sharewith group:NAME
+func parseSharewith(sharewith string) (gid int, err error) {
+	var groupName string
+	n, err := fmt.Sscanf(sharewith, "group:%s", &groupName)
+	if n != 1 || err != nil {
+		return -1, fmt.Errorf("invalid syntax, expected: group:NAME")
+	}
+
+	grp, err := user.LookupGroup(groupName)
+	if err != nil {
+		return -1, fmt.Errorf("cannot find group %q: %v", groupName, err)
+	}
+
+	gid, err = strconv.Atoi(grp.Gid)
+	if err != nil {
+		return -1, fmt.Errorf("invalid GID %q for group %q: %v", grp.Gid, groupName, err)
+	}
+
+	return gid, nil
 }
 
 // ---- make df happy (else it complains "function not supported") ----

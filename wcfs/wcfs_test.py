@@ -43,17 +43,20 @@ from persistent import Persistent
 from persistent.timestamp import TimeStamp
 from ZODB.utils import z64, u64, p64
 
+import grp
 import sys, os, os.path, subprocess
 import six
+import stat
+import warnings
 from six.moves._thread import get_ident as gettid
 from signal import SIGKILL
 from time import gmtime
-from errno import EINVAL, ENOTCONN, ECONNABORTED
+from errno import EINVAL, ENOTCONN, ECONNABORTED, ESRCH
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-from pytest import raises, fail
+from pytest import raises, fail, mark, skip
 from wendelin.wcfs.internal import io, mm, os as xos, multiprocessing as xmp
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
@@ -2080,6 +2083,192 @@ def test_wcfs_stuckdump_crash_after_start():
     defer(wcsrv.stop)
 
     wcsrv._stuckdump()  # used to AttributeError: 'Popen' object has no attribute 'get'
+
+
+# verify that files served by WCFS have correct ownership and permissions.
+# read access not matching those permissions should be rejected.
+@mark.parametrize('groupshare', [False, True])
+@func
+def test_wcfs_permissions(groupshare, monkeypatch):
+    uid, gid = os.getuid(), os.getgid()
+    if groupshare:
+        gname = grp.getgrgid(gid).gr_name
+        monkeypatch.setenv(
+            "WENDELIN_CORE_WCFS_OPTIONS", "-sharewith group:%s" % gname, prepend=" "
+        )
+
+    t = tDB(); zf = t.zfile
+    defer(t.close)
+
+    at1 = t.commit(zf, {0:'a1'})
+    at2 = t.commit(zf, {0:'a2'})
+
+    f  = t.open(zf)
+    f1 = t.open(zf, at=at1)
+
+    f .assertData(['a2']);  f .assertCache([1])
+    f1.assertData(['a1']);  f1.assertCache([1])
+
+    # bad emits an error without immediately terminating the test
+    badv = []
+    def bad(msg):
+        badv.append(msg)
+    def _():
+        if len(badv) > 0:
+            fail("\n".join(badv))
+    defer(_)
+
+    # 1) go through all files on wcfs as current user, snapshot their content and check permission
+    wctree  = {}  # wcpath -> data for non-special files
+    special = {
+        "head/watch":         0o660,
+        ".wcfs/debug/zhead":  0o440,
+    }
+    for dirpath, dirs, files in os.walk(t.wc.mountpoint):
+        for name in dirs + files:
+            path = os.path.join(dirpath, name)
+            wcpath = os.path.relpath(path, t.wc.mountpoint)
+            st = os.lstat(path)
+            if (st.st_uid, st.st_gid) != (uid, gid):
+                bad("%s: bad ownership: %d,%d  ; want %d,%d" % (path, st.st_uid, st.st_gid, uid, gid))
+
+            mode = stat.S_IMODE(st.st_mode)
+            if name in dirs:
+                mode_ok = 0o550
+            else:   # files
+                if wcpath in special:
+                    mode_ok = special[wcpath]
+                else:
+                    mode_ok = 0o440
+            if mode != mode_ok:
+                bad("%s: bad mode: %s  ; want %s" % (path, oct(mode), oct(mode_ok)))
+
+            if name in files:
+                if wcpath not in special:
+                    wctree[wcpath] = xos.readfile(path)
+
+
+    # 2) verify access to all those files from under different uid/gid
+
+    # UserContext provides context for accessing files on wcfs from under specified uid/gid.
+    #
+    # In this context:
+    # - xuid=0 is mapped to uid of current user and xguid=0 is mapped to gid of current user.
+    # - xuid=1 is mapped to some other uid ≠ uid of current user.
+    # - xgid=1 is mapped to some other gid ≠ gid of current user.
+    #
+    # Relative paths are resolved starting from prefix.
+    EACCESS = b'EACCESS'
+    class UserContext(object):
+        def __init__(uctx, xuid, xgid, prefix="/"):
+            uctx.xuid = xuid
+            uctx.xgid = xgid
+            uctx.prefix = prefix
+
+        @func
+        def read(uctx, ctx, path):  # -> data|EACCESS|exception
+            if not path.startswith("/"):
+                path = "%s/%s" % (uctx.prefix, path)
+            argv = ["unshare", "-U",
+                        "-r",                 # xuid=0/xgid=0 -> uid/gid of current user
+                        "--map-users=auto",   # xuid=1...     -> subuid range allowed for current user
+                        "--map-groups=auto",  # xgid=1...     -> subgid range allowed for current user
+                        "--setuid=%d" % uctx.xuid, "--setgid=%d" % uctx.xgid]
+            argv += ["cat", path]
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={'LANG':'C'})
+            def _():
+                if p.returncode is None:
+                    p.wait()
+            defer(_)
+
+            # ctx cancel -> p.kill
+            ctx, cancel = context.with_cancel(ctx)
+            wg = sync.WorkGroup(ctx)
+            def _(ctx):
+                ctx.done().recv()
+                if p.returncode is None:
+                    try:
+                        p.kill()
+                    except OSError as e:
+                        if e.errno != ESRCH:  # p.communicate could complete simultaneously
+                            raise
+            wg.go(_)
+            defer(wg.wait)
+            defer(cancel)
+
+            # retrieve p output
+            out, err = p.communicate()
+            assert p.returncode is not None
+            if p.returncode == 0:
+                return b(out)
+            if ctx.err() is not None:
+                raise ctx.err()
+            out = out.strip()
+            err = err.strip()
+            if err.endswith(b": Permission denied"):
+                return EACCESS
+            raise RuntimeError(out, err)
+
+    # skip this test if subordinate uid/gid are not allowed for current user.
+    #
+    # We already require unshare to be present (see e.g. t/t_with-tmpfs), but
+    # subordinate uids need additional uidmap package and /etc/subuid + /etc/subgid.
+    # On Debian subordinate uids are activated by default out of the box for
+    # regular users, but "system" users usually lack them.
+    try:
+        UserContext(1,1).read(t.ctx, '/dev/null')
+    except Exception as e:
+        emsg = "cannot enter user context with subordinate uid/gid: %s" % e
+        warnings.warn(emsg)
+        skip(emsg)
+
+
+    # check access from under xuid=0,1 x xgid=0,1
+    #
+    #   not shared:           shared:
+    #
+    # allow: ( U, G)        allow: ( U, *)          ; U - current user
+    #                              ( *, G)          ; G - current group
+    # deny:  (¬U, *)        deny:  (¬U,¬G)
+    #        ( *,¬G)
+    #
+    # NOTE fuse enforces (U,G)-only mode for non-shared case:
+    #   https://github.com/torvalds/linux/blob/v6.19-0-g05f7e89ab9731/fs/fuse/dir.c#L1739-L1763
+    #   https://github.com/torvalds/linux/blob/v6.19-0-g05f7e89ab9731/fs/fuse/dir.c#L1667-L1687
+    #   https://github.com/torvalds/linux/blob/v6.19-0-g05f7e89ab9731/fs/fuse/dir.c#L1655-L1665
+    for xuid in (0, 1):
+        for xgid in (0, 1):
+            uctx = UserContext(xuid, xgid, t.wc.mountpoint)
+            accessok = False
+            if not groupshare:
+                if xuid == 0  and xgid == 0:
+                    accessok = True
+            else:
+                if xuid == 0  or  xgid == 0:
+                    accessok = True
+
+            def assertRead(path, want):
+                want = b(want)
+                if not accessok:
+                    want = EACCESS
+                try:
+                    have = uctx.read(t.ctx, path)
+                except Exception as e:
+                    bad("xuid=%d xgid=%d: %s: %s" % (xuid, xgid, path, e))
+                    return
+                if have != want:
+                    def xstrip0(s): # useful to compress trailing zeros in bigfile data
+                        l = len(s)
+                        _ = s.rstrip(b'\0')
+                        l_ = len(_)
+                        if l_ < l:
+                            _ += b(" + 0·%d" % (l-l_))
+                        return _
+                    bad("xuid=%d xgid=%d: %s: have %r  ; want %r" %
+                            (xuid, xgid, path, xstrip0(have), xstrip0(want)))
+
+            for wcpath in wctree:
+                assertRead(wcpath, wctree[wcpath])
 
 
 # ---- misc ---

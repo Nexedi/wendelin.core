@@ -2600,7 +2600,7 @@ func (head *Head) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fus
 	}
 	t := at.Time().Time
 
-	out.Mode = fuse.S_IFDIR | 0555
+	out.Mode = fuse.S_IFDIR | 0550
 	out.SetTimes(/*atime=*/nil, /*mtime=*/&t, /*ctime=*/&t)
 	return fuse.OK
 }
@@ -2615,13 +2615,19 @@ func (f *BigFile) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fus
 }
 
 func (f *BigFile) getattr(out *fuse.Attr) {
-	out.Mode = fuse.S_IFREG | 0444
+	out.Mode = fuse.S_IFREG | 0440
 	out.Size = uint64(f.size)
 	out.Blksize = uint32(f.blksize)	// NOTE truncating 64 -> 32
 	// .Blocks
 
 	mtime := f.revApprox.Time().Time
 	out.SetTimes(/*atime=*/nil, /*mtime=*/&mtime, /*ctime=*/&mtime)
+}
+
+// /head/watch -> GetAttr serves stat.
+func (wnode *WatchNode) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fuse.Status {
+	out.Mode = fuse.S_IFREG | 0660
+	return fuse.OK
 }
 
 
@@ -2778,6 +2784,12 @@ func _main() (err error) {
 	tracefuse := flag.Bool("trace.fuse", false, "trace FUSE exchange")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
+	sharewith := -1
+	flag.Func("sharewith", "share WCFS read access with an OS group (format: group:NAME)", func(arg string) error {
+		var err error
+		sharewith, err = parseSharewith(arg)
+		return err
+	})
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2884,9 +2896,29 @@ func _main() (err error) {
 
 		DisableXAttrs: true,        // we don't use
 		Debug:         *tracefuse,  // go-fuse "Debug" is mostly logging FUSE messages
+
+		// Make the kernel check file permissions for us [2]. Without this,
+		// permissions are not enforced in allow_other mode [1]. But we unconditionally
+		// enable it for uniformity and to reduce overhead because with kernel checking
+		// the permissions, there are less ACCESS messages sent to FUSE server and the
+		// server is offloaded from implementing all access checks.
+		//
+		// [1] https://man.archlinux.org/man/extra/fuse3/mount.fuse3.8.en#allow_other
+		// [2] https://man.archlinux.org/man/extra/fuse3/mount.fuse3.8.en#default_permissions
+		Options: []string{"default_permissions"},
 	}
 
-	fssrv, fsconn, err := mount(mntpt, root, opts)
+	owner := fuse.CurrentOwner()
+	if sharewith >= 0 {
+		owner.Gid = uint32(sharewith)
+		// FUSE only allows sharing access with other users, if the 'allow_other' [1]
+		// flag is set (requires "user_allow_other" in /etc/fuse.conf).
+		//
+		// [1] https://man.archlinux.org/man/extra/fuse3/mount.fuse3.8.en#allow_other
+		opts.AllowOther = true
+	}
+
+	fssrv, fsconn, err := mount(mntpt, root, opts, owner)
 	if err != nil {
 		return err
 	}
