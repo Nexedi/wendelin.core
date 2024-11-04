@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1993,6 +1993,11 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 	return nil
 }
 
+func (wnode *WatchNode) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fuse.Status {
+	out.Mode = fuse.S_IFREG | 0660
+	return fuse.OK
+}
+
 // Open serves /head/watch opens.
 func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
 	node, err := wnode.open(flags, fctx)
@@ -2570,7 +2575,7 @@ func (f *BigFile) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fus
 }
 
 func (f *BigFile) getattr(out *fuse.Attr) {
-	out.Mode = fuse.S_IFREG | 0444
+	out.Mode = fuse.S_IFREG | 0440
 	out.Size = uint64(f.size)
 	out.Blksize = uint32(f.blksize)	// NOTE truncating 64 -> 32
 	// .Blocks
@@ -2644,6 +2649,11 @@ func (zh *_wcfs_debug_ZheadH) Release() {
 	gdebug.zheadSockTabMu.Unlock()
 
 	zh.File.Release()
+}
+
+func (zh *_wcfs_debug_Zhead) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) fuse.Status {
+	out.Mode = fuse.S_IFREG | 0440
+	return fuse.OK
 }
 
 
@@ -2733,6 +2743,7 @@ func _main() (err error) {
 	tracefuse := flag.Bool("trace.fuse", false, "trace FUSE exchange")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
+	sharewith := flag.String("sharewith", "", "share WCFS read access with an OS group (format: group:NAME)")
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2841,7 +2852,22 @@ func _main() (err error) {
 		Debug:         *tracefuse,  // go-fuse "Debug" is mostly logging FUSE messages
 	}
 
-	fssrv, fsconn, err := mount(mntpt, root, opts)
+	if *sharewith != "" {
+		// FUSE only allows sharing access with other users, if the 'allow_other' [1]
+		// flag is set (requires "user_allow_other" in /etc/fuse.conf).
+		opts.AllowOther = true
+		// Make the kernel check file permissions for us [2]. Without this,
+		// permissions are not enforced.
+		//
+		// [1] https://man.archlinux.org/man/extra/fuse3/mount.fuse3.8.en#allow_other
+		// [2] https://man.archlinux.org/man/extra/fuse3/mount.fuse3.8.en#default_permissions
+		opts.Options = []string{
+			"default_permissions",
+		}
+	}
+
+	gid := parseSharewith(sharewith)
+	fssrv, fsconn, err := mount(mntpt, root, opts, gid)
 	if err != nil {
 		return err
 	}
