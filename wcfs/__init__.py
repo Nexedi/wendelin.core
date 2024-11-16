@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -81,6 +81,7 @@ from persistent import Persistent
 from zodbtools.util import ashex as h
 
 from wendelin.lib.zodb import zurl_normalize_main
+from wendelin.wcfs.internal import glog
 from wendelin.wcfs.client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
@@ -735,7 +736,8 @@ def main():
 
     # setup log.warn/error to go to stderr, so that details could be seen on
     # e.g. "fuse_unmount: ... failed (more details logged)"
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    # tune logging to use the same glog output format as on wcfs.go side.
+    glog.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
     if cmd == "serve":
         if argv[0] == '-h':
