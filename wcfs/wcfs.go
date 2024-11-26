@@ -2732,6 +2732,7 @@ func _main() (err error) {
 	debug := flag.Bool("d", false, "debug")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
+	allowOther := flag.Bool("allowother", false, "allow other users to access wcfs")
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2838,6 +2839,12 @@ func _main() (err error) {
 
 		DisableXAttrs: true,        // we don't use
 		Debug:         *debug,
+
+		// If set to true, other users can access WCFS (if "user_allow_other"
+		// has been added to /etc/fuse.conf). This can be useful for multi-user
+		// deployments where WCFS clients are called by other users than user which
+		// started WCFS.
+		AllowOther: *allowOther,
 	}
 
 	fssrv, fsconn, err := mount(mntpt, root, opts)
