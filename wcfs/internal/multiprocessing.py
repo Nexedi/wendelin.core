@@ -73,12 +73,14 @@ class SubProcess(object):
         sys.stdout = open(os.devnull, 'w')
         argv = cin.recv()
         kw   = cin.recv()
+        if not kw.pop('_nocincout', False):
+            argv = (cin, cout) + argv
         modname, funcname = funcpath.rsplit('.', 1)
         mod = importlib.import_module(modname)
         f = getattr(mod, funcname)
         procname = kw.pop('_procname', funcpath)
         try:
-            f(cin, cout, *argv, **kw)
+            f(*argv, **kw)
             _ = 'END'
         except BaseException as exc:
             # dump traceback so it appears in the log because Traceback objects are not picklable
