@@ -25,7 +25,7 @@ from __future__ import print_function, absolute_import
 from wendelin.lib.zodb import zstor_2zurl
 from wendelin import wcfs
 
-import sys, os, subprocess, traceback
+import sys, os, subprocess, traceback, importlib
 import six
 from golang import select, func, defer
 from golang import context, sync, time
@@ -68,7 +68,7 @@ def with_prompt_pintimeout(monkeypatch):
 class tSubProcess(object):
     def __init__(proc, f, *argv, **kw):
         exev = [sys.executable, '-c', 'from wendelin.wcfs import wcfs_faultyprot_test as t; '
-                                      't.tSubProcess._start(%r)' % f.__name__]
+                                      't.tSubProcess._start(%r)' % '%s.%s' % (f.__module__, f.__name__)]
         proc.popen = subprocess.Popen(exev, stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
         try:
             proc.cin  = MPConnection(os.dup(proc.popen.stdin.fileno()),  readable=False)
@@ -83,15 +83,17 @@ class tSubProcess(object):
 
     # _start is trampoline ran in the subprocess to launch to user function.
     @staticmethod
-    def _start(funcname):
+    def _start(funcpath):
         cin  = MPConnection(os.dup(sys.stdin.fileno()),  writable=False)
         cout = MPConnection(os.dup(sys.stdout.fileno()), readable=False)
         sys.stdin  = open(os.devnull, 'r')
         sys.stdout = open(os.devnull, 'w')
         argv = cin.recv()
         kw   = cin.recv()
-        f = globals()[funcname]
-        procname = kw.pop('_procname', f.__name__)
+        modname, funcname = funcpath.rsplit('.', 1)
+        mod = importlib.import_module(modname)
+        f = getattr(mod, funcname)
+        procname = kw.pop('_procname', funcpath)
         try:
             f(cin, cout, *argv, **kw)
             _ = 'END'
