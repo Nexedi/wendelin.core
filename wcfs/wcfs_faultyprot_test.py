@@ -71,8 +71,10 @@ class tSubProcess(object):
                                       't.tSubProcess._start(%r)' % f.__name__]
         proc.popen = subprocess.Popen(exev, stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
         try:
-            proc.cin  = MPConnection(proc.popen.stdin.fileno(),  readable=False)
-            proc.cout = MPConnection(proc.popen.stdout.fileno(), writable=False)
+            proc.cin  = MPConnection(os.dup(proc.popen.stdin.fileno()),  readable=False)
+            proc.cout = MPConnection(os.dup(proc.popen.stdout.fileno()), writable=False)
+            proc.popen.stdin  = open(os.devnull, 'w')
+            proc.popen.stdout = open(os.devnull, 'r')
             proc.send(argv)
             proc.send(kw)
         except:
@@ -82,8 +84,10 @@ class tSubProcess(object):
     # _start is trampoline ran in the subprocess to launch to user function.
     @staticmethod
     def _start(funcname):
-        cin  = MPConnection(sys.stdin.fileno(),  writable=False)
-        cout = MPConnection(sys.stdout.fileno(), readable=False)
+        cin  = MPConnection(os.dup(sys.stdin.fileno()),  writable=False)
+        cout = MPConnection(os.dup(sys.stdout.fileno()), readable=False)
+        sys.stdin  = open(os.devnull, 'r')
+        sys.stdout = open(os.devnull, 'w')
         argv = cin.recv()
         kw   = cin.recv()
         f = globals()[funcname]
