@@ -79,14 +79,17 @@ class SubProcess(object):
         mod = importlib.import_module(modname)
         f = getattr(mod, funcname)
         procname = kw.pop('_procname', funcpath)
+        _ = _END()
         try:
-            f(*argv, **kw)
-            _ = 'END'
+            r = f(*argv, **kw)
+            _.ret = r
+            _.exc = None
         except BaseException as exc:
             # dump traceback so it appears in the log because Traceback objects are not picklable
             print("\nException in subprocess %s (pid%d):" % (procname, os.getpid()), file=sys.stderr)
             traceback.print_exc()
-            _ = exc
+            _.ret = None
+            _.exc = exc
         cout.send(_)
         cout.close()
 
@@ -100,11 +103,12 @@ class SubProcess(object):
     def exitcode(proc):
         return proc.popen.returncode
 
-    # join waits for the subprocess to end.
-    def join(proc, ctx):
+    # join waits for the subprocess to end and returns or raises its result.
+    def join(proc, ctx): # -> any | exception
         gotend = False
         goteof = False
         joined = False
+        end    = None
         while not (goteof and joined):
             if ctx.err() is not None:
                 raise ctx.err()
@@ -124,10 +128,16 @@ class SubProcess(object):
                 else:
                     if ok:
                         if not gotend:
-                            assert _ == 'END'
+                            assert isinstance(_, _END)
                             gotend = True
+                            end    = _
                         else:
                             raise AssertionError("got %r after END" % (_,))
+        if not gotend:
+            return None
+        if end.exc is not None:
+            raise end.exc
+        return end.ret
 
     # send sends object to subprocess input.
     def send(proc, obj):
@@ -152,3 +162,9 @@ class SubProcess(object):
         if isinstance(_, BaseException):
             raise _
         return _, True
+
+
+class _END:
+    # .ret  any       | None
+    # .exc  Exception | None
+    pass
