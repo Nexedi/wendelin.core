@@ -1,5 +1,5 @@
 # Wendelin.core | pytest config
-# Copyright (C) 2020-2021  Nexedi SA and Contributors.
+# Copyright (C) 2020-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -73,7 +73,7 @@ def pytest_configure(config):
             wcfslog = logging.getLogger('wcfs')
             wcfslog.setLevel(logging.INFO)
         # -vv  -> verbose *.py logs
-        # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-d -alsologtostderr -v=1" ?
+        # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-trace.fuse -alsologtostderr -v=1" ?
         if config.option.verbose > 1:
             config.inicfg['log_cli_level'] = "INFO"
 

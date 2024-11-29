@@ -2729,7 +2729,7 @@ func main() {
 }
 
 func _main() (err error) {
-	debug := flag.Bool("d", false, "debug")
+	tracefuse := flag.Bool("trace.fuse", false, "trace FUSE exchange")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
 
@@ -2746,7 +2746,7 @@ func _main() (err error) {
 	}
 
 	// debug -> precise t, no dates	(TODO(?) -> always precise t?)
-	if *debug {
+	if *tracefuse {
 		stdlog.SetFlags(stdlog.Lmicroseconds)
 	}
 
@@ -2837,7 +2837,7 @@ func _main() (err error) {
 		ExplicitDataCacheControl: true,
 
 		DisableXAttrs: true,        // we don't use
-		Debug:         *debug,
+		Debug:         *tracefuse,  // go-fuse "Debug" is mostly logging FUSE messages
 	}
 
 	fssrv, fsconn, err := mount(mntpt, root, opts)
