@@ -55,6 +55,7 @@ def prepend_env(var, prefix):
     os.environ[var] = v
 
 
+# enable debug features during testing
 # enable log_cli on no-capture
 # (output during a test is a mixture of print and log)
 def pytest_configure(config):
@@ -62,7 +63,7 @@ def pytest_configure(config):
     # this way we don't leak those files and include relevant information in test output
     #
     # TODO put WCFS logs into dedicated dir without -v?
-    prepend_env('WENDELIN_CORE_WCFS_OPTIONS', '-logtostderr')
+    prepend_env('WENDELIN_CORE_WCFS_OPTIONS', '-debug -logtostderr')
 
     if config.option.capture == "no":
         config.inicfg['log_cli'] = "true"

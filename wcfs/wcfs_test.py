@@ -527,8 +527,8 @@ class tDB(tWCFS):
         # start wcfs after testdb is created and initial data is committed
         super(tDB, t).__init__(**kw)
 
-        # fh(.wcfs/zhead) + history of zhead read from there
-        t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
+        # fh(.wcfs/debug/zhead) + history of zhead read from there
+        t._wc_debug_zheadfh = open(t.wc.mountpoint + "/.wcfs/debug/zhead")
 
         # whether head/ ZBigFile(s) blocks were ever accessed via wcfs.
         # this is updated only explicitly via ._blkheadaccess() .
@@ -559,7 +559,7 @@ class tDB(tWCFS):
             tw.close()
         assert len(t._files)   == 0
         assert len(t._wlinks)  == 0
-        t._wc_zheadfh.close()
+        t._wc_debug_zheadfh.close()
 
         zstats = {'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0}
         if not t.multiproc:
@@ -598,7 +598,7 @@ class tDB(tWCFS):
         head = t._commit(zf, changeDelta)
 
         # make sure wcfs is synchronized to committed transaction
-        l = t._wc_zheadfh.readline()
+        l = t._wc_debug_zheadfh.readline()
         #print('> zhead read: %r' % l)
         l = l.rstrip('\n')
         wchead = tAt(t, fromhex(l))
@@ -1902,7 +1902,7 @@ def test_wcfs_watch_2files():
 @func
 def test_wcfs_eio_after_zwatcher_fail(capfd):
     # we will use low-level tWCFS instead of tDB for precise control of access
-    # to the filesystem. For example tDB keeps open connection to .wcfs/zhead
+    # to the filesystem. For example tDB keeps open connection to .wcfs/debug/zhead
     # and inspects it during commit which can break in various ways on switch
     # to EIO mode. Do all needed actions by hand to avoid unneeded uncertainty.
 

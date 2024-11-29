@@ -998,7 +998,7 @@ retry:
 		file.revApprox = zhead.At()
 	}
 
-	// notify .wcfs/zhead
+	// notify .wcfs/debug/zhead
 	gdebug.zheadSockTabMu.Lock()
 	for sk := range gdebug.zheadSockTab {
 		_, err := fmt.Fprintf(xio.BindCtxW(sk, ctx), "%s\n", δZ.Tid)
@@ -2602,7 +2602,7 @@ var gmntpt string
 
 // debugging
 var gdebug = struct {
-	// .wcfs/zhead opens
+	// .wcfs/debug/zhead opens
 	zheadSockTabMu sync.Mutex
 	zheadSockTab   map[*FileSock]struct{}
 }{}
@@ -2611,22 +2611,22 @@ func init() {
 	gdebug.zheadSockTab = make(map[*FileSock]struct{})
 }
 
-// _wcfs_Zhead serves .wcfs/zhead .
-type _wcfs_Zhead struct {
+// _wcfs_debug_Zhead serves .wcfs/debug/zhead .
+type _wcfs_debug_Zhead struct {
 	fsNode
 }
 
-// _wcfs_ZheadH serves .wcfs/zhead opens.
-type _wcfs_ZheadH struct {
+// _wcfs_debug_ZheadH serves .wcfs/debug/zhead opens.
+type _wcfs_debug_ZheadH struct {
 	nodefs.File  // = .sk.file
 	sk *FileSock
 }
 
-func (*_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+func (*_wcfs_debug_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
 	// TODO(?) check flags
 	sk := NewFileSock()
 	sk.CloseRead()
-	zh := &_wcfs_ZheadH{
+	zh := &_wcfs_debug_ZheadH{
 		File: sk.file,
 		sk:   sk,
 	}
@@ -2638,7 +2638,7 @@ func (*_wcfs_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.St
 	return WithOpenStreamFlags(zh), fuse.OK
 }
 
-func (zh *_wcfs_ZheadH) Release() {
+func (zh *_wcfs_debug_ZheadH) Release() {
 	gdebug.zheadSockTabMu.Lock()
 	delete(gdebug.zheadSockTab, zh.sk)
 	gdebug.zheadSockTabMu.Unlock()
@@ -2702,7 +2702,7 @@ func _wcfs_Stats(fctx *fuse.Context) ([]byte, error) {
 
 	num("BigFile",     lenFileTab)		// # of head/BigFile
 	num("RevHead",     lenRevTab)		// # of @revX/ directories
-	num("ZHeadLink",   lenZHeadSockTab)	// # of open .wcfs/zhead handles
+	num("ZHeadLink",   lenZHeadSockTab)	// # of open .wcfs/debug/zhead handles
 	num("WatchLink",   lenWLinkTab)		// # of open watchlinks
 	num("Watch",       ΣWatch)		// # of setup watches
 	num("PinnedBlk",   ΣPinnedBlk)		// # of currently on-client pinned blocks
@@ -2729,6 +2729,7 @@ func main() {
 }
 
 func _main() (err error) {
+	debug := flag.Bool("debug", false, "enable debugging features")
 	tracefuse := flag.Bool("trace.fuse", false, "trace FUSE exchange")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
@@ -2746,7 +2747,7 @@ func _main() (err error) {
 	}
 
 	// debug -> precise t, no dates	(TODO(?) -> always precise t?)
-	if *tracefuse {
+	if *debug || *tracefuse {
 		stdlog.SetFlags(stdlog.Lmicroseconds)
 	}
 
@@ -2872,25 +2873,32 @@ func _main() (err error) {
 	mkfile(head, "at", NewSmallFile(head.readAt)) // TODO mtime(at) = tidtime(at)
 	mkfile(head, "watch", wnode)
 
-	// for debugging/testing
+	// information about wcfs itself
 	_wcfs := newFSNode(fSticky)
 	mkdir(root, ".wcfs", &_wcfs)
 	mkfile(&_wcfs, "zurl", NewStaticFile([]byte(zurl)))
 	mkfile(&_wcfs, "pintimeout", NewStaticFile([]byte(fmt.Sprintf("%.1f", float64(root.pinTimeout) / float64(time.Second)))))
+	mkfile(&_wcfs, "stats", NewSmallFile(_wcfs_Stats)) // collected statistics
 
-	// .wcfs/zhead - special file channel that sends zhead.at.
-	//
-	// If a user opens it, it will start to get tids of through which
-	// zhead.at was, starting from the time when .wcfs/zhead was opened.
-	// There can be multiple openers. Once opened, the file must be read,
-	// as wcfs blocks waiting for data to be read when processing
-	// invalidations.
-	mkfile(&_wcfs, "zhead", &_wcfs_Zhead{
-		fsNode: newFSNode(fSticky),
-	})
+	// for debugging/testing
+	if *debug {
+		_wcfs_debug := newFSNode(fSticky)
+		mkdir(&_wcfs, "debug", &_wcfs_debug)
 
-	// .wcfs/stats - special file with collected statistics.
-	mkfile(&_wcfs, "stats", NewSmallFile(_wcfs_Stats))
+		// .wcfs/debug/zhead - special file channel that sends zhead.at.
+		//
+		// If a user opens it, it will start to get tids of through which
+		// zhead.at was, starting from the time when .wcfs/debug/zhead was opened.
+		// There can be multiple openers. Once opened, the file must be read,
+		// as wcfs blocks waiting for data to be read when processing
+		// invalidations.
+		//
+		// zhead is debug-only since it is easy to deadlock wcfs by not
+		// reading from opened zhead handle.
+		mkfile(&_wcfs_debug, "zhead", &_wcfs_debug_Zhead{
+			fsNode: newFSNode(fSticky),
+		})
+	}
 
 
 	// TODO handle autoexit
