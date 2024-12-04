@@ -18,10 +18,12 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 
-"""Module wcfs.py provides python gateway for spawning and interoperating with wcfs server.
+"""Module wcfs.py provides python gateway for spawning, monitoring
+and interoperating with wcfs server.
 
-Serve(zurl) starts and runs WCFS server for ZODB at zurl.
-Start(zurl) starts WCFS server for ZODB at zurl and returns corresponding Server object.
+Serve (zurl) starts and runs WCFS server for ZODB at zurl.
+Start (zurl) starts WCFS server for ZODB at zurl and returns corresponding Server object.
+Status(zurl) verifies whether WCFS server for ZODB at zurl is running in correct state.
 
 Join(zurl) joins wcfs server for ZODB at zurl and returns WCFS object that
 represents filesystem-level connection to joined wcfs server. If wcfs server
@@ -86,7 +88,7 @@ from wendelin.wcfs.client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
 
-from wendelin.wcfs.internal import os as xos
+from wendelin.wcfs.internal import os as xos, multiprocessing as xmp
 
 
 # Server represents running wcfs server.
@@ -94,8 +96,10 @@ from wendelin.wcfs.internal import os as xos
 # Use start to create it.
 class Server:
     # ._mnt         mount entry
-    # ._proc        wcfs process
-    # ._fuseabort   opened /sys/fs/fuse/connections/X/abort for this server
+    # ._proc        wcfs process:
+    #                   \/ subprocess.Popen     ; we spawned it
+    #                   \/ xos.Proc             ; we discovered it during status
+    # ._fuseabort   opened /sys/fs/fuse/connections/X/abort for server's mount
     # ._stopOnce
     pass
 
@@ -498,6 +502,164 @@ def __stop(wcsrv, ctx, _onstuck):
         if not isinstance(e, _FUSEUnmountError):
             raise
 
+# status verifies whether wcfs server for ZODB @ zurl is running in correct state.
+#
+# TODO tests
+def status(zurl):
+    log.info("status %s ...", zurl)
+
+    def ok(msg):
+        print("ok - %s" % msg)
+    def fail(msg):
+        print("fail - %s" % msg)
+        raise RuntimeError('(failed)')
+
+    # NOTE status has to be careful when touching mounted filesystem because
+    #      any operation can hang if wcfs is deadlocked.
+
+    # find mount entry for mntpt
+    try:
+        mnt = _lookup_wcmnt(zurl)
+    except Exception as e:
+        fail(e)
+    ok("mount entry: %s  (%s)" % (mnt.point, _devstr(mnt.dev)))
+
+    # find server process that serves the mount
+    try:
+        wcsrv = _lookup_wcsrv(mnt)
+    except Exception as e:
+        fail(e)
+    ok("wcfs server: %s" % wcsrv._proc)
+
+    # try to stat mountpoint and access set of files on the filesystem
+    # any of this operation can hang if wcfs is deadlocked
+    @func
+    def verify(subj, f, *argv, **kw):
+        # NOTE we cannot do IO checks in the same process even if in different thread:
+        #
+        #      If the check hangs then the file descriptor to wcfs will be still
+        #      open and check's IO request on that fd will be still in
+        #      progress. Which will prevent `wcfs status` process to exit
+        #      because on exit the kernel will put the process into Z
+        #      state (zombie) and try to close all its opened file descriptors.
+        #      But when closing to-wcfs fd the kernel will see outstanding IO
+        #      and try to cancel that via sending INTERRUPT to WCFS. That will
+        #      cancel the IO only if wcfs is behaving correctly, but if wcfs
+        #      is not behaving correctly, e.g. deadlocked, it will result in
+        #      the IO request still be hanging, and so `wcfs status` also
+        #      being stuck in Z state forever. Avoid that by doing all IO
+        #      checks, that touch WCFS, in separate process. This way even if
+        #      test process will get stuck, the main process of `wcfs status`
+        #      will have no fd-relation to wcfs, and so will not get hang even
+        #      if wcfs itself is deadlocked.
+        kw = kw.copy()
+        retcheck = kw.pop('retcheck', None)
+
+        ctx, cancel = context.with_timeout(context.background(), 5*time.second)
+        defer(cancel)
+
+        exc = None
+        try:
+            ret = _proccall(ctx, f, *argv, **kw)
+            if retcheck is not None:
+                retcheck(ret)
+        except Exception as e:
+            exc = e
+
+        if ctx.err() != None:
+            def _():
+                print(wcsrv._stuckdump())
+            defer(_)
+            fail("%s: timed out (wcfs might be stuck)" % subj)
+        if exc is not None:
+            fail("%s: %s" % (subj, exc))
+        ok(subj)
+
+    # stat mountpoint verifies that FUSE roundtrip to the server works
+    # serving this takes lookupLock in nodefs but does not get zheadMu or any other wcfs-specific locks
+    def _(st):
+        if st.st_dev != mnt.dev:
+            raise AssertionError("st_dev mismatch: got %s" % (_devstr(st.st_dev)))
+    verify("stat mountpoint", os.stat, mnt.point, retcheck=_)
+
+    # read .wcfs/zurl verifies FUSE roundtrip going a bit deeper to WCFS internals
+    # but still does not take any WCFS-specific locks
+    def _(_):
+        if _ != zurl:
+            raise AssertionError("zurl mismatch: got %s" % qq(_))
+    verify("read .wcfs/zurl", xos.readfile, "%s/.wcfs/zurl" % mnt.point, retcheck=_)
+
+    # read .wcfs/stats verifies FUSE roundtrip going more deeper into WCFS and
+    # taking zheadMu and most other wcfs-specific locks while serving. As the
+    # result this should likely hang if wcfs is deadlocked somewhere.
+    verify("read .wcfs/stats", xos.readfile, "%s/.wcfs/stats" % mnt.point)
+
+
+# _lookup_wcsrv returns WCFS Server with server process that is serving filesystem under mnt.
+def _lookup_wcsrv(mnt): # -> Server
+    assert isinstance(mnt, xos.Mount)
+    assert mnt.fstype == "fuse.wcfs"
+
+    # lookup fuse connection and deduce user, that runs wcfs, from it
+    fuseabort = open("/sys/fs/fuse/connections/%d/abort" % os.minor(mnt.dev), "wb")
+    wcuid = os.fstat(fuseabort.fileno()).st_uid
+
+    # find wcfs server process that is serving mounted filesystem
+    # linux does not provide builtin mechanism to find FUSE server, so we use a
+    # heuristic to do so.
+    pdbc = xos.ProcDB.open(isolation_level=xos.ISOLATION_REPEATABLE_READ)
+    def iswcfssrv(proc):
+        # avoid checking .exe and .fd on processes we likely cannot access
+        if not (proc.uid == wcuid and proc.comm == "wcfs"):
+            return False
+        if proc.exe not in (_wcfs_exe(), _wcfs_exe() + " (deleted)") :
+            return False
+        for ifd in proc.fd.values():
+            # XXX strictly speaking need to check major/minor of corresponding
+            # device discovered at runtime
+            if ifd.path == "/dev/fuse":
+                break
+        else:
+            return False
+        if proc.argv[-2:] != (mnt.fssrc, mnt.point):
+            return False
+        return True
+
+    _ = pdbc.query(iswcfssrv, eperm="warn")
+    _ = list(_)
+    if len(_) > 1:
+        raise RuntimeError("multiple wcfs servers found: %s" % (_))
+    if len(_) == 0:
+        raise RuntimeError("no wcfs server found")
+    wcproc = _[0]
+
+    wcsrv = Server(mnt, wcproc, fuseabort)
+    return wcsrv
+
+
+# _stuckdump returns text that is useful for debug analysis in case wcfs is stuck.
+#
+# The text contains kernel tracebacks of wcfs and its clients as well the list
+# of files those clients currently have opened on wcfs.
+@func(Server)
+def _stuckdump(wcsrv): # -> str
+    v = []
+    def emit(text=''):
+        v.append(text+"\n")
+
+    emit("\nwcfs ktraceback:")
+    emit(wcsrv._proc.get('ktraceback', eperm="strerror", gone="strerror"))
+
+    emit("\nwcfs clients:")
+    for (proc, use) in wcsrv._mnt.lsof():
+        emit("  %s %s" % (proc, proc.argv))
+        for key, path in use.items():
+            emit("\t%s\t-> %s" % (key, path))
+        emit()
+        emit(_indent("\t", proc.get('ktraceback', eperm="strerror", gone="strerror")))
+
+    return ''.join(v)
+
 
 # ---- misc ----
 
@@ -537,6 +699,17 @@ def _mntpt_4zurl(zurl):
     mntpt = "%s/%s" % (wcfsroot, m.hexdigest())
     _mkdir_p(mntpt)
     return mntpt
+
+# _lookup_wcmnt returns mount entry corresponding to WCFS service for ZODB @ zurl.
+def _lookup_wcmnt(zurl, nomount_ok=False): # -> xos.Mount  (| None if nomount_ok)
+    mntpt = _mntpt_4zurl(zurl)
+    mnt = _lookup_mnt(mntpt, nomount_ok)
+    if mnt is not None:
+        if mnt.fstype != 'fuse.wcfs':
+            raise RuntimeError("mount entry: fstype mismatch: %s", mnt.fstype)
+        if mnt.fssrc  != zurl:
+            raise RuntimeError("mount entry: zurl mismatch: %s", mnt.fssrc)
+    return mnt
 
 # _lookup_mnt returns mount entry corresponding to mntpt mountpoint.
 def _lookup_mnt(mntpt, nomount_ok=False): # -> xos.Mount  (| None if nomount_ok)
@@ -648,6 +821,21 @@ def _is_mountpoint(path):    # -> bool
     return mounted
 
 
+# _proccall invokes f(*argv, **kw) in freshly started subprocess and returns its result.
+#
+# ctx controls how long to wait for that subprocess to complete.
+@func
+def _proccall(ctx, f, *argv, **kw):
+    kw = kw.copy()
+    kw.setdefault('_nocincout', True)
+
+    p = xmp.SubProcess(f, *argv, **kw)
+    defer(p.close)
+
+    ret = p.join(ctx)   # raises ctx.err or exception raised by f
+    return ret
+
+
 # _sysproc creates subprocess.Popen for "system" command.
 #
 # System commands are those that reside either in /bin or /usr/bin and which
@@ -756,6 +944,18 @@ def serve(zurl, optv, exec_=False, _tstartingq=None):
         os.execv(argv[0], argv)
 
 
+# _devstr returns human readable form of dev_t.
+def _devstr(dev): # -> str  "major:minor"
+    return "%d:%d" % (os.major(dev), os.minor(dev))
+
+# _indent returns text with each line of it indented with prefix.
+def _indent(prefix, text): # -> str
+    linev = text.splitlines(True)
+    return ''.join(prefix + _ for _ in linev)
+
+
+
+# ----------------------------------------
 
 # if called as main -> serve as frontend to wcfs service:
 #
@@ -790,9 +990,9 @@ def main():
         serve(zurl, optv, exec_=True)
 
     elif cmd == "status":
-        wc = join(zurl, autostart=False) # raises if wcfs is not started
-        defer(wc.close)
-        print("wcfs<%s>: serving ok" % zurl)
+        if optv:
+            _usage(sys.stderr)
+        status(zurl)
 
     elif cmd == "stop":
         mntpt = _mntpt_4zurl(zurl)
