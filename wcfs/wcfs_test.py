@@ -2116,14 +2116,17 @@ def dump_history(t):
 
 # procmounts_lookup_wcfs returns /proc/mount entry for wcfs mounted to serve zurl.
 def procmounts_lookup_wcfs(zurl): # -> mountpoint | KeyError
-    for line in xos.readfile('/proc/mounts').splitlines():
-        # <zurl> <mountpoint> fuse.wcfs ...
-        zurl_, mntpt, typ, _ = line.split(None, 3)
-        if typ != 'fuse.wcfs':
-            continue
-        if zurl_ == zurl:
-            return mntpt
-    raise KeyError("lookup wcfs %s: no /proc/mounts entry" % zurl)
+    mdbc = xos.MountDB.open()
+    _ = mdbc.query(lambda mnt: mnt.fstype == 'fuse.wcfs' and mnt.fssrc == zurl)
+    _ = list(_)
+    if len(_) == 0:
+        raise KeyError("lookup wcfs %s: no mountdb entry" % zurl)
+    if len(_) >  1:
+        raise KeyError("lookup wcfs %s: multiple mountdb entries:%s" % (zurl,
+                ''.join('\n\t%s' % mnt for mnt in _)))
+    mnt = _[0]
+    return mnt.point
+
 
 # eprint prints msg to stderr
 def eprint(msg):
