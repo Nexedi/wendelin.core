@@ -86,12 +86,14 @@ from wendelin.wcfs.client._wcfs import \
     PyWCFS          as _WCFS,       \
     PyWatchLink     as WatchLink    \
 
+from wendelin.wcfs.internal import os as xos
+
 
 # Server represents running wcfs server.
 #
 # Use start to create it.
 class Server:
-    # .mountpoint   path to wcfs mountpoint
+    # ._mnt         mount entry
     # ._proc        wcfs process
     # ._fuseabort   opened /sys/fs/fuse/connections/X/abort for this server
     # ._stopOnce
@@ -296,7 +298,7 @@ def _start(zurl, *optv): # -> Server, fwcfs
     # XXX errctx "wcfs: start"
 
     # spawn wcfs and wait till filesystem-level access to it is ready
-    wcsrv = Server(mntpt, None, None)
+    wcsrv = Server(None, None, None)
     wg = sync.WorkGroup(context.background())
     fsready = chan(dtype='C.structZ')
     def _(ctx):
@@ -332,6 +334,7 @@ def _start(zurl, *optv): # -> Server, fwcfs
     wg.go(_)
 
     wg.wait()
+    wcsrv._mnt = _lookup_mnt(mntpt)
     log.info("started pid%d @ %s", wcsrv._proc.pid, mntpt)
 
     fwcfs = wcsrv._fwcfs
@@ -376,11 +379,17 @@ def _waitmount(ctx, zurl, mntpt): # -> fwcfs
 
 
 @func(Server)
-def __init__(wcsrv, mountpoint, proc, ffuseabort):
-    wcsrv.mountpoint = mountpoint
+def __init__(wcsrv, mnt, proc, ffuseabort):
+    wcsrv._mnt       = mnt
     wcsrv._proc      = proc
     wcsrv._fuseabort = ffuseabort
     wcsrv._stopOnce  = sync.Once()
+
+# mountpoint returns path to wcfs mountpoint.
+@func(Server)
+@property
+def mountpoint(wcsrv):
+    return wcsrv._mnt.point
 
 # stop shutdowns the server.
 @func(Server)
@@ -529,6 +538,22 @@ def _mntpt_4zurl(zurl):
     _mkdir_p(mntpt)
     return mntpt
 
+# _lookup_mnt returns mount entry corresponding to mntpt mountpoint.
+def _lookup_mnt(mntpt, nomount_ok=False): # -> xos.Mount  (| None if nomount_ok)
+    mdbc = xos.MountDB.open()
+    _ = mdbc.query(lambda mnt: mnt.point == mntpt)
+    _ = list(_)
+    if len(_) == 0:
+        if nomount_ok:
+            return None
+        raise RuntimeError("no mount entry for %s" % mntpt)
+    if len(_) >  1:
+        # NOTE if previous wcfs was lazy unmounted - there won't be multiple mount entries
+        #      because MNT_DETACH (what lazy-unmount uses) removes entry from mount registry
+        raise RuntimeError("multiple mount entries for %s" % mntpt)
+    mnt = _[0]
+    return mnt
+
 
 # mkdir -p.
 def _mkdir_p(path, mode=0o777): # -> created(bool)
@@ -555,19 +580,30 @@ class _FUSEUnmountError(RuntimeError):
     pass
 @func
 def _fuse_unmount(mntpt, *optv):
-    ret, out = _sysproccallout(["fusermount", "-u"] + list(optv) + [mntpt])
+    mdbc = xos.MountDB.open()
+    _ = mdbc.query(lambda mnt: mnt.point == mntpt)
+    _ = list(_)
+    if len(_) == 0:
+        raise RuntimeError("not a mountpoint: %s" % mntpt)
+    assert len(_) == 1, _
+    mnt = _[0]
+    return _mnt_fuse_unmount(mnt, *optv)
+
+@func
+def _mnt_fuse_unmount(mnt, *optv):
+    ret, out = _sysproccallout(["fusermount", "-u"] + list(optv) + [mnt.point])
     if ret != 0:
         # unmount failed, usually due to "device is busy".
         # Log which files are still opened and reraise
         def _():
-            log.warn("# lsof %s" % mntpt)
+            log.warn("# lsof %s" % mnt.point)
             # -w to avoid lots of
             #  lsof: WARNING: can't stat() fuse.wcfs file system /dev/shm/wcfs/X
             #        Output information may be incomplete.
             # if there are other uncleaned wcfs mountpoints.
             # (lsof stats all filesystems on startup)
             # NOTE lsof +D misbehaves - don't use it
-            ret, out = _sysproccallout(["lsof", "-w", mntpt])
+            ret, out = _sysproccallout(["lsof", "-w", mnt.point])
             log.warn(out)
             if ret:
                 log.warn("(lsof failed)")
@@ -577,7 +613,7 @@ def _fuse_unmount(mntpt, *optv):
         opts = ' '.join(optv)
         if opts != '':
             opts += ' '
-        emsg = "fuse_unmount %s%s: failed: %s" % (opts, mntpt, out)
+        emsg = "fuse_unmount %s%s: failed: %s" % (opts, mnt.point, out)
         log.warn(emsg)
         raise _FUSEUnmountError("%s\n(more details logged)" % emsg)
 
