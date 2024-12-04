@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2024-2025  Nexedi SA and Contributors.
+# Copyright (C) 2019-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,8 +22,20 @@
 standard package os.
 
 - gettid returns OS-level identifier of current thread.
+- readfile and writefile are handy utilities to read/write a file as a whole.
 """
 
 from __future__ import print_function, absolute_import
 
 from wendelin.wcfs.internal._os import gettid
+
+
+# readfile reads file @ path.
+def readfile(path):
+    with open(path) as f:
+        return f.read()
+
+# writefile writes data to file @ path.
+def writefile(path, data):
+    with open(path, "w") as f:
+        f.write(data)

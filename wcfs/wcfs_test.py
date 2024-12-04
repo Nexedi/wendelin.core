@@ -53,7 +53,7 @@ from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
 from pytest import raises, fail
-from wendelin.wcfs.internal import io, mm
+from wendelin.wcfs.internal import io, mm, os as xos
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
 from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
@@ -138,7 +138,7 @@ def test_join():
     wcsrv = wcfs.start(zurl)
     defer(wcsrv.stop)
     assert wcsrv.mountpoint == testmntpt
-    assert readfile(wcsrv.mountpoint + "/.wcfs/zurl") == zurl
+    assert xos.readfile(wcsrv.mountpoint + "/.wcfs/zurl") == zurl
     assert os.path.isdir(wcsrv.mountpoint + "/head")
     assert os.path.isdir(wcsrv.mountpoint + "/head/bigfile")
 
@@ -169,7 +169,7 @@ def test_join_autostart():
     defer(wc.close)
     assert wc.mountpoint == testmntpt
     assert wc._njoin == 1
-    assert readfile(wc.mountpoint + "/.wcfs/zurl") == zurl
+    assert xos.readfile(wc.mountpoint + "/.wcfs/zurl") == zurl
     assert os.path.isdir(wc.mountpoint + "/head")
     assert os.path.isdir(wc.mountpoint + "/head/bigfile")
 
@@ -188,7 +188,7 @@ def test_join_after_crash():
     assert wc2 is not wc
     assert wcfs._wcregistry[mntpt] is wc2
     assert wc2.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -213,7 +213,7 @@ def test_start_after_crash():
     wcsrv = wcfs.start(zurl)
     defer(wcsrv.stop)
     assert wcsrv.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -248,7 +248,7 @@ def test_serve_after_crash():
     serve_starting.recv() # wait before serve is going to spawn wcfs after cleanup
     wcfs._waitmount(timeout(), zurl, mntpt)
 
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
     assert procmounts_lookup_wcfs(zurl) == mntpt
 
 
@@ -267,7 +267,7 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     wc = wcfs.join(zurl, autostart=False)
     assert wcfs._wcregistry[mntpt] is wc
     assert wc.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should now contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -279,7 +279,7 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
-        readfile(mntpt + "/.wcfs/zurl")
+        xos.readfile(mntpt + "/.wcfs/zurl")
     assert exc.value.errno == ENOTCONN
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
@@ -1998,16 +1998,6 @@ def test_wcfs_crash_old_data():
 
 # ---- misc ---
 
-# readfile reads file @ path.
-def readfile(path):
-    with open(path) as f:
-        return f.read()
-
-# writefile writes data to file @ path.
-def writefile(path, data):
-    with open(path, "w") as f:
-        f.write(data)
-
 # tidtime converts tid to transaction commit time.
 def tidtime(tid):
     return TimeStamp(tid).timeTime()
@@ -2126,7 +2116,7 @@ def dump_history(t):
 
 # procmounts_lookup_wcfs returns /proc/mount entry for wcfs mounted to serve zurl.
 def procmounts_lookup_wcfs(zurl): # -> mountpoint | KeyError
-    for line in readfile('/proc/mounts').splitlines():
+    for line in xos.readfile('/proc/mounts').splitlines():
         # <zurl> <mountpoint> fuse.wcfs ...
         zurl_, mntpt, typ, _ = line.split(None, 3)
         if typ != 'fuse.wcfs':
