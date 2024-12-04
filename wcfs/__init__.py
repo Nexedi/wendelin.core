@@ -461,19 +461,22 @@ def __stop(wcsrv, ctx, _onstuck):
             return
 
         log.warn("wcfs.go does not exit")
+        log.warn(wcsrv._stuckdump())
         log.warn("-> kill -QUIT wcfs.go ...")
         os.kill(wcsrv._proc.pid, SIGQUIT)
 
         if _procwait_(timeoutFrac(0.25), wcsrv._proc):
             return
         log.warn("wcfs.go does not exit (after SIGQUIT)")
+        log.warn(wcsrv._stuckdump())
         log.warn("-> kill -KILL wcfs.go ...")
         os.kill(wcsrv._proc.pid, SIGKILL)
 
         if _procwait_(timeoutFrac(0.25), wcsrv._proc):
             return
         log.warn("wcfs.go does not exit (after SIGKILL; probably it is stuck in kernel)")
-        log.warn("-> nothing we can do...")  # XXX dump /proc/pid/task/*/stack instead  (ignore EPERM)
+        log.warn(wcsrv._stuckdump())
+        log.warn("-> nothing we can do...")
         if _onstuck is not None:
             _onstuck()
         else:
