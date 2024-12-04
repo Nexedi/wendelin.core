@@ -480,6 +480,43 @@ def _pidlist(pdbc, gt): # []pid↑ : pid > gt
 
 
 
+# ---- Mount ----
+
+# lsof returns information about which processes use the mount and how.
+@func(Mount)
+def lsof(mnt, pdbc=None):  # -> i() of (proc, {}key -> path)   ; key = fd/X, mmap/Y, cwd, ...
+    if pdbc is None:
+        pdbc = ProcDB.open(isolation_level=ISOLATION_REPEATABLE_READ)
+    assert isinstance(pdbc, ProcDBConn)
+
+    # NOTE we must not access the filesystem on mnt at all or it might hang
+    #      if filesystem server is deadlocked
+
+    def _(proc):
+        use  = {}
+        for key in ('cwd', 'exe', 'root'):
+            path = proc.get(key)
+            # XXX better somehow to check via devid, but we can't stat link
+            #     target because it will touch fs
+            if path is not None  and  (path == mnt.point  or  path.startswith(mnt.point + "/")):
+                use[key] = path
+
+        for ifd in proc.fd.values():
+            if ifd.mnt_id == mnt.id:
+                use["fd/%d" % ifd.fd] = ifd.path
+
+        for mmap in proc.mmaps.values():
+            if mmap.dev == mnt.dev:
+                use["mmap/%s" % mmap.addr] = mmap.path
+
+        if len(use) > 0:
+            return (proc, use)
+
+        return False
+
+    return pdbc.query(_, eperm="warn")
+
+
 # ---- Proc/Task/... ----
 
 # get retrieves process property with specified name.
