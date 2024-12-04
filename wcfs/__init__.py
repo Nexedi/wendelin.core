@@ -737,7 +737,7 @@ def main():
     # setup log.warn/error to go to stderr, so that details could be seen on
     # e.g. "fuse_unmount: ... failed (more details logged)"
     # tune logging to use the same glog output format as on wcfs.go side.
-    glog.basicConfig(stream=sys.stderr, level=logging.WARNING)
+    glog.basicConfig(stream=sys.stderr, level=logging.INFO)
 
     if cmd == "serve":
         if argv[0] == '-h':
