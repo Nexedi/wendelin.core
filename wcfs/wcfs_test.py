@@ -412,9 +412,28 @@ class tWCFS(_tWCFS):
             assert not is_mountpoint(t.wc.mountpoint)
         defer(_)
         def _():
-            def onstuck():
+            def on_wcfs_stuck():
                 fail("wcfs.go does not exit even after SIGKILL")
-            t.wc._wcsrv._stop(timeout(), _onstuck=onstuck)
+
+            # do not kill clients when the filesystem is still in use on stop
+            # and use -z (lazy) unmount instead because during tests it is more
+            # convenient that this last unmount unconditionally succeed and we
+            # do not care that much about file descriptors left open by a buggy
+            # test function.
+            #
+            # NOTE this behaviour is different from on-production stop behaviour
+            #      where we make sure that either stop fails or completes and there
+            #      is no more a) mount, b) wcfs.go running and c) clients using the old mount.
+            def on_fs_busy():
+                wcfs.log.warn("test: not killing clients during test run to avoid killing test driver itself)")
+            def on_last_unomount_try(mntpt):
+                wcfs.log.warn("test: -> unmount -z ...")
+                wcfs._fuse_unmount(mntpt, "-z")
+
+            t.wc._wcsrv._stop(timeout(),
+                              _on_wcfs_stuck=on_wcfs_stuck,
+                              _on_fs_busy=on_fs_busy,
+                              _on_last_unmount_try=on_last_unomount_try)
         defer(_)
         defer(t.wc.close)
         assert is_mountpoint(t.wc.mountpoint)
