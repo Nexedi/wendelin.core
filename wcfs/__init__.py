@@ -594,19 +594,15 @@ def _mnt_fuse_unmount(mnt, *optv):
     ret, out = _sysproccallout(["fusermount", "-u"] + list(optv) + [mnt.point])
     if ret != 0:
         # unmount failed, usually due to "device is busy".
-        # Log which files are still opened and reraise
+        # Log which files are still opened by who and reraise
         def _():
             log.warn("# lsof %s" % mnt.point)
-            # -w to avoid lots of
-            #  lsof: WARNING: can't stat() fuse.wcfs file system /dev/shm/wcfs/X
-            #        Output information may be incomplete.
-            # if there are other uncleaned wcfs mountpoints.
-            # (lsof stats all filesystems on startup)
-            # NOTE lsof +D misbehaves - don't use it
-            ret, out = _sysproccallout(["lsof", "-w", mnt.point])
-            log.warn(out)
-            if ret:
-                log.warn("(lsof failed)")
+            try:
+                _ = _lsof(mnt)
+            except:
+                log.exception("lsof failed")
+            else:
+                log.warn(_)
         defer(_)
 
         out = out.rstrip() # kill trailing \n\n
@@ -616,6 +612,19 @@ def _mnt_fuse_unmount(mnt, *optv):
         emsg = "fuse_unmount %s%s: failed: %s" % (opts, mnt.point, out)
         log.warn(emsg)
         raise _FUSEUnmountError("%s\n(more details logged)" % emsg)
+
+# lsof returns text description of which processes and which their file
+# descriptors use specified mount.
+def _lsof(mnt): # -> str
+    # NOTE lsof(8) fails to work after wcfs goes into EIO mode
+    #      fuser(1) works a bit better, but we still do it ourselves because we
+    #      anyway need to customize output and integrate it with ktraceback
+    s = ""
+    for (proc, use) in mnt.lsof():
+        s += "  %s %s\n" % (proc, proc.get("argv", eperm="strerror", gone="strerror"))
+        for key, path in use.items():
+            s += "\t%s\t-> %s\n" % (key, path)
+    return s
 
 # _is_mountpoint returns whether path is a mountpoint
 def _is_mountpoint(path):    # -> bool
