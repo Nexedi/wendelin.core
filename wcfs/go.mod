@@ -3,7 +3,7 @@ module lab.nexedi.com/nexedi/wendelin.core/wcfs
 go 1.19
 
 require (
-	github.com/golang/glog v1.2.2
+	github.com/golang/glog v1.2.4
 	github.com/hanwen/go-fuse/v2 v2.4.2 // replaced to -> kirr/go-fuse@y/nodefs-cancel
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
 	github.com/kisielk/og-rek v1.2.0
@@ -21,6 +21,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/philhofer/fwd v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -32,6 +33,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go4.org/unsafe/assume-no-moving-gc v0.0.0-20231121144256-b99613f794b6 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
