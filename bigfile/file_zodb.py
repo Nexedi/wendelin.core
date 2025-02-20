@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigfile | BigFile ZODB backend
-# Copyright (C) 2014-2024  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -201,6 +201,8 @@ class ZBlkBase(Persistent):
     # client requests us to set blkdata to be later saved to DB
     # (DB <- )  .blkdata <- memory-page
     #
+    # buf: buffer object, or, for convenience anything with buffer interface
+    #
     # return: blkchanged=(True|False) - whether blk should be considered changed
     #         after setting its data.
     #
@@ -291,7 +293,8 @@ class ZBlk0(ZBlkBase):
 
     # (DB <- )  ._v_blkdata <- memory-page
     def setblkdata(self, buf):
-        blkdata = bytes(buf)                    # FIXME does memcpy
+        buf = memoryview(buf)
+        blkdata = buf.tobytes()                 # FIXME does memcpy
         # trim trailing \0
         self._v_blkdata = blkdata.rstrip(b'\0') # FIXME copy
 
@@ -407,6 +410,7 @@ class ZBlk1(ZBlkBase):
 
     # (DB <- )  .chunktab <- memory-page
     def setblkdata(self, buf):
+        buf = memoryview(buf)
         chunktab  = self.chunktab
         CHUNKSIZE = self.CHUNKSIZE
         blkchanged= False
@@ -420,11 +424,10 @@ class ZBlk1(ZBlkBase):
 
         # scan over buf and update/delete changed chunks
         for start in range(0, len(buf), CHUNKSIZE):
-            data = buf[start:start+CHUNKSIZE]   # FIXME copy on py2
+            data = buf[start:start+CHUNKSIZE]
             # make sure data is bytes
             # (else we cannot .rstrip() it below)
-            if not isinstance(data, bytes):
-                data = bytes(data)              # FIXME copy on py3
+            data = data.tobytes()               # FIXME copy
             # trim trailing \0
             data = data.rstrip(b'\0')           # FIXME copy
             chunk = chunktab.get(start)
