@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022  Nexedi SA and Contributors.
+// Copyright (C) 2019-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -734,7 +734,7 @@ func (t *T) XLoadZFile(ctx context.Context, zconn *zodb.Connection) (zfile *ZBig
 	xzroot, err := zconn.Get(ctx, 0);  X(err)
 	zroot := xzroot.(*zodb.Map)
 	err = zroot.PActivate(ctx);  X(err)
-	zfile = zroot.Data["treegen/file"].(*ZBigFile)
+	zfile = zroot.Get("treegen/file").(*ZBigFile)
 	zroot.PDeactivate()
 	err = zfile.PActivate(ctx);  X(err)
 	blksize    = zfile.blksize

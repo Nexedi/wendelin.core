@@ -58,6 +58,8 @@ from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, Segment
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
 from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
+bstr = type(b(''))  # TODO import directly after https://lab.nexedi.com/nexedi/pygolang/-/merge_requests/21 is merged
+
 
 # setup:
 # - create test database, compute zurl and mountpoint for wcfs
@@ -466,14 +468,14 @@ class tWCFS(_tWCFS):
             assert kv == kvok, "stats did not stay at expected state"
 
     # _loadStats loads content of .wcfs/stats .
-    def _loadStats(t): # -> {}
+    def _loadStats(t): # -> {} bstr -> int
         stats = {}
         for l in t.wc._read(".wcfs/stats").splitlines():
             # key : value
-            k, v = l.split(':')
+            k, v = l.split(b':')
             k = k.strip()
             v = v.strip()
-            stats[k] = int(v)
+            stats[b(k)] = int(v)
 
         # verify that keys remains the same and that cumulative counters do not decrease
         if t._stats_prev is not None:
@@ -824,6 +826,7 @@ class tFile:
 
     @func
     def _assertBlk(t, blk, dataok, pinokByWLink=None, pinfunc=None, timeout=None):
+        assert isinstance(dataok, bstr)
         assert len(dataok) <= t.blksize
         dataok += b'\0'*(t.blksize - len(dataok))   # tailing zeros
         assert blk < t._sizeinblk()
@@ -897,11 +900,11 @@ class tFile:
             have_read = chan(1)
             def _():
                 try:
-                    b = read_exfault_nogil(blkview[0:1])
+                    got = read_exfault_nogil(blkview[0:1])
                 except SegmentationFault:
-                    b = 'FAULT'
+                    got = 'FAULT'
                 t._blkaccess(blk)
-                have_read.send(b)
+                have_read.send(got)
             go(_)
             _, _rx = select(
                 ctx.done().recv,    # 0
@@ -909,9 +912,9 @@ class tFile:
             )
             if _ == 0:
                 raise ctx.err()
-            b = _rx
+            got = _rx
 
-            ev.append('read ' + b)
+            ev.append('read ' + b(got))
         ev = doCheckingPin(ctx, _, pinokByWLink, pinfunc)
 
         # XXX hack - wlinks are notified and emit events simultaneously - we
@@ -949,7 +952,10 @@ class tFile:
         assert st.st_blksize == t.blksize
         assert st.st_size == len(dataokv)*t.blksize
         if mtime is not None:
-            assert st.st_mtime == tidtime(mtime)
+            # st_mtime comes from wcfs via tidtime/go
+            # ZODB/py vs ZODB/go time resolution is not better than 1µs
+            # see e.g. https://lab.nexedi.com/kirr/neo/commit/9112f21e
+            assert abs(st.st_mtime - tidtime(mtime)) <= 1e-6
 
         cachev = t.cached()
         for blk, dataok in enumerate(dataokv):
@@ -1212,7 +1218,7 @@ def doCheckingPin(ctx, f, pinokByWLink, pinfunc=None): # -> []event(str)
 def _expectPin(twlink, ctx, zf, expect): # -> []SrvReq
     expected = set()    # of expected pin messages
     for blk, at in expect.items():
-        hat = h(at) if at is not None else 'head'
+        hat = h(at) if at is not None else b'head'
         msg = b"pin %s #%d @%s" % (h(zf._p_oid), blk, hat)
         assert msg not in expected
         expected.add(msg)
@@ -1806,7 +1812,7 @@ def test_wcfs_remmap_on_pin():
         assert at    == at1
         mm.map_into_ro(f._blk(blk), f1.f.fileno(), blk*f.blksize)
 
-    f._assertBlk(2, 'hello', {wl: {2:at1}}, pinfunc=_)     # NOTE not world
+    f._assertBlk(2, b('hello'), {wl: {2:at1}}, pinfunc=_)  # NOTE not world
 
 
 # verify that pin message is not sent for the same blk@at twice.
@@ -2004,13 +2010,7 @@ def writefile(path, data):
 
 # tidtime converts tid to transaction commit time.
 def tidtime(tid):
-    t = TimeStamp(tid).timeTime()
-
-    # ZODB/py vs ZODB/go time resolution is not better than 1µs
-    # see e.g. https://lab.nexedi.com/kirr/neo/commit/9112f21e
-    #
-    # NOTE pytest.approx supports only ==, not e.g. <, so we use plain round.
-    return round(t, 6)
+    return TimeStamp(tid).timeTime()
 
 # tidfromtime converts time into corresponding transaction ID.
 def tidfromtime(t):
@@ -2022,8 +2022,8 @@ def tidfromtime(t):
     ts = TimeStamp(_.tm_year, _.tm_mon, _.tm_mday, _.tm_hour, _.tm_min, s)
     return ts.raw()
 
-# verify that tidtime is precise enough to show difference in between transactions.
-# verify that tidtime -> tidfromtime is identity within rounding tolerance.
+# verify that tidtime is precise to show difference in between transactions.
+# verify that tidtime -> tidfromtime is identity.
 @func
 def test_tidtime():
     t = tDB()
@@ -2041,7 +2041,7 @@ def test_tidtime():
         tat  = tidtime(at)
         at_  = tidfromtime(tat)
         tat_ = tidtime(at_)
-        assert abs(tat_ - tat) <= 2E-6
+        assert tat_ == tat
 
 
 # tAt is bytes whose repr returns human readable string considering it as `at` under tDB.

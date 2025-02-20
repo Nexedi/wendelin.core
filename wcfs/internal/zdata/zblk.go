@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -29,7 +29,7 @@ package zdata
 //	.blktab		LOBtree{}  blk -> ZBlk*(blkdata)
 //
 // ZBlk0 (aliased as ZBlk)
-//	str with trailing '\0' removed.
+//	bytes|bytestr with trailing '\0' removed.
 //
 // ZBlk1
 //	.chunktab	IOBtree{}  offset -> ZData(chunk)
@@ -53,7 +53,6 @@ import (
 	"lab.nexedi.com/kirr/neo/go/zodb"
 	"lab.nexedi.com/kirr/neo/go/zodb/btree"
 
-	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/pycompat"
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xzodb"
 )
 
@@ -80,7 +79,7 @@ type ZBlk0 struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	blkdata string
+	blkdata pickle.Bytes
 }
 
 type zBlk0State ZBlk0 // hide state methods from public API
@@ -97,9 +96,9 @@ func (zb *zBlk0State) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zb *zBlk0State) PySetState(pystate interface{}) error {
-	blkdata, ok := pystate.(string)
-	if !ok {
-		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
+	blkdata, err := pickle.AsBytes(pystate)
+	if err != nil {
+		return err
 	}
 
 	zb.blkdata = blkdata
@@ -116,7 +115,7 @@ func (zb *ZBlk0) LoadBlkData(ctx context.Context) (_ []byte, _ zodb.Tid, err err
 	}
 	defer zb.PDeactivate()
 
-	return mem.Bytes(zb.blkdata), zb.PSerial(), nil
+	return mem.Bytes(string(zb.blkdata)), zb.PSerial(), nil
 }
 
 // ---- ZBlk1 ---
@@ -126,7 +125,7 @@ type ZData struct {
 	zodb.Persistent
 
 	// NOTE py source uses bytes(buf) but on python2 it still results in str
-	data string
+	data pickle.Bytes
 }
 
 type zDataState ZData // hide state methods from public API
@@ -143,9 +142,9 @@ func (zd *zDataState) PyGetState() interface{} {
 
 // PySetState implements zodb.PyStateful.
 func (zd *zDataState) PySetState(pystate interface{}) error {
-	data, ok := pystate.(string)
-	if !ok {
-		return fmt.Errorf("expect str; got %s", xzodb.TypeOf(pystate))
+	data, err := pickle.AsBytes(pystate)
+	if err != nil {
+		return err
 	}
 
 	zd.data = data
@@ -382,9 +381,9 @@ func (bf *zBigFileState) PySetState(pystate interface{}) (err error) {
 		return fmt.Errorf("expect [2](); got [%d]()", len(t))
 	}
 
-	blksize, ok := pycompat.Int64(t[0])
-	if !ok {
-		return fmt.Errorf("blksize: expect integer; got %s", xzodb.TypeOf(t[0]))
+	blksize, err := pickle.AsInt64(t[0])
+	if err != nil {
+		return fmt.Errorf("blksize: %s", err)
 	}
 	if blksize <= 0 {
 		return fmt.Errorf("blksize: must be > 0; got %d", blksize)
