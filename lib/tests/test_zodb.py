@@ -35,6 +35,7 @@ import pytest; xfail = pytest.mark.xfail
 from ZEO.ClientStorage import ClientStorage as ZEOStorage
 import os
 from six.moves.urllib.parse import quote_plus
+from six import PY3
 
 from wendelin.lib.tests.testprog import zopenrace, zloadrace
 
@@ -493,6 +494,8 @@ def test_zstor_2zurl(tmpdir, neo_ssl_dict):
     # neo returns new NEO client for specified cluster name and master address.
     # NOTE, similarly to ZEO, the client is returned without waiting until server nodes are connected.
     def neo(cluster_name, master_addr, ssl=0):
+        if PY3:
+            pytest.xfail(reason="NEO/py is not yet ported to py3")
         # TODO revert to import neo globally after lab.nexedi.com/nexedi/neoppod/-/merge_requests/24 is landed
         from neo.client.Storage import Storage as NEOStorage
         kwargs = dict(master_nodes=master_addr, name=cluster_name)
