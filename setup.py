@@ -1,5 +1,5 @@
 # Wendelin.core | pythonic package setup
-# Copyright (C) 2014-2022  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -378,6 +378,9 @@ setup(
 
                     Extension('wendelin.wcfs.internal.mm',
                         ['wcfs/internal/mm.pyx']),
+
+                    Extension('wendelin.wcfs.internal._os',
+                        ['wcfs/internal/_os.pyx']),
                   ],
 
     package_dir = {'wendelin': ''},

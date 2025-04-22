@@ -1,5 +1,5 @@
 # Wendelin.core | pytest config
-# Copyright (C) 2020-2021  Nexedi SA and Contributors.
+# Copyright (C) 2020-2024  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -55,6 +55,7 @@ def prepend_env(var, prefix):
     os.environ[var] = v
 
 
+# enable debug features during testing
 # enable log_cli on no-capture
 # (output during a test is a mixture of print and log)
 def pytest_configure(config):
@@ -62,7 +63,7 @@ def pytest_configure(config):
     # this way we don't leak those files and include relevant information in test output
     #
     # TODO put WCFS logs into dedicated dir without -v?
-    prepend_env('WENDELIN_CORE_WCFS_OPTIONS', '-logtostderr')
+    prepend_env('WENDELIN_CORE_WCFS_OPTIONS', '-debug -logtostderr')
 
     if config.option.capture == "no":
         config.inicfg['log_cli'] = "true"
@@ -73,7 +74,7 @@ def pytest_configure(config):
             wcfslog = logging.getLogger('wcfs')
             wcfslog.setLevel(logging.INFO)
         # -vv  -> verbose *.py logs
-        # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-d -alsologtostderr -v=1" ?
+        # XXX + $WENDELIN_CORE_WCFS_OPTIONS="-trace.fuse -alsologtostderr -v=1" ?
         if config.option.verbose > 1:
             config.inicfg['log_cli_level'] = "INFO"
 
