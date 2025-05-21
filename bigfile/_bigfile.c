@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Python interface to memory/files
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -491,9 +491,6 @@ pyfileh_dealloc(PyObject *pyfileh0)
     PyObject_GC_UnTrack(pyfileh0);
 
     PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
-    BigFileH    *fileh   = &pyfileh->fileh;
-    BigFile     *file    = fileh->file;
-    PyBigFile   *pyfile;
 
     if (pyfileh->in_weakreflist)
         PyObject_ClearWeakRefs(&pyfileh->pyobj);
