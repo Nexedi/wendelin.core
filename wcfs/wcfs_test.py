@@ -53,7 +53,7 @@ from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
 from pytest import raises, fail
-from wendelin.wcfs.internal import io, mm
+from wendelin.wcfs.internal import io, mm, os as xos
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
 from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
@@ -138,7 +138,7 @@ def test_join():
     wcsrv = wcfs.start(zurl)
     defer(wcsrv.stop)
     assert wcsrv.mountpoint == testmntpt
-    assert readfile(wcsrv.mountpoint + "/.wcfs/zurl") == zurl
+    assert xos.readfile(wcsrv.mountpoint + "/.wcfs/zurl") == zurl
     assert os.path.isdir(wcsrv.mountpoint + "/head")
     assert os.path.isdir(wcsrv.mountpoint + "/head/bigfile")
 
@@ -169,7 +169,7 @@ def test_join_autostart():
     defer(wc.close)
     assert wc.mountpoint == testmntpt
     assert wc._njoin == 1
-    assert readfile(wc.mountpoint + "/.wcfs/zurl") == zurl
+    assert xos.readfile(wc.mountpoint + "/.wcfs/zurl") == zurl
     assert os.path.isdir(wc.mountpoint + "/head")
     assert os.path.isdir(wc.mountpoint + "/head/bigfile")
 
@@ -188,7 +188,7 @@ def test_join_after_crash():
     assert wc2 is not wc
     assert wcfs._wcregistry[mntpt] is wc2
     assert wc2.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -213,7 +213,7 @@ def test_start_after_crash():
     wcsrv = wcfs.start(zurl)
     defer(wcsrv.stop)
     assert wcsrv.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -248,7 +248,7 @@ def test_serve_after_crash():
     serve_starting.recv() # wait before serve is going to spawn wcfs after cleanup
     wcfs._waitmount(timeout(), zurl, mntpt)
 
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
     assert procmounts_lookup_wcfs(zurl) == mntpt
 
 
@@ -267,7 +267,7 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     wc = wcfs.join(zurl, autostart=False)
     assert wcfs._wcregistry[mntpt] is wc
     assert wc.mountpoint == mntpt
-    assert readfile(mntpt + "/.wcfs/zurl") == zurl
+    assert xos.readfile(mntpt + "/.wcfs/zurl") == zurl
 
     # /proc/mounts should now contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
@@ -279,7 +279,7 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
-        readfile(mntpt + "/.wcfs/zurl")
+        xos.readfile(mntpt + "/.wcfs/zurl")
     assert exc.value.errno == ENOTCONN
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
@@ -412,9 +412,28 @@ class tWCFS(_tWCFS):
             assert not is_mountpoint(t.wc.mountpoint)
         defer(_)
         def _():
-            def onstuck():
+            def on_wcfs_stuck():
                 fail("wcfs.go does not exit even after SIGKILL")
-            t.wc._wcsrv._stop(timeout(), _onstuck=onstuck)
+
+            # do not kill clients when the filesystem is still in use on stop
+            # and use -z (lazy) unmount instead because during tests it is more
+            # convenient that this last unmount unconditionally succeed and we
+            # do not care that much about file descriptors left open by a buggy
+            # test function.
+            #
+            # NOTE this behaviour is different from on-production stop behaviour
+            #      where we make sure that either stop fails or completes and there
+            #      is no more a) mount, b) wcfs.go running and c) clients using the old mount.
+            def on_fs_busy():
+                wcfs.log.warn("test: not killing clients during test run to avoid killing test driver itself)")
+            def on_last_unomount_try(mntpt):
+                wcfs.log.warn("test: -> unmount -z ...")
+                wcfs._fuse_unmount(mntpt, "-z")
+
+            t.wc._wcsrv._stop(timeout(),
+                              _on_wcfs_stuck=on_wcfs_stuck,
+                              _on_fs_busy=on_fs_busy,
+                              _on_last_unmount_try=on_last_unomount_try)
         defer(_)
         defer(t.wc.close)
         assert is_mountpoint(t.wc.mountpoint)
@@ -527,8 +546,8 @@ class tDB(tWCFS):
         # start wcfs after testdb is created and initial data is committed
         super(tDB, t).__init__(**kw)
 
-        # fh(.wcfs/zhead) + history of zhead read from there
-        t._wc_zheadfh = open(t.wc.mountpoint + "/.wcfs/zhead")
+        # fh(.wcfs/debug/zhead) + history of zhead read from there
+        t._wc_debug_zheadfh = open(t.wc.mountpoint + "/.wcfs/debug/zhead")
 
         # whether head/ ZBigFile(s) blocks were ever accessed via wcfs.
         # this is updated only explicitly via ._blkheadaccess() .
@@ -559,7 +578,7 @@ class tDB(tWCFS):
             tw.close()
         assert len(t._files)   == 0
         assert len(t._wlinks)  == 0
-        t._wc_zheadfh.close()
+        t._wc_debug_zheadfh.close()
 
         zstats = {'WatchLink': 0, 'Watch': 0, 'PinnedBlk': 0, 'ZHeadLink': 0}
         if not t.multiproc:
@@ -598,7 +617,7 @@ class tDB(tWCFS):
         head = t._commit(zf, changeDelta)
 
         # make sure wcfs is synchronized to committed transaction
-        l = t._wc_zheadfh.readline()
+        l = t._wc_debug_zheadfh.readline()
         #print('> zhead read: %r' % l)
         l = l.rstrip('\n')
         wchead = tAt(t, fromhex(l))
@@ -1902,7 +1921,7 @@ def test_wcfs_watch_2files():
 @func
 def test_wcfs_eio_after_zwatcher_fail(capfd):
     # we will use low-level tWCFS instead of tDB for precise control of access
-    # to the filesystem. For example tDB keeps open connection to .wcfs/zhead
+    # to the filesystem. For example tDB keeps open connection to .wcfs/debug/zhead
     # and inspects it during commit which can break in various ways on switch
     # to EIO mode. Do all needed actions by hand to avoid unneeded uncertainty.
 
@@ -1997,16 +2016,6 @@ def test_wcfs_crash_old_data():
 
 
 # ---- misc ---
-
-# readfile reads file @ path.
-def readfile(path):
-    with open(path) as f:
-        return f.read()
-
-# writefile writes data to file @ path.
-def writefile(path, data):
-    with open(path, "w") as f:
-        f.write(data)
 
 # tidtime converts tid to transaction commit time.
 def tidtime(tid):
@@ -2126,14 +2135,17 @@ def dump_history(t):
 
 # procmounts_lookup_wcfs returns /proc/mount entry for wcfs mounted to serve zurl.
 def procmounts_lookup_wcfs(zurl): # -> mountpoint | KeyError
-    for line in readfile('/proc/mounts').splitlines():
-        # <zurl> <mountpoint> fuse.wcfs ...
-        zurl_, mntpt, typ, _ = line.split(None, 3)
-        if typ != 'fuse.wcfs':
-            continue
-        if zurl_ == zurl:
-            return mntpt
-    raise KeyError("lookup wcfs %s: no /proc/mounts entry" % zurl)
+    mdbc = xos.MountDB.open()
+    _ = mdbc.query(lambda mnt: mnt.fstype == 'fuse.wcfs' and mnt.fssrc == zurl)
+    _ = list(_)
+    if len(_) == 0:
+        raise KeyError("lookup wcfs %s: no mountdb entry" % zurl)
+    if len(_) >  1:
+        raise KeyError("lookup wcfs %s: multiple mountdb entries:%s" % (zurl,
+                ''.join('\n\t%s' % mnt for mnt in _)))
+    mnt = _[0]
+    return mnt.point
+
 
 # eprint prints msg to stderr
 def eprint(msg):
