@@ -555,6 +555,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     PyGILState_STATE gstate;
     PyThreadState *ts;
+    PyFrameObject *ts_frame_current;
     PyFrameObject *ts_frame_orig;
     PyObject  *exc_type, *exc_value, *exc_traceback;
     PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
@@ -590,8 +591,13 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
      *
      * TODO better text.
      */
-    ts = PyThreadState_GET();
-    ts_frame_orig = ts->frame;  // just for checking
+    // just for checking
+    #if PY_VERSION_HEX < 0x030b0000
+        ts = PyThreadState_GET();
+        ts_frame_orig = ts->frame;
+    #else
+        ts_frame_orig = PyEval_GetFrame();
+    #endif
 
 /* set ptr to NULL and return it's previous value */
 #define set0(pptr)  ({ typeof(*(pptr)) p = *(pptr); *(pptr)=NULL; p; })
@@ -608,25 +614,29 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     p;                                                                  \
 })
 
+#if PY_VERSION_HEX < 0x030b0000
+
     XINC( save_curexc_type        = set0(&ts->curexc_type)        );
     XINC( save_curexc_value       = set0(&ts->curexc_value)       );
     XINC( save_curexc_traceback   = set0(&ts->curexc_traceback)   );
 
-#if BIGFILE_USE_PYTS_EXC_INFO
+#  if BIGFILE_USE_PYTS_EXC_INFO
     XINC( save_exc_type           = set0(&ts->exc_state.exc_type)       );
     XINC( save_exc_value          = set0(&ts->exc_state.exc_value)      );
     XINC( save_exc_traceback      = set0(&ts->exc_state.exc_traceback)  );
     save_exc_info = ts->exc_info;
     ts->exc_info = &ts->exc_state;
     BUG_ON(ts->exc_state.previous_item != NULL);
-#else
+#  else
     XINC( save_exc_type           = set0(&ts->exc_type)           );
     XINC( save_exc_value          = set0(&ts->exc_value)          );
     XINC( save_exc_traceback      = set0(&ts->exc_traceback)      );
-#endif
+#  endif
 
     XINC( save_async_exc          = set0(&ts->async_exc)          );
-
+#else
+    PyErr_SetExcInfo(NULL, NULL, NULL);
+#endif
     /* before py3k python also stores exception in sys.exc_* variables (wrt
      * sys.exc_info()) for "backward compatibility", but we do not care about it
      * as sys.exc_* variables are not thread safe and from a thread point of view
@@ -646,7 +656,11 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     /* python should return to original frame */
     BUG_ON(ts != PyThreadState_GET());
-    BUG_ON(ts->frame != ts_frame_orig);
+    #if PY_VERSION_HEX < 0x030b0000
+        BUG_ON(ts->frame != ts_frame_orig);
+    #else
+        BUG_ON(PyEval_GetFrame() != ts_frame_orig);
+    #endif
 
     if (!loadret)
         goto err;
@@ -722,9 +736,18 @@ out:
                  * can replace pybuf to "<pybuf>" there in loadblk arguments */
                 if (PyFrame_Check(user)) {
                     f = (PyFrameObject *)user;
-                    if (!XPyFrame_IsCalleeOf(f, ts->frame))
+                    if (!XPyFrame_IsCalleeOf(
+                        f,
+#if PY_VERSION_HEX < 0x030b0000
+                            ts->frame
+#else
+                            PyEval_GetFrame()
+#endif
+                    ))
                         continue;
 
+// XXX maybe this is correct
+#if PY_VERSION_HEX < 0x030b0000
                     /* "fast" locals (->f_localsplus) */
                     fastlocals = f->f_localsplus;
                     for (j = f->f_code->co_nlocals; j >= 0; --j) {
@@ -750,6 +773,21 @@ out:
                             }
                         }
                     }
+#else
+                    PyObject *locals = PyFrame_GetLocals(f);
+                    TODO(!PyDict_CheckExact(locals));
+
+                    PyObject *key, *value;
+                    Py_ssize_t pos = 0;
+
+                    while (PyDict_Next(locals, &pos, &key, &value)) {
+                        if (value == pybuf) {
+                            int err;
+                            err = PyDict_SetItem(locals, key, pybuf_str);
+                            BUG_ON(err == -1);
+                        }
+                    }
+#endif
                 }
             }
 
@@ -825,6 +863,8 @@ out:
         PyErr_PrintEx(0);
     }
     BUG_ON(ts->curexc_type  || ts->curexc_value || ts->curexc_traceback);
+// TODO this is not correct
+#if 0
 #if BIGFILE_USE_PYTS_EXC_INFO
     if (ts->exc_info != &ts->exc_state) {
         WARN("python thread-state found with active generator after loadblk call");
@@ -839,7 +879,9 @@ out:
     exc_value       = ts->exc_value;
     exc_traceback   = ts->exc_traceback;
 #endif
-    if (exc_type) {
+#endif
+// TODO
+if (exc_type) {
         WARN("python thread-state found with handled but not cleared exception state");
         WARN("I will dump it and then crash");
         fprintf(stderr, "ts->exc_type:\t");         PyObject_Print(exc_type, stderr, 0);
@@ -856,6 +898,8 @@ out:
     ts->curexc_value        = save_curexc_value;
     ts->curexc_traceback    = save_curexc_traceback;
 
+// TODO this is not correct
+#if 0
 #if BIGFILE_USE_PYTS_EXC_INFO
     ts->exc_state.exc_type      = save_exc_type;
     ts->exc_state.exc_value     = save_exc_value;
@@ -869,6 +913,7 @@ out:
 #endif
 
     ts->async_exc           = save_async_exc;
+#endif
 
     Py_XDECREF( save_curexc_type        );
     Py_XDECREF( save_curexc_value       );
@@ -1344,6 +1389,7 @@ XPyErr_FullClear(void)
     x_curexc_type       = set0(&ts->curexc_type);
     x_curexc_value      = set0(&ts->curexc_value);
     x_curexc_traceback  = set0(&ts->curexc_traceback);
+#if 0
 #if BIGFILE_USE_PYTS_EXC_INFO
     /* NOTE clearing top-level exc_state; if there is an active generator
      * spawned - its exc state is preserved. */
@@ -1356,6 +1402,7 @@ XPyErr_FullClear(void)
     x_exc_traceback     = set0(&ts->exc_traceback);
 #endif
     x_async_exc         = set0(&ts->async_exc);
+#endif
 
     Py_XDECREF(x_curexc_type);
     Py_XDECREF(x_curexc_value);
@@ -1386,10 +1433,19 @@ XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
 static int
 XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
 {
+#if PY_VERSION_HEX < 0x030b0000
     for (; f; f = f->f_back)
         if (f == top)
             return 1;
-
+#else
+    while (f) {
+        PyFrameObject *back = PyFrame_GetBack(f);
+        if (f == top)
+            return 1;
+        Py_DECREF(f);
+        f = back;
+    }
+#endif
     return 0;
 }
 
