@@ -31,13 +31,18 @@ inherits most of the properties and specifics from its parents.
 from wendelin.bigarray import BigArray
 from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.lib.zodb import LivePersistent
-import inspect
+import sys
+
+if sys.version_info >= (3,):
+    from inspect import getfullargspec
+else:
+    from inspect import getargspec as getfullargspec
 
 
 # TODO document that first access data must be either before commit or Connection.add
 
 # {} BigArray arg -> default value
-_ = inspect.getargspec(BigArray.__init__)
+_ = getfullargspec(BigArray.__init__)
 BigArray_defaults = dict(zip(reversed(_.args), reversed(_.defaults)))
 
 
