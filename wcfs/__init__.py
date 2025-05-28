@@ -453,7 +453,7 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
         #      directory over previous mount, but it is a privileged operation.
         #      Maybe we can do that via small "empty" fuse fs.
         if _is_mountpoint(wcsrv.mountpoint):
-            log.warn("last unmount try")
+            log.warning("last unmount try")
             if _on_last_unmount_try is not None:
                 _on_last_unmount_try(wcsrv.mountpoint)
             else:
@@ -477,9 +477,9 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
         if _is_mountpoint(wcsrv.mountpoint):
             lsof = list(wcsrv._mnt.lsof())
             for (proc, use) in lsof:
-                log.warn("the mount is still used by %s:" % proc)
+                log.warning("the mount is still used by %s:" % proc)
                 for key, path in use.items():
-                    log.warn("\t%s\t-> %s\n" % (key, path))
+                    log.warning("\t%s\t-> %s\n" % (key, path))
 
             if len(lsof) > 0:
                 if _on_fs_busy is not None:
@@ -488,22 +488,22 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
                     wg  = sync.WorkGroup(timeoutFrac(0.2))
                     def kill(ctx, proc):
                         dt  = ctx.deadline() - time.now()
-                        log.warn("%s: <- SIGTERM" % proc)
+                        log.warning("%s: <- SIGTERM" % proc)
                         os.kill(proc.pid, SIGTERM)
                         ctx1, _ = context.with_timeout(ctx, dt/2)
                         if _procwait_(ctx1, proc):
-                            log.warn("%s: terminated" % proc)
+                            log.warning("%s: terminated" % proc)
                             return
                         if ctx.err() is not None:
                             raise ctx.err()
-                        log.warn("%s: is still alive after SIGTERM" % proc)
-                        log.warn("%s: <- SIGKILL" % proc)
+                        log.warning("%s: is still alive after SIGTERM" % proc)
+                        log.warning("%s: <- SIGKILL" % proc)
                         os.kill(proc.pid, SIGKILL)
                         ctx2, _ = context.with_timeout(ctx, dt/2)
                         if _procwait_(ctx2, proc):
-                            log.warn("%s: terminated" % proc)
+                            log.warning("%s: terminated" % proc)
                             return
-                        log.warn("%s: does not exit after SIGKILL")
+                        log.warning("%s: does not exit after SIGKILL")
 
                     for (proc, _) in lsof:
                         wg.go(kill, proc)
@@ -524,23 +524,23 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
         if _procwait_(timeoutFrac(0.2), wcsrv._proc):
             return
 
-        log.warn("wcfs.go does not exit")
-        log.warn(wcsrv._stuckdump())
-        log.warn("-> kill -QUIT wcfs.go ...")
+        log.warning("wcfs.go does not exit")
+        log.warning(wcsrv._stuckdump())
+        log.warning("-> kill -QUIT wcfs.go ...")
         os.kill(wcsrv._proc.pid, SIGQUIT)
 
         if _procwait_(timeoutFrac(0.2), wcsrv._proc):
             return
-        log.warn("wcfs.go does not exit (after SIGQUIT)")
-        log.warn(wcsrv._stuckdump())
-        log.warn("-> kill -KILL wcfs.go ...")
+        log.warning("wcfs.go does not exit (after SIGQUIT)")
+        log.warning(wcsrv._stuckdump())
+        log.warning("-> kill -KILL wcfs.go ...")
         os.kill(wcsrv._proc.pid, SIGKILL)
 
         if _procwait_(timeoutFrac(0.2), wcsrv._proc):
             return
-        log.warn("wcfs.go does not exit (after SIGKILL; probably it is stuck in kernel)")
-        log.warn(wcsrv._stuckdump())
-        log.warn("-> nothing we can do...")
+        log.warning("wcfs.go does not exit (after SIGKILL; probably it is stuck in kernel)")
+        log.warning(wcsrv._stuckdump())
+        log.warning("-> nothing we can do...")
         if _on_wcfs_stuck is not None:
             _on_wcfs_stuck()
         else:
@@ -557,14 +557,14 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
         # in a deadlock even after being `kill -9`. See comments in tWCFS for details.
         def _():
             if wcsrv._proc is not None:
-                log.warn("-> kill -TERM wcfs.go ...")
+                log.warning("-> kill -TERM wcfs.go ...")
                 os.kill(wcsrv._proc.pid, SIGTERM)
                 if _procwait_(timeoutFrac(0.2), wcsrv._proc):
                     return
-                log.warn("wcfs.go does not exit")
-                log.warn(wcsrv._stuckdump())
+                log.warning("wcfs.go does not exit")
+                log.warning(wcsrv._stuckdump())
             if wcsrv._fuseabort is not None:
-                log.warn("-> abort FUSE connection ...")
+                log.warning("-> abort FUSE connection ...")
                 wcsrv._fuseabort.write(b"1\n")
                 wcsrv._fuseabort.flush()
         defer(_)
@@ -872,13 +872,13 @@ def _mnt_fuse_unmount(mnt, *optv):
         # unmount failed, usually due to "device is busy".
         # Log which files are still opened by who and reraise
         def _():
-            log.warn("# lsof %s" % mnt.point)
+            log.warning("# lsof %s" % mnt.point)
             try:
                 _ = _lsof(mnt)
             except:
                 log.exception("lsof failed")
             else:
-                log.warn(_)
+                log.warning(_)
         defer(_)
 
         out = out.rstrip() # kill trailing \n\n
@@ -886,7 +886,7 @@ def _mnt_fuse_unmount(mnt, *optv):
         if opts != '':
             opts += ' '
         emsg = "fuse_unmount %s%s: failed: %s" % (opts, mnt.point, out)
-        log.warn(emsg)
+        log.warning(emsg)
         raise _FUSEUnmountError("%s\n(more details logged)" % emsg)
 
 # lsof returns text description of which processes and which their file
@@ -1102,7 +1102,7 @@ def main():
     zurl = argv[-1]     # -a -b zurl    -> zurl
     optv = argv[:-1]    # -a -b zurl    -> -a -b
 
-    # setup log.warn/error to go to stderr, so that details could be seen on
+    # setup log.warning/error to go to stderr, so that details could be seen on
     # e.g. "fuse_unmount: ... failed (more details logged)"
     # tune logging to use the same glog output format as on wcfs.go side.
     glog.basicConfig(stream=sys.stderr, level=logging.INFO)
