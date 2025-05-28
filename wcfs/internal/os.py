@@ -446,7 +446,7 @@ def query(pdbc, selectf, eperm="raise"): # -> i[](Proc | what selectf returns)
                     argvstr = " (%s)" % ' '.join(argv)
                 else:
                     argvstr = ""
-                log.warn("no access to %s%s" % (proc, argvstr))
+                log.warning("no access to %s%s" % (proc, argvstr))
             continue
         except ProcGone: # disappeared process - ignore it
             continue

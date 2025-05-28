@@ -425,9 +425,9 @@ class tWCFS(_tWCFS):
             #      where we make sure that either stop fails or completes and there
             #      is no more a) mount, b) wcfs.go running and c) clients using the old mount.
             def on_fs_busy():
-                wcfs.log.warn("test: not killing clients during test run to avoid killing test driver itself)")
+                wcfs.log.warning("test: not killing clients during test run to avoid killing test driver itself)")
             def on_last_unomount_try(mntpt):
-                wcfs.log.warn("test: -> unmount -z ...")
+                wcfs.log.warning("test: -> unmount -z ...")
                 wcfs._fuse_unmount(mntpt, "-z")
 
             t.wc._wcsrv._stop(timeout(),
