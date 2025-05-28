@@ -49,7 +49,7 @@
 
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
-#include <wendelin/compat_py2.h>
+#include <wendelin/compat_py.h>
 #include <ccan/container_of/container_of.h>
 
 static PyObject *gcmodule;
