@@ -342,7 +342,7 @@ setup(
                         ['bigfile/_bigfile.c'],
                         depends = [
                          'bigfile/_bigfile.h',
-                         'include/wendelin/compat_py2.h',
+                         'include/wendelin/compat_py.h',
                         ] + libvirtmem_h,
                         define_macros   = [('_GNU_SOURCE',None)],
                         language        = 'c',
