@@ -126,6 +126,17 @@ static inline PyCodeObject* PyFrame_GetCode(PyFrameObject* frame)
 #endif
 
 
+/* PyFrame_GetBack for py < 3.9 */
+#if PY_VERSION_HEX < 0x03090000
+static inline PyFrameObject* PyFrame_GetBack(PyFrameObject* frame)
+{
+    PyFrameObject* back = frame->f_back;
+    Py_XINCREF(back);
+    return back;
+}
+#endif
+
+
 #ifdef __cplusplus
 }
 #endif
