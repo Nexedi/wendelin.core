@@ -555,7 +555,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     PyGILState_STATE gstate;
     PyThreadState *ts;
-    PyFrameObject *ts_frame_orig;
+    PyFrameObject *ts_frame_orig = NULL, *ts_frame = NULL;
     PyObject  *exc_type, *exc_value, *exc_traceback;
     PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
     PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
@@ -591,7 +591,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
      * TODO better text.
      */
     ts = PyThreadState_GET();
-    ts_frame_orig = ts->frame;  // just for checking
+    ts_frame_orig = PyThreadState_GetFrame(ts);  // just for checking
 
 /* set ptr to NULL and return it's previous value */
 #define set0(pptr)  ({ typeof(*(pptr)) p = *(pptr); *(pptr)=NULL; p; })
@@ -646,7 +646,8 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     /* python should return to original frame */
     BUG_ON(ts != PyThreadState_GET());
-    BUG_ON(ts->frame != ts_frame_orig);
+    ts_frame = PyThreadState_GetFrame(ts);
+    BUG_ON(ts_frame != ts_frame_orig);
 
     if (!loadret)
         goto err;
@@ -722,7 +723,7 @@ out:
                  * can replace pybuf to "<pybuf>" there in loadblk arguments */
                 if (PyFrame_Check(user)) {
                     f = (PyFrameObject *)user;
-                    if (!XPyFrame_IsCalleeOf(f, ts->frame))
+                    if (!XPyFrame_IsCalleeOf(f, ts_frame))
                         continue;
 
                     /* "fast" locals (->f_localsplus) */
@@ -850,6 +851,12 @@ out:
     }
     BUG_ON(exc_type     || exc_value    || exc_traceback);
     BUG_ON(ts->async_exc);
+
+    /* release held frame. this can run arbitrary code in theory */
+    Py_XDECREF(ts_frame_orig);
+    Py_XDECREF(ts_frame);
+    if (PyErr_Occurred())
+        PyErr_PrintEx(0);
 
     /* now restore exception state to original */
     ts->curexc_type         = save_curexc_type;
