@@ -1,8 +1,8 @@
-#ifndef _WENDELIN_COMPAT_PY2_H
-#define _WENDELIN_COMPAT_PY2_H
+#ifndef _WENDELIN_COMPAT_PY_H
+#define _WENDELIN_COMPAT_PY_H
 
-/* Wendelin. Python2 compatibility
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+/* Wendelin. Python compatibility
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,7 +22,7 @@
  * See https://www.nexedi.com/licensing for rationale and options.
  */
 
-/* compatibility with python2 */
+/* compatibility with older versions of python */
 #include <Python.h>
 
 #ifdef __cplusplus
