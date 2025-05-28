@@ -47,6 +47,13 @@
 #include "structmember.h"
 #include "frameobject.h"
 
+#if PY_VERSION_HEX >= 0x030B0000    // 3.11
+# ifndef Py_BUILD_CORE
+#  define Py_BUILD_CORE 1
+# endif
+# include "internal/pycore_frame.h"
+#endif
+
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
 #include <wendelin/compat_py.h>
@@ -724,6 +731,8 @@ out:
                 PyObject *user = PyList_GET_ITEM(pybuf_users, i);
                 PyObject **fastlocals;
                 PyFrameObject *f;
+                PyCodeObject  *f_code;
+                PyObject      *f_locals;
 
                 /* if it was the frame used for our calling to py loadblk() we
                  * can replace pybuf to "<pybuf>" there in loadblk arguments */
@@ -733,8 +742,14 @@ out:
                         continue;
 
                     /* "fast" locals (->f_localsplus) */
+#if PY_VERSION_HEX >= 0x030B0000  // 3.11
+                    fastlocals = f->f_frame->localsplus;
+#else
                     fastlocals = f->f_localsplus;
-                    for (j = f->f_code->co_nlocals; j >= 0; --j) {
+#endif
+
+                    f_code = PyFrame_GetCode(f);
+                    for (j = f_code->co_nlocals; j >= 0; --j) {
                         if (fastlocals[j] == pybuf) {
                             Py_INCREF(pybuf_str);
                             fastlocals[j] = pybuf_str;
@@ -743,20 +758,27 @@ out:
                     }
 
                     /* ->f_locals */
-                    if (f->f_locals != NULL) {
-                        TODO(!PyDict_CheckExact(f->f_locals));
+#if PY_VERSION_HEX >= 0x030B0000  // 3.11
+                    f_locals = f->f_frame->f_locals;
+#else
+                    f_locals = f->f_locals;
+#endif
+                    if (f_locals != NULL) {
+                        TODO(!PyDict_CheckExact(f_locals));
 
                         PyObject *key, *value;
                         Py_ssize_t pos = 0;
 
-                        while (PyDict_Next(f->f_locals, &pos, &key, &value)) {
+                        while (PyDict_Next(f_locals, &pos, &key, &value)) {
                             if (value == pybuf) {
                                 int err;
-                                err = PyDict_SetItem(f->f_locals, key, pybuf_str);
+                                err = PyDict_SetItem(f_locals, key, pybuf_str);
                                 BUG_ON(err == -1);
                             }
                         }
                     }
+
+                    Py_DECREF(f_code);
                 }
             }
 
