@@ -114,6 +114,18 @@ static inline PyFrameObject* PyThreadState_GetFrame(PyThreadState *tstate)
 #endif
 
 
+/* PyFrame_GetCode for py < 3.9 */
+#if PY_VERSION_HEX < 0x03090000
+static inline PyCodeObject* PyFrame_GetCode(PyFrameObject* frame)
+{
+    PyCodeObject* code = frame->f_code;
+    assert(code != NULL);
+    Py_INCREF(code);
+    return code;
+}
+#endif
+
+
 #ifdef __cplusplus
 }
 #endif
