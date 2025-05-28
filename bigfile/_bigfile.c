@@ -1426,11 +1426,22 @@ XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
 static int
 XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
 {
-    for (; f; f = f->f_back)
-        if (f == top)
-            return 1;
+    int ok = 0;
+    PyFrameObject *f_back;
 
-    return 0;
+    Py_XINCREF(f);
+    while (f) {
+        if (f == top) {
+            ok = 1;
+            break;
+        }
+        f_back = PyFrame_GetBack(f);
+        Py_XDECREF(f);
+        f = f_back;
+    }
+
+    Py_XDECREF(f);
+    return ok;
 }
 
 #if PY_MAJOR_VERSION < 3
