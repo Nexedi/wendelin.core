@@ -77,6 +77,10 @@ static PyObject *pybuf_str;
  * https://github.com/python/cpython/commit/ae3087c638  */
 #define BIGFILE_USE_PYTS_EXC_INFO   (PY_VERSION_HEX >= 0x030700A3)
 
+/* Starting from Python 3.11 exception state is kept only in exc_value without
+ * exc_type and exc_traceback. https://github.com/python/cpython/commit/396b58345f81 */
+#define BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE (PY_VERSION_HEX >= 0x030B0000)
+
 
 /* like PyObject_New, but fully initializes instance (e.g. calls type ->tp_new) */
 #define PyType_New(type, typeobj, args) \
@@ -556,9 +560,9 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     PyGILState_STATE gstate;
     PyThreadState *ts;
     PyFrameObject *ts_frame_orig = NULL, *ts_frame = NULL;
-    PyObject  *exc_type, *exc_value, *exc_traceback;
-    PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
-    PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
+    PyObject  *exc_value,         *exc_type = NULL,      *exc_traceback = NULL;
+    PyObject  *save_curexc_value, *save_curexc_type,     *save_curexc_traceback;
+    PyObject  *save_exc_value,    *save_exc_type = NULL, *save_exc_traceback = NULL;
 #if BIGFILE_USE_PYTS_EXC_INFO
     _PyErr_StackItem *save_exc_info;
 #endif
@@ -613,15 +617,17 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     XINC( save_curexc_traceback   = set0(&ts->curexc_traceback)   );
 
 #if BIGFILE_USE_PYTS_EXC_INFO
-    XINC( save_exc_type           = set0(&ts->exc_state.exc_type)       );
     XINC( save_exc_value          = set0(&ts->exc_state.exc_value)      );
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    XINC( save_exc_type           = set0(&ts->exc_state.exc_type)       );
     XINC( save_exc_traceback      = set0(&ts->exc_state.exc_traceback)  );
+# endif
     save_exc_info = ts->exc_info;
     ts->exc_info = &ts->exc_state;
     BUG_ON(ts->exc_state.previous_item != NULL);
 #else
-    XINC( save_exc_type           = set0(&ts->exc_type)           );
     XINC( save_exc_value          = set0(&ts->exc_value)          );
+    XINC( save_exc_type           = set0(&ts->exc_type)           );
     XINC( save_exc_traceback      = set0(&ts->exc_traceback)      );
 #endif
 
@@ -832,20 +838,24 @@ out:
         WARN("I will crash"); // TODO dump which generator is still running
         BUG();
     }
-    exc_type        = ts->exc_state.exc_type;
     exc_value       = ts->exc_state.exc_value;
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    exc_type        = ts->exc_state.exc_type;
     exc_traceback   = ts->exc_state.exc_traceback;
+# endif
 #else
-    exc_type        = ts->exc_type;
     exc_value       = ts->exc_value;
+    exc_type        = ts->exc_type;
     exc_traceback   = ts->exc_traceback;
 #endif
-    if (exc_type) {
+    if (exc_value) {
         WARN("python thread-state found with handled but not cleared exception state");
         WARN("I will dump it and then crash");
-        fprintf(stderr, "ts->exc_type:\t");         PyObject_Print(exc_type, stderr, 0);
-        fprintf(stderr, "\nts->exc_value:\t");      PyObject_Print(exc_value, stderr, 0);
+        fprintf(stderr, "ts->exc_value:\t");        PyObject_Print(exc_value, stderr, 0);
+#if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+        fprintf(stderr, "\nts->exc_type:\t");       PyObject_Print(exc_type, stderr, 0);
         fprintf(stderr, "\nts->exc_traceback:\t");  PyObject_Print(exc_traceback, stderr, 0);
+#endif
         fprintf(stderr, "\n");
         PyErr_Display(exc_type, exc_value, exc_traceback);
     }
@@ -858,14 +868,16 @@ out:
     ts->curexc_traceback    = save_curexc_traceback;
 
 #if BIGFILE_USE_PYTS_EXC_INFO
-    ts->exc_state.exc_type      = save_exc_type;
     ts->exc_state.exc_value     = save_exc_value;
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    ts->exc_state.exc_type      = save_exc_type;
     ts->exc_state.exc_traceback = save_exc_traceback;
+# endif
     ts->exc_info = save_exc_info;
     BUG_ON(ts->exc_state.previous_item != NULL);
 #else
-    ts->exc_type            = save_exc_type;
     ts->exc_value           = save_exc_value;
+    ts->exc_type            = save_exc_type;
     ts->exc_traceback       = save_exc_traceback;
 #endif
 
@@ -1338,8 +1350,8 @@ XPyErr_SetFromErrno(void)
 static void
 XPyErr_FullClear(void)
 {
-    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
-    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
+    PyObject  *x_curexc_value,   *x_curexc_type,     *x_curexc_traceback;
+    PyObject  *x_exc_value,      *x_exc_type = NULL, *x_exc_traceback = NULL;
     PyObject  *x_async_exc;
     PyThreadState *ts;
 
@@ -1351,12 +1363,14 @@ XPyErr_FullClear(void)
 #if BIGFILE_USE_PYTS_EXC_INFO
     /* NOTE clearing top-level exc_state; if there is an active generator
      * spawned - its exc state is preserved. */
-    x_exc_type          = set0(&ts->exc_state.exc_type);
     x_exc_value         = set0(&ts->exc_state.exc_value);
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    x_exc_type          = set0(&ts->exc_state.exc_type);
     x_exc_traceback     = set0(&ts->exc_state.exc_traceback);
+# endif
 #else
-    x_exc_type          = set0(&ts->exc_type);
     x_exc_value         = set0(&ts->exc_value);
+    x_exc_type          = set0(&ts->exc_type);
     x_exc_traceback     = set0(&ts->exc_traceback);
 #endif
     x_async_exc         = set0(&ts->async_exc);
