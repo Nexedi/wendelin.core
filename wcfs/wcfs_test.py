@@ -53,7 +53,6 @@ from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
 from pytest import raises, fail
-import pytest; xfail = pytest.mark.xfail
 from wendelin.wcfs.internal import io, mm, os as xos, multiprocessing as xmp
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
@@ -2017,7 +2016,6 @@ def test_wcfs_crash_old_data():
 
 
 # verify that wcfs cli works as expected.
-@xfail
 def test_wcfs_main():
     # _ verifies that `wcfs cmd *argv` runs wcfs.cmd(*argv).
     # it run everything in subprocess to avoid modifying global state, e.g. logging setup.
