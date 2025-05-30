@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # BigArray submodule for Wendelin
-# Copyright (C) 2014-2018  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -41,7 +41,7 @@ from wendelin.lib.calc import mul
 from wendelin.lib.xnumpy import _as_strided
 from wendelin.lib.utils import inttuple
 from numpy import ndarray, dtype, sign, newaxis, asarray, argmax, uint8
-import logging
+import logging as log
 
 
 pagesize = 2*1024*1024 # FIXME hardcoded, TODO -> fileh.ram.pagesize
@@ -84,14 +84,14 @@ class BigArray(object):
         shape = inttuple(shape)  # mimic numpy
         _dtype = dtype(dtype_)
         if _dtype.hasobject:
-            logging.warn("You tried to use dtype containing object (%r) with out-of-core array ..." % _dtype)
-            logging.warn("... wendelin.core does not support it, because in case of dtype=object elements are")
-            logging.warn("... really pointers and data for each object is stored in separate place in RAM")
-            logging.warn("... with different per-object size.")
-            logging.warn("... ")
-            logging.warn("... As out-of-core arrays are really memory-mapping of data in external storage")
-            logging.warn("... this won't work. It also does not essentially work with numpy.memmap() for the")
-            logging.warn("... same reason.")
+            log.warning("You tried to use dtype containing object (%r) with out-of-core array ..." % _dtype)
+            log.warning("... wendelin.core does not support it, because in case of dtype=object elements are")
+            log.warning("... really pointers and data for each object is stored in separate place in RAM")
+            log.warning("... with different per-object size.")
+            log.warning("... ")
+            log.warning("... As out-of-core arrays are really memory-mapping of data in external storage")
+            log.warning("... this won't work. It also does not essentially work with numpy.memmap() for the")
+            log.warning("... same reason.")
             raise TypeError("dtypes with object are not supported", _dtype)
 
         self._dtype = _dtype
@@ -474,12 +474,12 @@ class BigArray(object):
         try:
             return self[:]
         except MemoryError:
-            logging.warn('You tried to map BigArray (~ %.1f GB) and it failed ...' %
+            log.warning('You tried to map BigArray (~ %.1f GB) and it failed ...' %
                     (float(self.nbytes) // (1<<30)))
-            logging.warn('... because there is no so much memory or so much virtual address')
-            logging.warn('... space available. BigArrays larger than available virtual')
-            logging.warn('... address space can not be mapped at once and have to be')
-            logging.warn('... processed in chunks.')
+            log.warning('... because there is no so much memory or so much virtual address')
+            log.warning('... space available. BigArrays larger than available virtual')
+            log.warning('... address space can not be mapped at once and have to be')
+            log.warning('... processed in chunks.')
             raise
 
 

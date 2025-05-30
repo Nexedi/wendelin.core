@@ -47,9 +47,16 @@
 #include "structmember.h"
 #include "frameobject.h"
 
+#if PY_VERSION_HEX >= 0x030B0000    // 3.11
+# ifndef Py_BUILD_CORE
+#  define Py_BUILD_CORE 1
+# endif
+# include "internal/pycore_frame.h"
+#endif
+
 #include <wendelin/bigfile/ram.h>
 #include <wendelin/bug.h>
-#include <wendelin/compat_py2.h>
+#include <wendelin/compat_py.h>
 #include <ccan/container_of/container_of.h>
 
 static PyObject *gcmodule;
@@ -76,6 +83,10 @@ static PyObject *pybuf_str;
  * Starting from Python 3.7 the place to keep exception state was changed:
  * https://github.com/python/cpython/commit/ae3087c638  */
 #define BIGFILE_USE_PYTS_EXC_INFO   (PY_VERSION_HEX >= 0x030700A3)
+
+/* Starting from Python 3.11 exception state is kept only in exc_value without
+ * exc_type and exc_traceback. https://github.com/python/cpython/commit/396b58345f81 */
+#define BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE (PY_VERSION_HEX >= 0x030B0000)
 
 
 /* like PyObject_New, but fully initializes instance (e.g. calls type ->tp_new) */
@@ -555,10 +566,10 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     PyGILState_STATE gstate;
     PyThreadState *ts;
-    PyFrameObject *ts_frame_orig;
-    PyObject  *exc_type, *exc_value, *exc_traceback;
-    PyObject  *save_curexc_type, *save_curexc_value, *save_curexc_traceback;
-    PyObject  *save_exc_type,    *save_exc_value,    *save_exc_traceback;
+    PyFrameObject *ts_frame_orig = NULL, *ts_frame = NULL;
+    PyObject  *exc_value,         *exc_type = NULL,      *exc_traceback = NULL;
+    PyObject  *save_curexc_value, *save_curexc_type,     *save_curexc_traceback;
+    PyObject  *save_exc_value,    *save_exc_type = NULL, *save_exc_traceback = NULL;
 #if BIGFILE_USE_PYTS_EXC_INFO
     _PyErr_StackItem *save_exc_info;
 #endif
@@ -591,7 +602,7 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
      * TODO better text.
      */
     ts = PyThreadState_GET();
-    ts_frame_orig = ts->frame;  // just for checking
+    ts_frame_orig = PyThreadState_GetFrame(ts);  // just for checking
 
 /* set ptr to NULL and return it's previous value */
 #define set0(pptr)  ({ typeof(*(pptr)) p = *(pptr); *(pptr)=NULL; p; })
@@ -613,15 +624,17 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
     XINC( save_curexc_traceback   = set0(&ts->curexc_traceback)   );
 
 #if BIGFILE_USE_PYTS_EXC_INFO
-    XINC( save_exc_type           = set0(&ts->exc_state.exc_type)       );
     XINC( save_exc_value          = set0(&ts->exc_state.exc_value)      );
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    XINC( save_exc_type           = set0(&ts->exc_state.exc_type)       );
     XINC( save_exc_traceback      = set0(&ts->exc_state.exc_traceback)  );
+# endif
     save_exc_info = ts->exc_info;
     ts->exc_info = &ts->exc_state;
     BUG_ON(ts->exc_state.previous_item != NULL);
 #else
-    XINC( save_exc_type           = set0(&ts->exc_type)           );
     XINC( save_exc_value          = set0(&ts->exc_value)          );
+    XINC( save_exc_type           = set0(&ts->exc_type)           );
     XINC( save_exc_traceback      = set0(&ts->exc_traceback)      );
 #endif
 
@@ -646,7 +659,8 @@ static int pybigfile_loadblk(BigFile *file, blk_t blk, void *buf)
 
     /* python should return to original frame */
     BUG_ON(ts != PyThreadState_GET());
-    BUG_ON(ts->frame != ts_frame_orig);
+    ts_frame = PyThreadState_GetFrame(ts);
+    BUG_ON(ts_frame != ts_frame_orig);
 
     if (!loadret)
         goto err;
@@ -717,17 +731,25 @@ out:
                 PyObject *user = PyList_GET_ITEM(pybuf_users, i);
                 PyObject **fastlocals;
                 PyFrameObject *f;
+                PyCodeObject  *f_code;
+                PyObject      *f_locals;
 
                 /* if it was the frame used for our calling to py loadblk() we
                  * can replace pybuf to "<pybuf>" there in loadblk arguments */
                 if (PyFrame_Check(user)) {
                     f = (PyFrameObject *)user;
-                    if (!XPyFrame_IsCalleeOf(f, ts->frame))
+                    if (!XPyFrame_IsCalleeOf(f, ts_frame))
                         continue;
 
                     /* "fast" locals (->f_localsplus) */
+#if PY_VERSION_HEX >= 0x030B0000  // 3.11
+                    fastlocals = f->f_frame->localsplus;
+#else
                     fastlocals = f->f_localsplus;
-                    for (j = f->f_code->co_nlocals; j >= 0; --j) {
+#endif
+
+                    f_code = PyFrame_GetCode(f);
+                    for (j = f_code->co_nlocals; j >= 0; --j) {
                         if (fastlocals[j] == pybuf) {
                             Py_INCREF(pybuf_str);
                             fastlocals[j] = pybuf_str;
@@ -736,20 +758,27 @@ out:
                     }
 
                     /* ->f_locals */
-                    if (f->f_locals != NULL) {
-                        TODO(!PyDict_CheckExact(f->f_locals));
+#if PY_VERSION_HEX >= 0x030B0000  // 3.11
+                    f_locals = f->f_frame->f_locals;
+#else
+                    f_locals = f->f_locals;
+#endif
+                    if (f_locals != NULL) {
+                        TODO(!PyDict_CheckExact(f_locals));
 
                         PyObject *key, *value;
                         Py_ssize_t pos = 0;
 
-                        while (PyDict_Next(f->f_locals, &pos, &key, &value)) {
+                        while (PyDict_Next(f_locals, &pos, &key, &value)) {
                             if (value == pybuf) {
                                 int err;
-                                err = PyDict_SetItem(f->f_locals, key, pybuf_str);
+                                err = PyDict_SetItem(f_locals, key, pybuf_str);
                                 BUG_ON(err == -1);
                             }
                         }
                     }
+
+                    Py_DECREF(f_code);
                 }
             }
 
@@ -831,25 +860,35 @@ out:
         WARN("I will crash"); // TODO dump which generator is still running
         BUG();
     }
-    exc_type        = ts->exc_state.exc_type;
     exc_value       = ts->exc_state.exc_value;
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    exc_type        = ts->exc_state.exc_type;
     exc_traceback   = ts->exc_state.exc_traceback;
+# endif
 #else
-    exc_type        = ts->exc_type;
     exc_value       = ts->exc_value;
+    exc_type        = ts->exc_type;
     exc_traceback   = ts->exc_traceback;
 #endif
-    if (exc_type) {
+    if (exc_value) {
         WARN("python thread-state found with handled but not cleared exception state");
         WARN("I will dump it and then crash");
-        fprintf(stderr, "ts->exc_type:\t");         PyObject_Print(exc_type, stderr, 0);
-        fprintf(stderr, "\nts->exc_value:\t");      PyObject_Print(exc_value, stderr, 0);
+        fprintf(stderr, "ts->exc_value:\t");        PyObject_Print(exc_value, stderr, 0);
+#if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+        fprintf(stderr, "\nts->exc_type:\t");       PyObject_Print(exc_type, stderr, 0);
         fprintf(stderr, "\nts->exc_traceback:\t");  PyObject_Print(exc_traceback, stderr, 0);
+#endif
         fprintf(stderr, "\n");
         PyErr_Display(exc_type, exc_value, exc_traceback);
     }
     BUG_ON(exc_type     || exc_value    || exc_traceback);
     BUG_ON(ts->async_exc);
+
+    /* release held frame. this can run arbitrary code in theory */
+    Py_XDECREF(ts_frame_orig);
+    Py_XDECREF(ts_frame);
+    if (PyErr_Occurred())
+        PyErr_PrintEx(0);
 
     /* now restore exception state to original */
     ts->curexc_type         = save_curexc_type;
@@ -857,14 +896,16 @@ out:
     ts->curexc_traceback    = save_curexc_traceback;
 
 #if BIGFILE_USE_PYTS_EXC_INFO
-    ts->exc_state.exc_type      = save_exc_type;
     ts->exc_state.exc_value     = save_exc_value;
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    ts->exc_state.exc_type      = save_exc_type;
     ts->exc_state.exc_traceback = save_exc_traceback;
+# endif
     ts->exc_info = save_exc_info;
     BUG_ON(ts->exc_state.previous_item != NULL);
 #else
-    ts->exc_type            = save_exc_type;
     ts->exc_value           = save_exc_value;
+    ts->exc_type            = save_exc_type;
     ts->exc_traceback       = save_exc_traceback;
 #endif
 
@@ -1334,8 +1375,8 @@ XPyErr_SetFromErrno(void)
 static void
 XPyErr_FullClear(void)
 {
-    PyObject  *x_curexc_type,    *x_curexc_value,    *x_curexc_traceback;
-    PyObject  *x_exc_type,       *x_exc_value,       *x_exc_traceback;
+    PyObject  *x_curexc_value,   *x_curexc_type,     *x_curexc_traceback;
+    PyObject  *x_exc_value,      *x_exc_type = NULL, *x_exc_traceback = NULL;
     PyObject  *x_async_exc;
     PyThreadState *ts;
 
@@ -1347,12 +1388,14 @@ XPyErr_FullClear(void)
 #if BIGFILE_USE_PYTS_EXC_INFO
     /* NOTE clearing top-level exc_state; if there is an active generator
      * spawned - its exc state is preserved. */
-    x_exc_type          = set0(&ts->exc_state.exc_type);
     x_exc_value         = set0(&ts->exc_state.exc_value);
+# if !BIGFILE_PYTS_EXC_INFO_ONLY_EXC_VALUE
+    x_exc_type          = set0(&ts->exc_state.exc_type);
     x_exc_traceback     = set0(&ts->exc_state.exc_traceback);
+# endif
 #else
-    x_exc_type          = set0(&ts->exc_type);
     x_exc_value         = set0(&ts->exc_value);
+    x_exc_type          = set0(&ts->exc_type);
     x_exc_traceback     = set0(&ts->exc_traceback);
 #endif
     x_async_exc         = set0(&ts->async_exc);
@@ -1386,11 +1429,22 @@ XPyObject_PrintReferrers(PyObject *obj, FILE *fp)
 static int
 XPyFrame_IsCalleeOf(PyFrameObject *f, PyFrameObject *top)
 {
-    for (; f; f = f->f_back)
-        if (f == top)
-            return 1;
+    int ok = 0;
+    PyFrameObject *f_back;
 
-    return 0;
+    Py_XINCREF(f);
+    while (f) {
+        if (f == top) {
+            ok = 1;
+            break;
+        }
+        f_back = PyFrame_GetBack(f);
+        Py_XDECREF(f);
+        f = f_back;
+    }
+
+    Py_XDECREF(f);
+    return ok;
 }
 
 #if PY_MAJOR_VERSION < 3
