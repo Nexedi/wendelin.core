@@ -2015,6 +2015,38 @@ def test_wcfs_crash_old_data():
     wl2.watch(zf, at2, {0:at1})
 
 
+# Verify WCFS CLI works as expected
+def test_wcfs_CLI(monkeypatch):
+    zurl = "file://abc"
+    optv = "-arg0"
+
+    cmd_list = []
+    def test(with_options):
+        def _(func):
+            cmd = func.__name__
+            monkeypatch.setattr(wcfs, cmd, func)
+            cmd_list.append((cmd, with_options))
+        return _
+
+    @test(1)
+    def serve(u, o, **kwargs):
+        assert u == zurl
+        assert o == (optv,)
+
+    @test(0)
+    def status(u):
+        assert u == zurl
+
+    @test(0)
+    def stop(u):
+        assert u == zurl
+
+    for cmd, opt in cmd_list:
+        opt = (optv,) if opt else ()
+        sys.argv = ("python", cmd) + opt + (zurl,)
+        wcfs.main()
+
+
 # ---- misc ---
 
 # tidtime converts tid to transaction commit time.
