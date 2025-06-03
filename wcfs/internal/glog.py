@@ -29,22 +29,28 @@ from __future__ import print_function, absolute_import
 
 import logging, time
 from wendelin.wcfs.internal import os as xos
+from six import PY3
 
 
 # basicConfig is like logging.basicConfig but configures log output format to match glog.
 def basicConfig(stream, level):
-    logging.setLogRecordFactory(LogRecord)
+    if PY3:
+        logging.setLogRecordFactory(LogRecord)
+    else:
+        logging.LogRecord = LogRecord
     h = logging.StreamHandler(stream)
     f = Formatter()
     h.setFormatter(f)
     logging.root.addHandler(h)
+    logging.root.setLevel(level)
 
 
-# LogRecord amends logging.LogRecord to also include .thread_id attribute.
+# LogRecord amends logging.LogRecord to also include .thread_id and .levelchar attributes.
 class LogRecord(logging.LogRecord):
     def __init__(self, *argv, **kw):
-        logging.LogRecord.__init__(self, *argv, **kw)
+        super(LogRecord, self).__init__(*argv, **kw)
         self.thread_id = xos.gettid()
+        self.levelchar = self.levelname[0]
 
 
 # Formatter adjusts logging.Formatter to behave similarly to glog.
@@ -52,14 +58,9 @@ class LogRecord(logging.LogRecord):
 # it depends on LogRecord to be used instead of logging.LogRecord as the log record factory.
 class Formatter(logging.Formatter):
     def __init__(self):
-        logging.Formatter.__init__(self,
+        super(Formatter, self).__init__(
             "%(levelchar)s%(asctime)s %(thread_id)d %(filename)s:%(lineno)d] %(name)s: %(message)s",
             "%m%d %H:%M:%S")
-
-    # provide .levelchar to record
-    def formatMessage(self, record):
-        record.levelchar = record.levelname[0]
-        return logging.Formatter.formatMessage(self, record)
 
     # adjust emitted time to include microseconds
     def formatTime(self, record, datefmt):

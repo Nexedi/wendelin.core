@@ -53,7 +53,7 @@ from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
 from pytest import raises, fail
-from wendelin.wcfs.internal import io, mm, os as xos
+from wendelin.wcfs.internal import io, mm, os as xos, multiprocessing as xmp
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
 from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
@@ -2013,6 +2013,41 @@ def test_wcfs_crash_old_data():
     # 3. setupWatch was calling ΔFtail.BlkRevAt without putting zhead's transaction into ctx.
     wl2 = t.openwatch()
     wl2.watch(zf, at2, {0:at1})
+
+
+# verify that wcfs cli works as expected.
+def test_wcfs_main():
+    # _ verifies that `wcfs cmd *argv` runs wcfs.cmd(*argv).
+    # it run everything in subprocess to avoid modifying global state, e.g. logging setup.
+    @func
+    def _(cmd, argv, argv_ok=None):
+        if argv_ok is None:
+            argv_ok = argv
+        p = xmp.SubProcess(_test_wcfs_main, cmd, argv, argv_ok, _nocincout=True)
+        defer(p.close)
+        p.join(timeout())
+
+    zurl = "file://abc"
+    _("serve",  ("-arg0", zurl),
+                (zurl, ("-arg0",)))
+    _("status", (zurl,))
+    _("stop",   (zurl,))
+
+# _test_wcfs_main serves test_wcfs_main.
+def _test_wcfs_main(cmd, argv, argv_ok):
+    run = {}
+    run['ok']   = False
+    run['argv'] = None
+    def _(*argv, **kw):
+        run['ok']   = True
+        run['argv'] = argv
+    setattr(wcfs, cmd, _)
+
+    sys.argv = ("python", cmd) + argv
+    wcfs.main()
+
+    assert run['ok'],               run
+    assert run['argv'] == argv_ok,  (run, argv_ok)
 
 
 # ---- misc ---
