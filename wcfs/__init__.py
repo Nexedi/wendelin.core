@@ -75,6 +75,7 @@ from os.path import dirname
 from stat import S_ISDIR
 from errno import ENOENT, ENOTCONN, EEXIST
 from signal import SIGTERM, SIGQUIT, SIGKILL
+from traceback import format_exc
 
 from golang import chan, select, default, func, defer, b
 from golang import context, errors, sync, time
@@ -620,15 +621,15 @@ def status(zurl):
     # find mount entry for mntpt
     try:
         mnt = _lookup_wcmnt(zurl)
-    except Exception as e:
-        fail(e)
+    except Exception:
+        fail(format_exc())
     ok("mount entry: %s  (%s)" % (mnt.point, _devstr(mnt.dev)))
 
     # find server process that serves the mount
     try:
         wcsrv = _lookup_wcsrv(mnt)
-    except Exception as e:
-        fail(e)
+    except Exception:
+        fail(format_exc())
     ok("wcfs server: %s" % wcsrv._proc)
 
     # try to stat mountpoint and access set of files on the filesystem
