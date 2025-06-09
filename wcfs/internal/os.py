@@ -700,6 +700,7 @@ def fd(proc): # -> {} fd->FDInfo
         except (OSError, IOError) as e:
             if e.errno == ENOENT:
                 continue    # fd was closed after listdir
+            raise
         ifd.pos     = int(e.pop("pos"))
         ifd.flags   = int(e.pop("flags"), 8)
         ifd.mnt_id  = int(e.pop("mnt_id"))
