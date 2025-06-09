@@ -50,8 +50,10 @@ else:
 # for details about this issue.
 class SubProcess(object):
     def __init__(proc, f, *argv, **kw):
-        exev = [sys.executable, '-c', 'from wendelin.wcfs.internal import multiprocessing as xmp; '
-                                      'xmp.SubProcess._start(%r)' % '%s.%s' % (f.__module__, f.__name__)]
+        exev = [sys.executable, '-c', 'import sys; '
+                                      'sys.__setattr__("path", %s); '
+                                      'from wendelin.wcfs.internal import multiprocessing as xmp; '
+                                      'xmp.SubProcess._start(%r)' % (sys.path, '%s.%s') % (f.__module__, f.__name__)]
         proc.popen = subprocess.Popen(exev, stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
         try:
             proc.cin  = MPConnection(os.dup(proc.popen.stdin.fileno()),  readable=False)
