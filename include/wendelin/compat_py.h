@@ -1,8 +1,8 @@
-#ifndef _WENDELIN_COMPAT_PY2_H
-#define _WENDELIN_COMPAT_PY2_H
+#ifndef _WENDELIN_COMPAT_PY_H
+#define _WENDELIN_COMPAT_PY_H
 
-/* Wendelin. Python2 compatibility
- * Copyright (C) 2014-2019  Nexedi SA and Contributors.
+/* Wendelin. Python compatibility
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,7 +22,7 @@
  * See https://www.nexedi.com/licensing for rationale and options.
  */
 
-/* compatibility with python2 */
+/* compatibility with older versions of python */
 #include <Python.h>
 
 #ifdef __cplusplus
@@ -100,6 +100,40 @@ static inline PyThreadState * _PyThreadState_UncheckedGet(void)
 }
 #elif PY_VERSION_HEX < 0x03050200
 # error "You are using CPython 3.5.X series. Upgrade your CPython to >= 3.5.2 to get _PyThreadState_UncheckedGet() support."
+#endif
+
+
+/* PyThreadState_GetFrame for py < 3.9 */
+#if PY_VERSION_HEX < 0x03090000
+static inline PyFrameObject* PyThreadState_GetFrame(PyThreadState *tstate)
+{
+    PyFrameObject *frame = tstate->frame;
+    Py_XINCREF(frame);
+    return frame;
+}
+#endif
+
+
+/* PyFrame_GetCode for py < 3.9 */
+#if PY_VERSION_HEX < 0x03090000
+static inline PyCodeObject* PyFrame_GetCode(PyFrameObject* frame)
+{
+    PyCodeObject* code = frame->f_code;
+    assert(code != NULL);
+    Py_INCREF(code);
+    return code;
+}
+#endif
+
+
+/* PyFrame_GetBack for py < 3.9 */
+#if PY_VERSION_HEX < 0x03090000
+static inline PyFrameObject* PyFrame_GetBack(PyFrameObject* frame)
+{
+    PyFrameObject* back = frame->f_back;
+    Py_XINCREF(back);
+    return back;
+}
 #endif
 
 
