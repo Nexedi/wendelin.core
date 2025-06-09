@@ -167,7 +167,7 @@ class FDInfo:
         'pos',      # int
         'flags',    # int
         'mnt_id',   # int
-        'ino',      # int
+        'ino',      # int  Linux 5.14+  | None if not present
         'extra',    # {} k->v
     )
 
@@ -446,7 +446,7 @@ def query(pdbc, selectf, eperm="raise"): # -> i[](Proc | what selectf returns)
                     argvstr = " (%s)" % ' '.join(argv)
                 else:
                     argvstr = ""
-                log.warn("no access to %s%s" % (proc, argvstr))
+                log.warning("no access to %s%s" % (proc, argvstr))
             continue
         except ProcGone: # disappeared process - ignore it
             continue
@@ -700,10 +700,11 @@ def fd(proc): # -> {} fd->FDInfo
         except (OSError, IOError) as e:
             if e.errno == ENOENT:
                 continue    # fd was closed after listdir
+            raise
         ifd.pos     = int(e.pop("pos"))
         ifd.flags   = int(e.pop("flags"), 8)
         ifd.mnt_id  = int(e.pop("mnt_id"))
-        ifd.ino     = int(e.pop("ino"))
+        ifd.ino     = int(e.pop("ino"))       if "ino" in e  else None
         d[fd] = ifd
     return d
 

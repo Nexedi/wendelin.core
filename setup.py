@@ -342,7 +342,7 @@ setup(
                         ['bigfile/_bigfile.c'],
                         depends = [
                          'bigfile/_bigfile.h',
-                         'include/wendelin/compat_py2.h',
+                         'include/wendelin/compat_py.h',
                         ] + libvirtmem_h,
                         define_macros   = [('_GNU_SOURCE',None)],
                         language        = 'c',
@@ -433,8 +433,9 @@ setup(
         Programming Language :: Python :: 2
         Programming Language :: Python :: 2.7
         Programming Language :: Python :: 3
-        Programming Language :: Python :: 3.6
-        Programming Language :: Python :: 3.7
+        Programming Language :: Python :: 3.9
+        Programming Language :: Python :: 3.10
+        Programming Language :: Python :: 3.11
         Programming Language :: Python :: Implementation :: CPython
         Topic :: Software Development :: Libraries :: Python Modules
         Framework :: ZODB\
