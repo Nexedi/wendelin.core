@@ -2063,7 +2063,18 @@ func (wlink *WatchLink) shutdown(reason error) {
 
 		// kill client if shutdown is due to faulty pin handling
 		if kill {
-			wlink.badPinKill(reason) // only fatal error
+			// Prevent misleading kill messages / statistics:
+			//
+			// Double check if client didn't stop already due to other
+			// reason and therefore doesn't reply to pin request.
+			//
+			// => give 1 second for client to terminate to prevent race
+			//    between ctx.Cancel and terminating client.
+			ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+			_, err := waitProcessEnd(ctx, wlink.client)
+			if err {
+				wlink.badPinKill(reason) // only fatal error
+			}
 		}
 
 		// NOTE unregistering watches and wlink itself is done on serve exit, not
