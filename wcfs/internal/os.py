@@ -703,7 +703,7 @@ def fd(proc): # -> {} fd->FDInfo
         ifd.pos     = int(e.pop("pos"))
         ifd.flags   = int(e.pop("flags"), 8)
         ifd.mnt_id  = int(e.pop("mnt_id"))
-        ifd.ino     = int(e.pop("ino"))
+        ifd.ino     = int(e.pop("ino", 0))
         d[fd] = ifd
     return d
 
