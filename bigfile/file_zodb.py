@@ -169,11 +169,13 @@ from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
 from persistent import Persistent, GHOST
+from ZODB.mvccadapter import MVCCAdapterInstance
 from BTrees.LOBTree import LOBTree
 from BTrees.IOBTree import IOBTree
 from zope.interface import implementer
 from weakref import WeakSet
 import os
+import logging as log
 
 # TODO document that first data access must be either after commit or Connection.add
 
@@ -545,6 +547,7 @@ class ZBigFile(LivePersistent):
         self.blksize, self.blktab = state
         self._v_file = _ZBigFile._new(self, self.blksize)
         self._v_filehset = WeakSet()
+        self._v_orphans = []  # Collect orphaned blocks
 
 
     # load data     ZODB obj -> page
@@ -575,9 +578,15 @@ class ZBigFile(LivePersistent):
         self._setzblk(blk, zblk, buf, zblk_type_write)
 
     def _setzblk(self, blk, zblk, buf, zblk_type_write):  # helper
+        zblk_type_changed = type(zblk) is not zblk_type_write
+
+        # mark old zblk as removed to avoid putting pressure of orphans
+        # to storage
+        if zblk is not None and zblk_type_changed:
+            self._v_orphans.append(zblk)
+
         # if zblk was absent or of different type - we (re-)create it anew
-        if zblk is None  or \
-           type(zblk) is not zblk_type_write:
+        if zblk is None or zblk_type_changed:
             zblk = self.blktab[blk] = zblk_type_write()
 
         blkchanged = zblk.setblkdata(buf)
@@ -697,7 +706,6 @@ class ZBigFile(LivePersistent):
         fileh = _ZBigFileH(self, _use_wcfs)
         self._v_filehset.add(fileh)
         return fileh
-
 
 
 # BigFileH wrapper that also acts as DataManager proxying changes ZODB <- virtmem
@@ -824,7 +832,7 @@ class _ZBigFileH(object):
         # make sure we are called only when connection is opened
         assert self.zfile._p_jar.opened
 
-        if not self.zfileh.isdirty():
+        if not (self.zfileh.isdirty() or self.zfile._v_orphans):
             return
 
         assert self not in txn._resources       # (not to join twice)
@@ -892,6 +900,39 @@ class _ZBigFileH(object):
         # - in case of following tpc_abort() we'll just drop dirty pages and
         # changes to objects we'll be done by ZODB data manager (= Connection)
         self.zfileh.dirty_writeout(WRITEOUT_STORE)
+        self._mark_orphans(txn)  # order matters: writeout may create orphans
+
+    # Mark discarded (orphaned) blocks as deleted to help
+    # the storage to pack. Otherwise the storage itself or
+    # an external GC tools needs to detect the orphans that
+    # are created by wendelin.core before packing them.
+    def _mark_orphans(self, txn):
+        zconn = self.zfile._p_jar
+        stor = zconn._storage
+        # Unpack raw storage, since MVCCAdapterInstance doesn't implement
+        # IExternalGC.
+        if isinstance(stor, MVCCAdapterInstance):
+            stor = stor._storage
+
+        # Ensure storage implements 'IExternalGC' [1] - otherwise
+        # storage needs to handle GC by itself.
+        #
+        # [1] https://github.com/zopefoundation/ZODB/blob/f2dc04c/src/ZODB/interfaces.py#L1290-L1307
+        if not getattr(stor, 'deleteObject'):
+            log.warning("Can't discard orphans: storage %s doesn't implement IExternalGC" % stor)
+            return
+
+        def gc(obj):
+            obj._p_activate()
+            stor.deleteObject(obj._p_oid, obj._p_serial, txn.data(zconn))
+            obj._p_deactivate()
+
+        while self.zfile._v_orphans:
+            zblk = self.zfile._v_orphans.pop()
+            gc(zblk)
+            if isinstance(zblk, ZBlk1):
+                for chunk in zblk.chunktab.values():
+                    gc(chunk)
 
 
     def tpc_vote(self, txn):
