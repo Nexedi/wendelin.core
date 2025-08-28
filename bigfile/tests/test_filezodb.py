@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2023  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -26,7 +26,7 @@ from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
 from transaction import TransactionManager
-from ZODB.POSException import ConflictError
+from ZODB.POSException import ConflictError, POSKeyError
 from numpy import ndarray, array_equal, uint32, zeros, arange
 from golang import defer, func, chan
 from golang import context, sync
@@ -694,25 +694,81 @@ def test_bigfile_zblk1_zdata_reuse():
         assert zdata_v1[i] is zdata_v2[i]
 
 
+# Test that GC mechanism of dropped blocks work
+@func
+def test_bigfile_filezodb_delete_blocks():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile7'] = f = ZBigFile(blksize)
+    transaction.commit()
+    fh = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    # Verify zblk is removed when triggering GC mechanism.
+    def addblk():  # Add a block and commit, simulating normal write
+        b = Blk(vma, 0)
+        b[:] = 1
+        transaction.commit()
+    addblk()
+    def rmblk():  # Mark block as orphan to trigger deletion on commit
+        zblk = f.blktab[0]
+        del f.blktab[0]
+        f._v_orphans.append(zblk)  # Trigger GC mechanism @ commit
+        return zblk
+    zblk = rmblk()
+    transaction.commit()
+    assert not f._v_orphans
+    assert_deleted(zblk)
+
+    # Verify rollback functions well and block is not removed
+    # in case transaction aborts.
+    addblk()
+    transaction.get().join(BadRessource())
+    zblk = rmblk()
+    with raises(CommitFailureMock):
+        transaction.commit()
+    transaction.abort()
+    assert not f._v_orphans
+    assert_not_deleted(zblk)
+    assert f.blktab[0] == zblk
+
+class BadRessource(object):
+    def tpc_vote(self, txn):
+        raise CommitFailureMock()
+
+    def sortKey(self):
+        return "zzz"
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+class CommitFailureMock(Exception): pass
+
+
+# Helper to temporarily set zblk format to 'auto'
+def with_zblk_fmt_auto(test):
+    @func
+    def _():
+        fmt_write_save = file_zodb.ZBlk_fmt_write
+        file_zodb.ZBlk_fmt_write = 'auto'
+        def _():
+            file_zodb.ZBlk_fmt_write = fmt_write_save
+        defer(_)
+        test()
+    return _
+
 # Minimal test to ensure normal operations work as expected with zblk format 'auto'.
+@with_zblk_fmt_auto
 @func
 def test_bigfile_zblk_fmt_auto():
     root = dbopen()
     defer(lambda: dbclose(root))
-
-    # set ZBlk_fmt_write to 'auto' for this test
-    fmt_write_save = file_zodb.ZBlk_fmt_write
-    file_zodb.ZBlk_fmt_write = 'auto'
-    def _():
-        file_zodb.ZBlk_fmt_write = fmt_write_save
-    defer(_)
 
     root['zfile8'] = f = ZBigFile(blksize)
     transaction.commit()
 
     fh  = f.fileh_open()
     vma = fh.mmap(0, blen)
-
     b = Blk(vma, 0)
     b[:] = 1
     transaction.commit()
@@ -723,3 +779,65 @@ def test_bigfile_zblk_fmt_auto():
     transaction.commit()
 
     assert b[0] == 2
+
+# Test that zblk format 'auto' doesn't create orphans
+# NOTE This needs to partially test the internal logic of
+# the heuristic to ensure a zblk is replaced due to the
+# heuristics demand of a ZBlk format change.
+@with_zblk_fmt_auto
+@func
+def test_bigfile_zblk_fmt_auto_gc():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+
+    root['zfile9'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    # Initial full block (big) commit => ZBlk0
+    fh = f.fileh_open()
+    vma = fh.mmap(0, blen)
+    b = Blk(vma, 0)
+    b[:] = 1
+    transaction.commit()
+    zblk0 = f.blktab[0]
+    assert isinstance(zblk0, file_zodb.ZBlk0)
+
+    # Small change on full block => Switch to ZBlk1
+    b[0] = 2
+    transaction.commit()
+    zblk1 = f.blktab[0]
+    assert zblk1 != zblk0
+    assert isinstance(zblk1, file_zodb.ZBlk1)
+    # Ensure initially created block is dropped
+    assert_deleted(zblk0)
+    assert not f._v_orphans
+
+
+# Helper to test zblk is deleted.
+@func
+def assert_deleted(zblk):
+    def _(conn, obj):
+        with pytest.raises(POSKeyError):
+            conn.get(obj._p_oid)
+    return _assert_zblk_state(_, zblk)
+
+# Helper to test zblk is not deleted.
+def assert_not_deleted(zblk):
+    def _(conn, obj):
+        assert conn.get(obj._p_oid) is not None
+    return _assert_zblk_state(_, zblk)
+
+@func
+def _assert_zblk_state(f, zblk):
+    # Needs to open new connection because deleted object
+    # is still in cache of main connection.
+    for connref, _ in reversed(testdb.connv):
+        conn = connref()
+        if conn is not None:
+            conn = conn._db.open()
+            break
+    defer(conn.close)
+    f(conn, zblk)
+    if isinstance(zblk, file_zodb.ZBlk1):
+        for chunk in zblk.chunktab.values():
+            f(conn, chunk)
