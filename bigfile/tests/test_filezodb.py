@@ -17,7 +17,7 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry, _ZBlk_auto
+from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry, _ZBlk_auto, _default_use_wcfs
 from wendelin.bigfile import file_zodb, ram_reclaim
 from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import LivePersistent, dbclose, zmajor
@@ -27,7 +27,7 @@ from persistent import UPTODATE
 import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError, POSKeyError
-from numpy import ndarray, array_equal, uint32, zeros, arange
+from numpy import ndarray, array_equal, uint32, zeros, arange, all
 from golang import defer, func, chan
 from golang import context, sync
 from six.moves import _thread
@@ -35,9 +35,11 @@ from six import b
 import struct
 import weakref
 import gc
+from itertools import product
 
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+import pytest; parametrize = pytest.mark.parametrize
 from six.moves import range as xrange
 
 
@@ -797,6 +799,409 @@ def test_bigfile_zblk_fmt_auto_gc():
     # Ensure initially created block is dropped
     assert_deleted(zblk0)
     assert not f._v_orphans
+
+
+# Test that 'ZBigFile.discard_data' correctly removes blocks
+# from memory and backend storage, ensuring discarded blocks
+# are cleared and inaccessible while others remain intact.
+# Parameterized to cover:
+#   - full vs partial discard
+#   - committing writes before discard vs within the discard transaction
+#   - one fileh vs multiple fileh
+@parametrize(
+    "discard_from_blk,commit_before_discard,share_fileh",
+    list(product([0, 1], [True, False], [True, False]))
+)
+@func
+def test_bigfile_filezodb_discard_data(discard_from_blk, commit_before_discard, share_fileh):
+    block_count = 2  # how many blocks we add to ZBigFile
+
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    fname = 'zfile10%s%s%s' % (discard_from_blk, commit_before_discard, share_fileh)
+    root[fname] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    if share_fileh:
+        fh0 = f.fileh_open()
+
+    assert len(f.blktab) == 0
+
+    f.discard_data()  # Test 'discard_data' on empty file
+    transaction.commit()
+
+    assert len(f.blktab) == 0
+
+    def loadblk(i=0):
+        fh = fh0 if share_fileh else f.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(i=0):
+        arr = loadblk(i)
+        arr[:] = 1
+        if commit_before_discard:
+            transaction.commit()
+        return arr
+
+    zblk_to_discard_list = []
+    arr_to_discard_list = []
+    arr_to_keep_list = []
+    for i in range(block_count):
+        arr = addblk(i)
+        assert all(arr == 1)
+        if i >= discard_from_blk:
+            # Mutate the block before discard to verify
+            # that changes don't prevent proper deletion
+            arr[0] = 100
+            arr_to_discard_list.append((i, arr))
+            if commit_before_discard:
+                # NOTE If not committed ZBlk doesn't exist yet
+                zblk = f.blktab[i]
+                assert zblk is not None
+                zblk_to_discard_list.append((i, zblk))
+        else:
+            arr_to_keep_list.append((i, arr))
+
+    f.discard_data(discard_from_blk)
+
+    # After discard, discarded blocks should no longer be accessible
+    # through 'blktab', and their memory-mapped data should be cleared (zeroed).
+    for i, arr in arr_to_discard_list:
+        with raises(KeyError):
+            f.blktab[i]
+        assert all(arr == 0)
+        assert all(loadblk(i) == 0)
+
+    # Blocks not discarded should remain unmodified (all 1s).
+    for i, arr in arr_to_keep_list:
+        assert all(arr == 1)
+        if commit_before_discard or share_fileh:
+            assert all(loadblk(i) == 1)
+
+    transaction.commit()
+
+    for i, arr in arr_to_keep_list:
+        assert all(arr == 1)
+        assert all(loadblk(i) == 1)
+
+    # Only after committing the transaction should data be fully
+    # removed from persistent storage.
+    for i, zblk in zblk_to_discard_list:
+        assert_deleted(zblk)
+
+    # ZBlks must not be re-introduced
+    for i, _ in arr_to_discard_list:
+        with raises(KeyError):
+            f.blktab[i]
+
+
+# Test that a failed discard inside a transaction correctly rolls back,
+# restoring the original block state both in memory and storage.
+@func
+def test_bigfile_filezodb_rollback_discard():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile11'] = f = ZBigFile(blksize)
+    transaction.commit()
+    fh0 = f.fileh_open()
+
+    def loadblk(i=0, fh=fh0):
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    # Create and fill blocks
+    blk_count = 5
+    arr_list = []
+    for i in range(blk_count):
+        arr = loadblk(i)
+        arr[:] = 1
+        arr_list.append(arr)
+
+    transaction.commit()
+    assert len(f.blktab) == 5
+    blk_list = list(f.blktab.values())
+
+    # Simulate discard failure (triggers rollback)
+    run_with_commit_failure(f.discard_data)
+
+    # Verify block table is unchanged
+    assert len(f.blktab) == 5
+    for blk in blk_list:
+        assert_not_deleted(blk)
+
+    # Check all file handles see original data
+    fh1 = f.fileh_open()
+    for i, arr in enumerate(arr_list):
+        assert all(loadblk(i, fh1) == 1)
+        assert all(loadblk(i) == 1)
+        assert all(arr == 1)
+
+
+# Test that mutating a view of a discarded block writes new data,
+# without resurrecting any stale data from the original block.
+@func
+def test_bigfile_filezodb_mutation_after_discard():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile12'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    def loadblk(i=0, zbigfile=f):
+        fh = zbigfile.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(i=0):
+        b = loadblk(i)
+        b[:] = 1
+        return b
+
+    addblk(0)
+    b = addblk(1)
+    transaction.commit()
+    zblk_to_discard = f.blktab[1]
+    assert all(b == 1)
+    f.discard_data()
+    # Now view should point to empty data
+    assert all(b == 0)
+    # Mutating is possible ...
+    b[0] = 1000
+    transaction.commit()
+    # ... but it must allocate new block ...
+    assert zblk_to_discard != f.blktab[1]
+    b = loadblk(1)
+    # ... where no stale data persists ...
+    assert all(b[1:] == 0)
+    # ... and that only contains the data that has been added after discard.
+    assert b[0] == 1000
+
+
+# Tests that after discarding data, newly added blocks are correctly
+# written and retained, while previously discarded blocks are removed
+# from the block table.
+# NOTE This ensures that
+@func
+def test_add_blk_after_discard():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile13'] = f = ZBigFile(blksize)
+    transaction.commit()
+    fh = f.fileh_open()
+
+    def loadblk(i=0):
+        return Blk(fh.mmap(0, blen), i)
+
+    def addblk(i=0):
+        b = loadblk(i)
+        b[:] = 1
+        return b
+
+    for i in range(2):
+        addblk(i)
+
+    transaction.commit()
+
+    f.discard_data()
+    blk = addblk(2)
+
+    assert all(blk == 1)
+
+    transaction.commit()
+
+    assert all(blk == 1)
+    assert all(loadblk(2) == 1)
+
+    assert 2 in f.blktab
+    assert 0 not in f.blktab
+    assert 1 not in f.blktab
+
+
+# Verifies three discard_data() behaviors:
+# 1. Discarded data in one connection correctly invalidates views in other
+#    connections sharing the same TransactionManager after commit.
+# 2. Connections using separate TransactionManagers maintain isolation
+#    and initially see the original data unaffected by the discard.
+# 3. After abort(), isolated connections resynchronize to HEAD and
+#    must observe the discarded state (testing cache invalidation).
+@func
+def test_discard_data_affects_shared_transaction_manager_and_abort_syncs_isolated():
+    root = dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+    defer(db.close)
+
+    fkey = 'zfile14'
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+    defer(conn1.close)
+
+    root1[fkey] = f1 = ZBigFile(blksize)
+    tm1.commit()
+
+    conn2 = db.open(transaction_manager=tm1)
+    root2 = conn2.root()
+    defer(conn2.close)
+    f2 = root2[fkey]
+
+    def loadblk(i=0, zbigfile=f1):
+        fh = zbigfile.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(*args, **kwargs):
+        b = loadblk(*args, **kwargs)
+        b[:] = 1
+        return b
+
+    arr1 = addblk()
+    tm1.commit()
+
+    conn3 = db.open(transaction_manager=tm2)
+    root3 = conn3.root()
+    defer(conn3.close)
+    f3 = root3[fkey]
+
+    arr2 = loadblk(zbigfile=f2)
+    arr3 = loadblk(zbigfile=f3)
+
+    assert all(arr1 == 1)
+    assert all(arr2 == 1)
+    assert all(arr3 == 1)
+    assert len(f2.blktab) == 1
+    assert len(f3.blktab) == 1
+
+    f1.discard_data()
+
+    assert all(arr1 == 0)
+    # Before tm1 commit, f2 (same tm) should still see original data
+    assert all(arr2 == 1)
+
+    tm1.commit()
+
+    # Conn 2 must synchronize with Conn 1 after commit
+    assert len(f2.blktab) == 0
+    assert all(loadblk(zbigfile=f2) == 0)
+    assert all(arr2 == 0)
+
+    # Conn 3 must be isolated and point to old data
+    assert len(f3.blktab) == 1
+    assert all(loadblk(zbigfile=f3) == 1)
+    assert all(arr3 == 1)
+
+    # At transaction boundary connections must be synchronized
+    arr3[0] == 100
+    tm2.abort()
+    assert all(loadblk(zbigfile=f3) == 0)
+    if not _default_use_wcfs():
+        pytest.xfail("!WCFS: cache invalidation fails on blktab topology change")
+    assert all(arr3 == 0)
+
+
+# Verifies two discard_data() behaviors:
+# 1. Once a block is discarded, the connection must not pin it to the
+#    TID it is currently viewing if a concurrent commit is happening
+#    - the discard must persist.
+# 2. On abort(), a HEAD connection resyncs to latest data, while a
+#    historical-view connection returns to the data at its snapshot TID.
+@parametrize("historical_view", [False, True])
+@func
+def test_discard_data_prevents_pins_and_abort_depends_on_view(historical_view):
+    root = dbopen()
+    conn = root._p_jar
+    db = conn.db()
+    conn.close()
+    del root, conn
+    defer(db.close)
+
+    fkey = 'zfile15%s' % historical_view
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+    tm3 = TransactionManager()
+
+    def loadblk(fh):
+        return Blk(fh.mmap(0, blen), 0)
+
+    # Conn1: Create and write initial block
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+    defer(conn1.close)
+
+    root1[fkey] = f1 = ZBigFile(blksize)
+    tm1.commit()
+
+    fh1 = f1.fileh_open()
+    blk1 = loadblk(fh1)
+    blk1[:] = 1
+    tm1.commit()
+
+    # Conn2: Read and modify
+    conn2 = db.open(transaction_manager=tm2)
+    root2 = conn2.root()
+    defer(conn2.close)
+
+    f2 = root2[fkey]
+    fh2 = f2.fileh_open()
+    blk2 = loadblk(fh2)
+    assert all(blk2 == 1)
+
+    blk2[0] = 100
+    tm2.commit()
+
+    # Conn3: Either historical or HEAD view
+    if historical_view:
+        conn3 = db.open(transaction_manager=tm3, before=db.storage.lastTransaction())
+    else:
+        conn3 = db.open(transaction_manager=tm3)
+
+    root3 = conn3.root()
+    defer(conn3.close)
+
+    f3 = root3[fkey]
+    fh3 = f3.fileh_open()
+    blk3 = loadblk(fh3)
+
+    if historical_view:
+        assert all(blk3 == 1)
+    else:
+        assert all(blk3[0] == 100)
+        assert all(blk3[1:] == 1)
+
+    # Discard the block in Conn3
+    f3.discard_data()
+    assert all(blk3 == 0)
+    assert all(loadblk(fh3) == 0)
+
+    # Conn2 commits another change
+    blk2[0] = 123
+    tm2.commit()
+
+    # Conn3 should still see discarded (zeroed) state and
+    # must not be pinned to previous commit.
+    assert blk2[0] == 123
+    assert all(blk2[1:] == 1)
+
+    assert all(blk3 == 0)
+    assert all(loadblk(fh3) == 0)
+
+    # Abort Conn3: historical view stays pinned, HEAD view resyncs
+    tm3.abort()
+
+    if historical_view:
+        assert all(blk3 == 1)
+        assert all(loadblk(fh3) == 1)
+    else:
+        assert blk3[0] == 123
+        assert all(blk3[1:] == 1)
+        assert loadblk(fh3)[0] == 123
+        assert all(loadblk(fh3)[1:] == 1)
 
 
 # Helper to test zblk is deleted.

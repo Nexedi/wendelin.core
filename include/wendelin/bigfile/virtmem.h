@@ -295,7 +295,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
  * it's an error for a given fileh to call fileh_dirty_discard() while writeout
  * is in progress.
  */
-void fileh_dirty_discard(BigFileH *fileh);
+void fileh_dirty_discard(BigFileH *fileh, pgoff_t discard_from_page);
 
 
 /* discard pages from specified offset onwards

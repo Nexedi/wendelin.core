@@ -392,16 +392,17 @@ PyFunc(pyfileh_dirty_writeout,
 }
 
 
-PyFunc(pyfileh_dirty_discard, "dirty_discard() - discard changes made to fileh memory")
-    (PyObject *pyfileh0, PyObject *args)
+PyFunc(pyfileh_dirty_discard, "dirty_discard([discard_from_page]) - discard changes made to fileh memory")
+(PyObject *pyfileh0, PyObject *args)
 {
     PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
     BigFileH    *fileh   = &pyfileh->fileh;
+    pgoff_t discard_from_page = 0;
 
-    if (!PyArg_ParseTuple(args, ""))
+    if (!PyArg_ParseTuple(args, "|K", &discard_from_page))
         return NULL;
 
-    fileh_dirty_discard(fileh);
+    fileh_dirty_discard(fileh, discard_from_page);
     Py_RETURN_NONE;
 }
 
