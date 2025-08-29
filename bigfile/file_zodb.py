@@ -168,6 +168,7 @@ from wendelin.lib.mem import bzero, memcpy, memdelta
 from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
+import transaction
 from persistent import Persistent, GHOST
 import ZODB
 from BTrees.LOBTree import LOBTree
@@ -710,6 +711,37 @@ class ZBigFile(LivePersistent):
         return fileh
 
 
+    # 'discard_data' removes all data from 'discard_from_block'.
+    # In cooperation with _ZBigFileH it takes care to mark removed data as
+    # stale in the storage backend to allow for packing without explicit GC.
+    # NOTE Discarded blocks are removed from the file and storage backend,
+    # but existing memory-mapped views remain valid. Mutating these views
+    # after discard will implicitly reallocate a new block containing only
+    # the mutated data. Unmodified portions will be zero-initialized.
+    def discard_data(self, discard_from_block=0):
+        for blk, zblk in reversed(self.blktab.items()):
+            if blk < discard_from_block:
+                continue
+            del self.blktab[blk]
+            self._v_orphans.append(zblk)
+            # Zero already mmap'ed data
+            zblk._p_invalidate()
+        use_wcfs = False
+        # Drop pre-existing dirty writeout since block is fully discarded
+        for fileh in self._v_filehset:
+            fileh.zfileh.dirty_discard(discard_from_block)
+            use_wcfs = use_wcfs or fileh.uses_mmap_overlay()
+        if use_wcfs:
+            # Prevent stale data: for WCFS mode it's not enough to invalidate
+            # dropped ZBlk's to zero mmap'ed data, since WCFS client loads
+            # not-dirty data directly from WCFS server (that loads from ZODB) and
+            # doesn't load data from changed/emptied ZBigFile object in RAM. After
+            # committing, the head points to the emptied ZBigFile and WCFS server
+            # correctly synchronizes WCFS client mappings, so that mmap'ed data
+            # points to ZBigFile with discarded blocks.
+            self._p_jar.transaction_manager.commit()
+
+
 
 # BigFileH wrapper that also acts as DataManager proxying changes ZODB <- virtmem
 # at two-phase-commit (TPC), and ZODB -> virtmem on objects invalidation.
@@ -935,12 +967,33 @@ class _ZBigFileH(object):
             stor.deleteObject(obj._p_oid, obj._p_serial, txn)
             obj._p_deactivate()
 
+        self._invalidate_in_other_conns(*self.zfile._v_orphans)
         while self.zfile._v_orphans:
             zblk = self.zfile._v_orphans.pop()
             gc(zblk)
             if isinstance(zblk, ZBlk1):
                 for chunk in zblk.chunktab.values():
                     gc(chunk)
+
+    # Zero mmap'ed data in other connections - otherwise they'd
+    # still point to stale data since 'zblk._p_changed == False'.
+    def _invalidate_in_other_conns(self, *obj):
+        if self.uses_mmap_overlay():
+            return  # rely on WCFS invalidations
+        pool = self.zfile._p_jar.db().pool
+        tm = self.transaction_manager
+        def _(conn):
+            conn_tm = conn.transaction_manager
+            if conn is self.zfile._p_jar or conn_tm is not tm:
+                return
+            for o in obj:
+                obj_in_conn = conn._cache.get(o._p_oid)
+                if obj_in_conn is not None:
+                    obj_in_conn._p_invalidate()
+        if zmajor == 4:  # BBB: ZODB4/ConnectionPool lacks __iter__
+            return pool.map(_)
+        for conn in pool:
+            _(conn)
 
 
     def tpc_vote(self, txn):

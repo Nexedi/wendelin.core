@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -491,7 +491,7 @@ out:
 }
 
 
-void fileh_dirty_discard(BigFileH *fileh)
+void fileh_dirty_discard(BigFileH *fileh, pgoff_t discard_from_page)
 {
     Page *page;
     struct list_head *hpage, *hpage_next;
@@ -507,6 +507,10 @@ void fileh_dirty_discard(BigFileH *fileh)
         page = list_entry(hpage, typeof(*page), in_dirty);
         BUG_ON(page->state != PAGE_DIRTY);
 
+        if (page->f_pgoffset < discard_from_page) {
+            continue;
+        }
+
         page_drop_memory(page);
         // TODO consider doing pagemap_del + page_del unconditionally
         if (fileh->mmap_overlay) {
@@ -515,7 +519,9 @@ void fileh_dirty_discard(BigFileH *fileh)
         }
     }
 
-    BUG_ON(!list_empty(&fileh->dirty_pages));
+    if (discard_from_page == 0) {
+        BUG_ON(!list_empty(&fileh->dirty_pages));
+    }
 
     virt_unlock();
     sigsegv_restore(&save_sigset);
