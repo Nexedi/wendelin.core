@@ -708,6 +708,26 @@ class ZBigFile(LivePersistent):
         return fileh
 
 
+    # 'discard_data' removes all data from 'discard_from_block'.
+    # In cooperation with _ZBigFileH it takes care to mark removed data as
+    # stale in the storage backend to allow for packing without explicit GC.
+    # NOTE Discarded blocks are removed from the file and storage backend,
+    # but existing memory-mapped views remain valid. Mutating these views
+    # after discard will implicitly reallocate a new block containing only
+    # the mutated data. Unmodified portions will be zero-initialized.
+    def discard_data(self, discard_from_block=0):
+        for blk, zblk in reversed(self.blktab.items()):
+            if blk < discard_from_block:
+                continue
+            del self.blktab[blk]
+            self._v_orphans.append(zblk)
+            # Zero already mmap'ed data
+            zblk._p_invalidate()
+        # Drop pre-existing dirty writeout since block is fully discarded
+        for fileh in self._v_filehset:
+            fileh.zfileh.dirty_discard(discard_from_block)
+
+
 # BigFileH wrapper that also acts as DataManager proxying changes ZODB <- virtmem
 # at two-phase-commit (TPC), and ZODB -> virtmem on objects invalidation.
 #

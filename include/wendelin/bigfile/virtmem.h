@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_VIRTMEM_H_
 
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -291,7 +291,7 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
  * it's an error for a given fileh to call fileh_dirty_discard() while writeout
  * is in progress.
  */
-void fileh_dirty_discard(BigFileH *fileh);
+void fileh_dirty_discard(BigFileH *fileh, pgoff_t discard_from_page);
 
 
 

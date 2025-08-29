@@ -28,6 +28,7 @@ import transaction
 from transaction import TransactionManager
 from ZODB.POSException import ConflictError, POSKeyError
 from numpy import ndarray, array_equal, uint32, zeros, arange
+import numpy
 from golang import defer, func, chan
 from golang import context, sync
 from six.moves import _thread
@@ -35,9 +36,11 @@ from six import b
 import struct
 import weakref
 import gc
+from itertools import product
 
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+import pytest; parametrize = pytest.mark.parametrize
 from six.moves import range as xrange
 
 
@@ -811,6 +814,113 @@ def test_bigfile_zblk_fmt_auto_gc():
     # Ensure initially created block is dropped
     assert_deleted(zblk0)
     assert not f._v_orphans
+
+
+# Test that 'ZBigFile.discard_data' correctly removes blocks
+# from memory and backend storage, ensuring discarded blocks
+# are cleared and inaccessible while others remain intact.
+# Parameterized to cover:
+#   - full vs partial discard
+#   - committing writes before discard vs within the discard transaction
+@parametrize(
+    "discard_from_block,commit_before_discard",
+    list(product([0, 1], [True, False]))
+)
+@func
+def test_bigfile_filezodb_discard_data(discard_from_block, commit_before_discard):
+    block_count = 2  # how many blocks we add to ZBigFile
+
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile10'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    def addblk(i=0):
+        fh = f.fileh_open()
+        vma = fh.mmap(0, blen)
+        arr = Blk(vma, i)
+        arr[:] = 1
+        if commit_before_discard:
+            transaction.commit()
+        return arr
+
+    zblk_to_discard_list = []
+    arr_to_discard_list = []
+    arr_to_keep_list = []
+    for i in range(block_count):
+        arr = addblk(i)
+        assert numpy.all(arr == 1)
+        if i >= discard_from_block:
+            # Mutate the block before discard to verify
+            # that changes don't prevent proper deletion
+            arr[0] = 100
+            arr_to_discard_list.append((i, arr))
+            if commit_before_discard:
+                # NOTE If not committed ZBlk doesn't exist yet
+                zblk = f.blktab[i]
+                assert zblk is not None
+                zblk_to_discard_list.append((i, zblk))
+        else:
+            arr_to_keep_list.append(arr)
+
+    f.discard_data(discard_from_block)
+
+    # After discard, discarded blocks should no longer be accessible
+    # through 'blktab', and their memory-mapped data should be cleared (zeroed).
+    for i, arr in arr_to_discard_list:
+        with raises(KeyError):
+            f.blktab[i]
+        assert numpy.all(arr == 0), "Discarded block was not cleared"
+
+    # Blocks not discarded should remain unmodified (all 1s).
+    for arr in arr_to_keep_list:
+        assert numpy.all(arr == 1), "Non-discarded block was unexpectedly modified"
+
+    transaction.commit()
+
+    # Only after committing the transaction should data be fully
+    # removed from persistent storage.
+    for i, zblk in zblk_to_discard_list:
+        assert_deleted(zblk)
+
+
+# Test that mutating a view of a discarded block writes new data,
+# without resurrecting any stale data from the original block.
+@func
+def test_bigfile_filezodb_mutation_after_discard():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile11'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    def loadblk(i=0, zbigfile=f):
+        fh = zbigfile.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(i=0):
+        b = loadblk(i)
+        b[:] = 1
+        return b
+
+    addblk(0)
+    b = addblk(1)
+    transaction.commit()
+    zblk_to_discard = f.blktab[1]
+    assert numpy.all(b == 1)
+    f.discard_data()
+    # Now view should point to empty data
+    assert numpy.all(b == 0)
+    # Mutating is possible ...
+    b[0] = 1000
+    transaction.commit()
+    # ... but it must allocate new block ...
+    assert zblk_to_discard != f.blktab[1]
+    b = loadblk(1)
+    # ... where no stale data persists ...
+    assert numpy.all(b[1:] == 0)
+    # ... and that only contains the data that has been added after discard.
+    assert b[0] == 1000
 
 
 # Helper to test zblk is deleted.
