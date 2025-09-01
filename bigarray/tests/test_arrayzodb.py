@@ -734,3 +734,26 @@ def test_zbigarray_resize_discards_data(commit_before_discard, page_count1):
     arr.resize((length0,))
     transaction.commit()
     assert all(arr[length1:] == 0)
+
+
+# Test that 'ZBigArray.discard_data' correctly discards all data.
+# NOTE: This test is minimal, as the core discard logic is already
+# thoroughly tested in 'ZBigArray.resize' and 'ZBigFile.discard_data'
+# tests. Since 'ZBigArray.discard_data' is just a convenience wrapper,
+# this test only verifies that the API behaves as expected.
+@func
+def test_zbigarray_discard():
+    root = testdb.dbopen()
+    defer(lambda: dbclose(root))
+    size = 1024
+
+    root['zarray6'] = arr = ZBigArray((size,), uint8)
+    transaction.commit()
+
+    view = arr[:]
+    view[:] = [1] * size
+    transaction.commit()
+
+    arr.discard_data()
+    assert all(arr[:] == 0)
+    transaction.commit()

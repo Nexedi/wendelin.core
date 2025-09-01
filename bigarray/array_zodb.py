@@ -125,3 +125,7 @@ class ZBigArray(BigArray,
         vma = self._fileh.mmap(pageM_max, 1)
         view = memoryview(vma)  # <2MB => ok to load in memory
         view[offset_in_page : offset_in_page + stale_length] = b'\x00' * stale_length
+
+    # Discard all data from ZBigArray
+    def discard_data(self):
+        self.resize((0,) + self.shape[1:])
