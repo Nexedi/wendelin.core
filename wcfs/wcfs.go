@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1035,6 +1035,33 @@ retry:
 		}
 	}
 
+	// pin removed blocks
+	wg = xsync.NewWorkGroup(ctx)
+	for foid, δfile := range δF.ByFile {
+		file := bfdir.fileTab[foid]
+		for blk := range δfile.Blocks {
+			blk := blk
+			wg.Go(func(ctx context.Context) error {
+				// Check if block still exists in blktab
+				isRemoved, err := file.isBlockRemoved(ctx, blk)
+				if err != nil {
+					return err
+				}
+				if isRemoved {
+					// Send proactive pin messages for removed block
+					err = file.pinWatchersForRemovedBlock(ctx, blk)
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		}
+	}
+	err = wg.Wait()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1155,6 +1182,15 @@ func (f *BigFile) invalidateBlk(ctx context.Context, blk int64) (err error) {
 	}
 
 	return nil
+}
+
+// isBlockRemoved checks if a block no longer exists in zfile.blktab
+func (f *BigFile) isBlockRemoved(ctx context.Context, blk int64) (bool, error) {
+    _, _, _, zblk, _, err := f.zfile.LoadBlk(ctx, blk)
+    if err != nil {
+        return false, err
+    }
+    return zblk == nil, nil
 }
 
 // invalidateAttr invalidates file attributes in kernel cache.
@@ -1766,6 +1802,42 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 	}
 
 	return nil
+}
+
+// pinWatchersForRemovedBlock sends pin messages to all watchers when a block is removed
+func (f *BigFile) pinWatchersForRemovedBlock(ctx context.Context, blk int64) error {
+    if f.head.rev != 0 {
+        return nil
+    }
+
+    f.watchMu.RLock()
+    defer f.watchMu.RUnlock()
+
+    wg := xsync.NewWorkGroup(ctx)
+
+    for w := range f.watchTab {
+        w := w
+        w.atMu.RLock()
+
+        wg.Go(func(ctx context.Context) error {
+            defer w.atMu.RUnlock()
+
+            // Find the last revision where this block existed before w.at
+            δFtail := f.head.bfdir.δFtail
+            pinrev, _, err := δFtail.BlkRevAt(ctx, f.zfile, blk, w.at)
+            if err != nil {
+                return err
+            }
+
+            // Pin the watcher to the last revision where the block existed
+            // This maintains MVCC isolation - the client sees the block as it
+            // existed in their transaction view
+            w.pin(blk, pinrev)
+            return nil
+        })
+    }
+
+    return wg.Wait()
 }
 
 // setupWatch sets up or updates a Watch when client sends `watch <file> @<at>` request.
