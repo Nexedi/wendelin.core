@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -65,11 +65,9 @@
 // OS-level files can also go beyond file size, however accessing memory
 // corresponding to file region after file.size triggers SIGBUS. To preserve
 // wendelin.core semantic wcfs client mmaps-in zeros for Mapping regions after
-// wcfs/head/f.size. For simplicity it is assumed that bigfiles only grow and
-// never shrink. It is indeed currently so, but will have to be revisited
-// if/when wendelin.core adds bigfile truncation. Wcfs client restats
-// wcfs/head/f at every transaction boundary (Conn.resync) and remembers f.size
-// in FileH._headfsize for use during one transaction(%).
+// wcfs/head/f.size. Wcfs client restats wcfs/head/f at every transaction boundary
+// (Conn.resync) and remembers f.size in FileH._headfsize for use during one
+// transaction(%).
 //
 //
 // Integration with wendelin.core virtmem layer
@@ -760,10 +758,29 @@ error _Conn::resync(zodb::Tid at) {
         if ((size_t)st.st_blksize != f->blksize)    // blksize must not change
             return E(fmt::errorf("wcfs bug: blksize changed: %zd -> %ld", f->blksize, st.st_blksize));
         auto headfsize = st.st_size;
-        if (!(f->_headfsize <= headfsize))          // head/file size ↑=
-            return E(fmt::errorf("wcfs bug: head/file size not ↑="));
+        /** XXX If 'discard_data' has been called, file size shrinks -
+         **     we explicitly zero removed blocks, but not sure if this
+         **     is enough to make dropping this safe. **/
+        // if (!(f->_headfsize <= headfsize))          // head/file size ↑=
+        //     return E(fmt::errorf("wcfs bug: head/file size not ↑="));
         if (!(headfsize % f->blksize == 0))
             return E(fmt::errorf("wcfs bug: head/file size %% blksize != 0"));
+
+        // If file size shrank, zero removed regions in all mappings to prevent SIGBUS
+        if (f->_headfsize > headfsize) {
+            for (auto mapping : f->_mmaps) {
+                size_t blk_offset = mapping->blk_start * f->blksize;
+                uint8_t* zero_start = max(mapping->mem_start,
+                    mapping->mem_start + (headfsize - blk_offset));
+                uint8_t* zero_end = min(mapping->mem_stop,
+                    mapping->mem_start + (f->_headfsize - blk_offset));
+                if (zero_end > zero_start) {
+                    err = mmap_zero_into_ro(zero_start, zero_end - zero_start);
+                    if (err != nil)
+                        return E(err);
+                }
+            }
+        }
 
         // replace zero regions in f mappings in accordance to adjusted f._headfsize.
         // NOTE it is ok to access f._mmaps without locking f._mmapMu because we hold wconn.atMu.W

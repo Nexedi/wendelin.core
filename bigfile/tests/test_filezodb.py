@@ -1,5 +1,5 @@
 # Wendelin.core.bigfile | Tests for ZODB BigFile backend
-# Copyright (C) 2014-2023  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -17,17 +17,17 @@
 #
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
-from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry, _ZBlk_auto
+from wendelin.bigfile.file_zodb import ZBigFile, ZBlk_fmt_registry, _ZBlk_auto, _default_use_wcfs
 from wendelin.bigfile import file_zodb, ram_reclaim
 from wendelin.bigfile.tests.test_thread import NotifyChannel
-from wendelin.lib.zodb import LivePersistent, dbclose
+from wendelin.lib.zodb import LivePersistent, dbclose, zmajor
 from wendelin.lib.tests.test_zodb import cacheInfo, kkey
 from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
 from transaction import TransactionManager
-from ZODB.POSException import ConflictError
-from numpy import ndarray, array_equal, uint32, zeros, arange
+from ZODB.POSException import ConflictError, POSKeyError
+from numpy import ndarray, array_equal, uint32, zeros, arange, all
 from golang import defer, func, chan
 from golang import context, sync
 from six.moves import _thread
@@ -35,9 +35,11 @@ from six import b
 import struct
 import weakref
 import gc
+from itertools import product
 
 from pytest import raises
 import pytest; xfail = pytest.mark.xfail
+import pytest; parametrize = pytest.mark.parametrize
 from six.moves import range as xrange
 
 
@@ -694,18 +696,80 @@ def test_bigfile_zblk1_zdata_reuse():
         assert zdata_v1[i] is zdata_v2[i]
 
 
+# Test that GC mechanism of dropped blocks work
+@func
+def test_bigfile_filezodb_delete_blocks():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile7'] = f = ZBigFile(blksize)
+    transaction.commit()
+    fh = f.fileh_open()
+    vma = fh.mmap(0, blen)
+
+    # Verify zblk is removed when triggering GC mechanism.
+    def addblk():  # Add a block and commit, simulating normal write
+        b = Blk(vma, 0)
+        b[:] = 1
+        transaction.commit()
+    addblk()
+    def rmblk():  # Mark block as orphan to trigger deletion on commit
+        zblk = f.blktab[0]
+        del f.blktab[0]
+        f._v_orphans.append(zblk)  # Trigger GC mechanism @ commit
+        return zblk
+    zblk = rmblk()
+    transaction.commit()
+    assert not f._v_orphans
+    assert_deleted(zblk)
+
+    # Verify rollback functions well and block is not removed
+    # in case transaction aborts.
+    addblk()
+    txn = transaction.get()
+    bad_ressource = BadRessource()
+    if zmajor >= 5:
+        txn.join(bad_ressource)
+    else: # BBB: ZODB4
+        txn._resources.append(bad_ressource)
+    zblk = rmblk()
+    with raises(CommitFailureMock):
+        transaction.commit()
+    transaction.abort()
+    assert not f._v_orphans
+    assert_not_deleted(zblk)
+    assert f.blktab[0] == zblk
+
+class BadRessource(object):
+    def tpc_vote(self, txn):
+        raise CommitFailureMock()
+
+    def sortKey(self):
+        return "zzz"
+
+    def __getattr__(self, _):
+        return lambda *args, **kwargs: None
+
+class CommitFailureMock(Exception): pass
+
+
+# Helper to temporarily set zblk format to 'auto'
+def with_zblk_fmt_auto(test):
+    @func
+    def _():
+        fmt_write_save = file_zodb.ZBlk_fmt_write
+        file_zodb.ZBlk_fmt_write = 'auto'
+        def _():
+            file_zodb.ZBlk_fmt_write = fmt_write_save
+        defer(_)
+        test()
+    return _
+
 # Minimal test to ensure normal operations work as expected with zblk format 'auto'.
+@with_zblk_fmt_auto
 @func
 def test_bigfile_zblk_fmt_auto():
     root = dbopen()
     defer(lambda: dbclose(root))
-
-    # set ZBlk_fmt_write to 'auto' for this test
-    fmt_write_save = file_zodb.ZBlk_fmt_write
-    file_zodb.ZBlk_fmt_write = 'auto'
-    def _():
-        file_zodb.ZBlk_fmt_write = fmt_write_save
-    defer(_)
 
     root['zfile8'] = f = ZBigFile(blksize)
     transaction.commit()
@@ -723,3 +787,256 @@ def test_bigfile_zblk_fmt_auto():
     transaction.commit()
 
     assert b[0] == 2
+
+# Test that zblk format 'auto' doesn't create orphans
+# NOTE This needs to partially test the internal logic of
+# the heuristic to ensure a zblk is replaced due to the
+# heuristics demand of a ZBlk format change.
+@with_zblk_fmt_auto
+@func
+def test_bigfile_zblk_fmt_auto_gc():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+
+    root['zfile9'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    # Initial full block (big) commit => ZBlk0
+    fh = f.fileh_open()
+    vma = fh.mmap(0, blen)
+    b = Blk(vma, 0)
+    b[:] = 1
+    transaction.commit()
+    zblk0 = f.blktab[0]
+    assert isinstance(zblk0, file_zodb.ZBlk0)
+
+    # Small change on full block => Switch to ZBlk1
+    b[0] = 2
+    transaction.commit()
+    zblk1 = f.blktab[0]
+    assert zblk1 != zblk0
+    assert isinstance(zblk1, file_zodb.ZBlk1)
+    # Ensure initially created block is dropped
+    assert_deleted(zblk0)
+    assert not f._v_orphans
+
+
+# Test that 'ZBigFile.discard_data' correctly removes blocks
+# from memory and backend storage, ensuring discarded blocks
+# are cleared and inaccessible while others remain intact.
+# Parameterized to cover:
+#   - full vs partial discard
+#   - committing writes before discard vs within the discard transaction
+@parametrize(
+    "discard_from_block,commit_before_discard",
+    list(product([0, 1], [True, False]))
+)
+@func
+def test_bigfile_filezodb_discard_data(discard_from_block, commit_before_discard):
+    block_count = 2  # how many blocks we add to ZBigFile
+
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile10'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    def addblk(i=0):
+        fh = f.fileh_open()
+        vma = fh.mmap(0, blen)
+        arr = Blk(vma, i)
+        arr[:] = 1
+        if commit_before_discard:
+            transaction.commit()
+        return arr
+
+    zblk_to_discard_list = []
+    arr_to_discard_list = []
+    arr_to_keep_list = []
+    for i in range(block_count):
+        arr = addblk(i)
+        assert all(arr == 1)
+        if i >= discard_from_block:
+            # Mutate the block before discard to verify
+            # that changes don't prevent proper deletion
+            arr[0] = 100
+            arr_to_discard_list.append((i, arr))
+            if commit_before_discard:
+                # NOTE If not committed ZBlk doesn't exist yet
+                zblk = f.blktab[i]
+                assert zblk is not None
+                zblk_to_discard_list.append((i, zblk))
+        else:
+            arr_to_keep_list.append(arr)
+
+    f.discard_data(discard_from_block)
+
+    # After discard, discarded blocks should no longer be accessible
+    # through 'blktab', and their memory-mapped data should be cleared (zeroed).
+    for i, arr in arr_to_discard_list:
+        with raises(KeyError):
+            f.blktab[i]
+        assert all(arr == 0), "Discarded block was not cleared"
+
+    # Blocks not discarded should remain unmodified (all 1s).
+    for arr in arr_to_keep_list:
+        assert all(arr == 1), "Non-discarded block was unexpectedly modified"
+
+    transaction.commit()
+
+    # Only after committing the transaction should data be fully
+    # removed from persistent storage.
+    for i, zblk in zblk_to_discard_list:
+        assert_deleted(zblk)
+
+    # ZBlks must not be re-introduced
+    for i, _ in arr_to_discard_list:
+        with raises(KeyError):
+            f.blktab[i]
+
+
+# Test that mutating a view of a discarded block writes new data,
+# without resurrecting any stale data from the original block.
+@func
+def test_bigfile_filezodb_mutation_after_discard():
+    root = dbopen()
+    defer(lambda: dbclose(root))
+    root['zfile11'] = f = ZBigFile(blksize)
+    transaction.commit()
+
+    def loadblk(i=0, zbigfile=f):
+        fh = zbigfile.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(i=0):
+        b = loadblk(i)
+        b[:] = 1
+        return b
+
+    addblk(0)
+    b = addblk(1)
+    transaction.commit()
+    zblk_to_discard = f.blktab[1]
+    assert all(b == 1)
+    f.discard_data()
+    # Now view should point to empty data
+    assert all(b == 0)
+    # Mutating is possible ...
+    b[0] = 1000
+    transaction.commit()
+    # ... but it must allocate new block ...
+    assert zblk_to_discard != f.blktab[1]
+    b = loadblk(1)
+    # ... where no stale data persists ...
+    assert all(b[1:] == 0)
+    # ... and that only contains the data that has been added after discard.
+    assert b[0] == 1000
+
+
+# Verifies that discarding data in one transaction correctly invalidates
+# the data in other connections sharing the same transaction manager,
+# while maintaining isolation for other transactions.
+@func
+def test_bigfile_filezodb_discard_data_vs_isolation():
+    root = dbopen()
+    conn = root._p_jar
+    db   = conn.db()
+    conn.close()
+    del root, conn
+    defer(db.close)
+
+    fkey = 'zfile12'
+
+    tm1 = TransactionManager()
+    tm2 = TransactionManager()
+
+    conn1 = db.open(transaction_manager=tm1)
+    root1 = conn1.root()
+    defer(conn1.close)
+
+    root1[fkey] = f1 = ZBigFile(blksize)
+    tm1.commit()
+
+    conn2 = db.open(transaction_manager=tm1)
+    root2 = conn2.root()
+    defer(conn2.close)
+    f2 = root2[fkey]
+
+    def loadblk(i=0, zbigfile=f1):
+        fh = zbigfile.fileh_open()
+        vma = fh.mmap(0, blen)
+        return Blk(vma, i)
+
+    def addblk(*args, **kwargs):
+        b = loadblk(*args, **kwargs)
+        b[:] = 1
+        return b
+
+    arr1 = addblk()
+    tm1.commit()
+
+    conn3 = db.open(transaction_manager=tm2)
+    root3 = conn3.root()
+    defer(conn3.close)
+    f3 = root3[fkey]
+
+    arr2 = loadblk(zbigfile=f2)
+    arr3 = loadblk(zbigfile=f3)
+
+    assert all(arr1 == 1)
+    assert all(arr3 == 1)
+    assert all(arr2 == 1)
+    assert len(f2.blktab) == 1
+    assert len(f3.blktab) == 1
+
+    f1.discard_data()
+
+    assert all(arr1 == 0)
+    if not _default_use_wcfs():  # WCFS mode => immediately commit
+        # Before tm1 commit, f2 (same tm) should still see original data
+        assert all(arr2 == 1)
+
+    tm1.commit()
+
+    # Conn 2 must synchronize with Conn 1 after commit
+    assert len(f2.blktab) == 0
+    assert all(loadblk(zbigfile=f2) == 0)
+    assert all(arr2 == 0)
+
+    # Conn 3 must be isolated and point to old data
+    assert len(f3.blktab) == 1
+    assert all(loadblk(zbigfile=f3) == 1)
+    assert all(arr3 == 1)
+
+
+# Helper to test zblk is deleted.
+@func
+def assert_deleted(zblk):
+    def _(conn, obj):
+        with pytest.raises(POSKeyError):
+            conn.get(obj._p_oid)
+    return _assert_zblk_state(_, zblk)
+
+# Helper to test zblk is not deleted.
+def assert_not_deleted(zblk):
+    def _(conn, obj):
+        try:
+            assert conn.get(obj._p_oid) is not None
+        except POSKeyError:
+            raise AssertionError("%s has been deleted" % obj)
+    return _assert_zblk_state(_, zblk)
+
+@func
+def _assert_zblk_state(f, zblk):
+    # Needs to open new connection because deleted object
+    # is still in cache of main connection.
+    for connref, _ in reversed(testdb.connv):
+        conn = connref()
+        if conn is not None:
+            conn = conn._db.open()
+            break
+    defer(conn.close)
+    f(conn, zblk)
+    if isinstance(zblk, file_zodb.ZBlk1):
+        for chunk in zblk.chunktab.values():
+            f(conn, chunk)
