@@ -632,6 +632,12 @@ error _Conn::__pin1(PinReq *req) {
             BigFileH *virt_fileh = mmap->vma->fileh;
             TODO (mmap->fileh->blksize != virt_fileh->ramh->ram->pagesize);
             do_pin = !__fileh_page_isdirty(virt_fileh, req->blk);
+
+            Page *page = pagemap_get(&virt_fileh->pagemap, req->blk);
+            if (page && page->state == PAGE_DESTROYED) {
+                do_pin = false;
+            }
+
         }
 
         if (do_pin)

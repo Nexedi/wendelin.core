@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -220,7 +220,39 @@ void fileh_close(BigFileH *fileh)
     sigsegv_restore(&save_sigset);
 }
 
+/****************
+ * HELPER       *
+ ****************/
 
+static Page *fileh_create_destroyed_page(BigFileH *fileh, pgoff_t pgoffset)
+{
+    Page *page = NULL;
+    void *pageram;
+
+    /* Retry page allocation until successful or OOM */
+    while (!(page = ramh_alloc_page(fileh->ramh, pgoffset))) {
+        if (!__ram_reclaim(fileh->ramh->ram)) {
+            OOM();
+        }
+    }
+
+    /* Initialize basic page fields */
+    page->fileh = fileh;
+    page->f_pgoffset = pgoffset;
+    page->state = PAGE_DESTROYED;
+
+    /* Allocate zero-initialized memory for the page */
+    pageram = page_mmap(page, NULL, PROT_READ | PROT_WRITE);
+    TODO(!pageram);  // Replace with real error handling if needed
+
+    memset(pageram, 0, page_size(page));
+    xmunmap(pageram, page_size(page));
+
+    /* Insert into pagemap */
+    pagemap_set(&fileh->pagemap, pgoffset, page);
+
+    return page;
+}
 
 /****************
  * MMAP / UNMAP *
@@ -277,6 +309,31 @@ int fileh_mmap(VMA *vma, BigFileH *fileh, pgoff_t pgoffset, pgoff_t pglen)
                 continue; /* page is out of requested mmap coverage */
 
             vma_mmap_page(vma, page);
+        }
+    }
+
+    /* wcfs: mmap(fileh->destroyed pages) over base */
+    if (fileh->mmap_overlay && fileh->has_destroyed_range) {
+        pgoff_t range_end = pgoffset + pglen;
+
+        for (pgoff_t i = pgoffset; i < range_end; i++) {
+            if (i < fileh->destroyed_from_page)
+                continue;
+
+            Page *page = pagemap_get(&fileh->pagemap, i);
+
+            if (page) {
+                if (page->state == PAGE_DESTROYED) {
+                    /* Re-map existing destroyed page to current VMA */
+                    vma_mmap_page(vma, page);
+                } else {
+                    /* Must be a dirty page if not destroyed */
+                    BUG_ON(list_empty(&page->in_dirty));
+                }
+            } else {
+                page = fileh_create_destroyed_page(fileh, i);
+                vma_mmap_page(vma, page);
+            }
         }
     }
 
@@ -566,6 +623,117 @@ void fileh_invalidate_page(BigFileH *fileh, pgoff_t pgoffset)
     sigsegv_restore(&save_sigset);
 }
 
+/***************************
+ * DISCARD / RESTORE PAGES *
+ **************************/
+
+void fileh_discard_pages(BigFileH *fileh, pgoff_t discard_from_page)
+{
+    Page *page;
+    sigset_t save_sigset;
+    struct list_head *hmmap;
+    PageMap *pagemap = &fileh->pagemap;
+    pgoff_t pgoff;
+    pgoff_t max_pgoff = 0;
+
+    sigsegv_block(&save_sigset);
+    virt_lock();
+
+    /* It's an error to discard pages while writeout is in progress */
+    BUG_ON(fileh->writeout_inprogress);
+
+    if (!(fileh->has_destroyed_range && fileh->destroyed_from_page < discard_from_page))
+        fileh->destroyed_from_page = discard_from_page;
+    fileh->has_destroyed_range = true;
+
+    /* Find maximum page offset across all VMAs */
+    list_for_each(hmmap, &fileh->mmaps) {
+        VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
+        pgoff_t vma_stop = vma_addr_fpgoffset(vma, vma->addr_stop);
+        if (vma_stop > max_pgoff)
+            max_pgoff = vma_stop;
+    }
+
+    for (pgoff = discard_from_page; pgoff < max_pgoff; pgoff++) {
+        page = pagemap_get(pagemap, pgoff);
+
+        if (page) {
+            /* Existing page - assert it's not dirty and destroy */
+            BUG_ON(!list_empty(&page->in_dirty));
+            page_drop_memory(page);
+            page_del(page);
+            pagemap_del(pagemap, pgoff);
+        }
+
+        /* Create new destroyed page */
+        page = fileh_create_destroyed_page(fileh, pgoff);
+
+        /* Map the destroyed page into all VMAs covering its range */
+        list_for_each(hmmap, &fileh->mmaps) {
+            VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
+            if (vma_page_infilerange(vma, page))
+                vma_mmap_page(vma, page);
+        }
+    }
+
+    virt_unlock();
+    sigsegv_restore(&save_sigset);
+}
+
+void fileh_restore_pages(BigFileH *fileh)
+{
+    Page *page, **pages_to_restore;
+    int page_count = 0, i;
+    sigset_t save_sigset;
+
+    sigsegv_block(&save_sigset);
+    virt_lock();
+
+    BUG_ON(fileh->writeout_inprogress);
+
+    fileh->has_destroyed_range = false;
+    fileh->destroyed_from_page = 0;
+
+    // First count how many destroyed pages
+    pagemap_for_each(page, &fileh->pagemap) {
+        if (page->state == PAGE_DESTROYED)
+            page_count++;
+    }
+
+    if (page_count == 0)
+        goto out_unlock;
+
+    pages_to_restore = malloc(page_count * sizeof(Page *));
+    if (!pages_to_restore)
+        OOM();
+
+    int idx = 0;
+    pagemap_for_each(page, &fileh->pagemap) {
+        if (page->state == PAGE_DESTROYED)
+            pages_to_restore[idx++] = page;
+    }
+
+    for (i = 0; i < page_count; i++) {
+        page = pages_to_restore[i];
+
+        struct list_head *hmmap;
+        list_for_each(hmmap, &fileh->mmaps) {
+            VMA *vma = list_entry(hmmap, typeof(*vma), same_fileh);
+            vma_page_ensure_unmapped(vma, page);
+        }
+
+        page_drop_memory(page);
+        pagemap_del(&fileh->pagemap, page->f_pgoffset);
+        page_del(page);
+    }
+
+    free(pages_to_restore);
+
+out_unlock:
+    virt_unlock();
+    sigsegv_restore(&save_sigset);
+}
+
 
 /************************
  *  Lookup VMA by addr  *
@@ -733,8 +901,8 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
      *   handler must not see a PAGE_LOADED page. )
      */
     if (fileh->mmap_overlay && page)
-        ASSERT(page->state == PAGE_LOADED_FOR_WRITE || page->state == PAGE_LOADING ||
-               page->state == PAGE_DIRTY);
+    ASSERT(page->state == PAGE_LOADED_FOR_WRITE || page->state == PAGE_LOADING ||
+           page->state == PAGE_DIRTY || page->state == PAGE_DESTROYED);
 
     /* (4) no page found - allocate new from ram */
     while (!page) {
@@ -878,6 +1046,11 @@ VMFaultResult vma_on_pagefault(VMA *vma, uintptr_t addr, int write)
         virt_gil_retake_if_waslocked(gilstate);
         virt_lock();
         return VM_RETRY;
+    }
+
+    /* (5c) page is destroyed - discard_pages already zero fill - add write */
+    if (page->state == PAGE_DESTROYED && write) {
+        page->state = PAGE_LOADED_FOR_WRITE;
     }
 
     /* (6) page data ready. Mmap it atomically into vma address space, or mprotect
@@ -1103,7 +1276,7 @@ static void vma_mmap_page(VMA *vma, Page *page) {
     int prot = (page->state == PAGE_DIRTY ? PROT_READ|PROT_WRITE : PROT_READ);
 
     // NOTE: PAGE_LOADED_FOR_WRITE not passed here
-    ASSERT(page->state == PAGE_LOADED || page->state == PAGE_DIRTY);
+    ASSERT(page->state == PAGE_LOADED || page->state == PAGE_DIRTY || page->state == PAGE_DESTROYED);
     ASSERT(vma->f_pgoffset <= page->f_pgoffset &&
                               page->f_pgoffset < vma_addr_fpgoffset(vma, vma->addr_stop));
 
