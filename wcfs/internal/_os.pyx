@@ -21,12 +21,15 @@
 
 """Package wcfs.internal._os provides C-level part of package wcfs.internal.os ."""
 
-from posix.types cimport pid_t
-cdef extern from "<unistd.h>":
-    pid_t c_gettid "gettid"()
+cdef extern from "<sys/syscall.h>":
+    """
+    #include <unistd.h>
+    """
+    long syscall(long number, ...)
+    long SYS_gettid
 
 # gettid returns ID of current thread.
 #
 # It is similar to _thread.get_native_id() which is available only on py3.
 def gettid():
-    return c_gettid()
+    return syscall(SYS_gettid)
