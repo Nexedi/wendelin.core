@@ -46,8 +46,9 @@ from ZODB.utils import z64, u64, p64
 import sys, os, os.path, subprocess
 import six
 from six.moves._thread import get_ident as gettid
+from signal import SIGKILL
 from time import gmtime
-from errno import EINVAL, ENOTCONN
+from errno import EINVAL, ENOTCONN, ECONNABORTED
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
@@ -56,7 +57,7 @@ from pytest import raises, fail
 from wendelin.wcfs.internal import io, mm, os as xos, multiprocessing as xmp
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
-from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _procwait_ as procwait_, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
 bstr = type(b(''))  # TODO import directly after https://lab.nexedi.com/nexedi/pygolang/-/merge_requests/21 is merged
 
@@ -272,21 +273,21 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     # /proc/mounts should now contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
 
-
     # kill the server
-    wcsrv._proc.kill() # sends SIGKILL
-    assert wcsrv._proc.wait() != 0
+    os.kill(wcsrv._proc.pid, SIGKILL)
+    assert procwait_(context.background(), wcsrv._proc)
 
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
         xos.readfile(mntpt + "/.wcfs/zurl")
-    assert exc.value.errno == ENOTCONN
+    # NOTE There is a race between ECONNABORTED (initial state after kill) => ENOTCONN (final state)
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
     assert wcfs._wcregistry[mntpt] is wc
     with raises(IOError) as exc:
         wc.close()
-    assert exc.value.errno == ENOTCONN
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
     assert mntpt not in wcfs._wcregistry
 
     # /proc/mounts should still contain wcfs entry
