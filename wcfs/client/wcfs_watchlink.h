@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -33,33 +33,12 @@ using cxx::set;
 
 #include "wcfs.h"
 #include "wcfs_misc.h"
+#include "wcfs_link.h"
 
 // wcfs::
 namespace wcfs {
 
 struct PinReq;
-
-
-// StreamID stands for ID of a stream multiplexed over WatchLink.
-typedef uint64_t StreamID;
-
-// rxPkt internally represents data of one message received over WatchLink.
-struct rxPkt {
-    // stream over which the data was received
-    StreamID stream;
-
-    // raw data received/to-be-sent.
-    // XXX not e.g. string, as chan<T> currently does not support types with
-    //     non-trivial copy. Note: we anyway need to limit rx line length to
-    //     avoid DoS, but just for DoS the limit would be higher.
-    uint16_t datalen;
-    char     data[256 - sizeof(StreamID) - sizeof(uint16_t)];
-
-    error  from_string(const string& rx);
-    string to_string() const;
-};
-static_assert(sizeof(rxPkt) == 256, "rxPkt miscompiled"); // NOTE 128 is too low for long error message
-
 
 // WatchLink represents /head/watch link opened on wcfs.
 //
@@ -70,33 +49,8 @@ static_assert(sizeof(rxPkt) == 256, "rxPkt miscompiled"); // NOTE 128 is too low
 //
 // It is safe to use WatchLink from multiple threads simultaneously.
 typedef refptr<class _WatchLink> WatchLink;
-class _WatchLink : public xos::_IAfterFork, object {
-    WCFS            *_wc;
-    os::File        _f;      // head/watch file handle
-    string          _rxbuf;  // buffer for data already read from _f
 
-    // iso.protocol message IO
-    chan<rxPkt>     _acceptq;   // server originated messages go here
-    sync::Mutex     _rxmu;
-    bool            _down;      // y when the link is no-longer operational
-    bool            _rxeof;     // y if EOF was received from server
-    dict<StreamID, chan<rxPkt>>
-                    _rxtab;     // {} stream -> rxq    server replies go via here
-    set<StreamID>   _accepted;  // streams we accepted but did not replied yet
-
-    StreamID        _req_next;  // stream ID for next client-originated request TODO -> atomic
-    sync::Mutex     _txmu;      // serializes writes
-    sync::Once      _txclose1;
-
-    sync::WorkGroup _serveWG;   // _serveRX is running under _serveWG
-    func<void()>    _serveCancel;
-
-    // XXX for tests
-public:
-    vector<string>  fatalv; // ad-hoc, racy. TODO rework to send messages to control channel
-    chan<structZ>   rx_eof; // becomes ready when wcfs closes its tx side
-
-    // don't new - create only via WCFS._openwatch()
+struct _WatchLink : _Link {
 private:
     _WatchLink();
     virtual ~_WatchLink();
@@ -104,28 +58,12 @@ private:
 public:
     void incref();
     void decref();
-
 public:
-    error close();
-    error closeWrite();
-    pair<string, error> sendReq(context::Context ctx, const string &req);
-    error recvReq(context::Context ctx, PinReq *rx_into);
+    // watch-protocol-specific methods
+    error recvReq(context::Context ctx, PinReq *prx);
     error replyReq(context::Context ctx, const PinReq *req, const string& reply);
 
     string String() const;
-    int    fd() const;
-
-private:
-    error _serveRX(context::Context ctx);
-    tuple<string, error> _readline();
-    error _send(StreamID stream, const string &msg);
-    error _write(const string &pkt);
-    StreamID _nextReqID();
-    tuple<chan<rxPkt>, error> _sendReq(context::Context ctx, StreamID stream, const string &req);
-
-    void afterFork();
-
-    friend error _twlinkwrite(WatchLink wlink, const string &pkt);
 };
 
 // PinReq represents 1 server-initiated wcfs pin request received over /head/watch link.
@@ -137,11 +75,6 @@ struct PinReq {
 
     string      msg;    // XXX raw message for tests (TODO kill)
 };
-
-
-// for testing
-error _twlinkwrite(WatchLink wlink, const string &pkt);
-
 
 }   // wcfs::
 

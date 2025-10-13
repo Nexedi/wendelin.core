@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -44,6 +44,12 @@ cdef class PyWCFS:
             return str(pyb(pywc.wc.mountpoint)) # TODO remove str(·) after bstr can be mixed with unicode in os.path.join
         def __set__(PyWCFS pywc, v):
             pywc.wc.mountpoint = pyb(v)
+
+    property authkeyfile:
+        def __get__(PyWCFS pywc):
+            return str(pyb(pywc.wc.authkeyfile))
+        def __set__(PyWCFS pywc, v):
+            pywc.wc.authkeyfile = pyb(v)
 
     def connect(PyWCFS pywc, pyat): # -> PyConn
         cdef Tid at = u64(pyat)
@@ -170,6 +176,48 @@ cdef class PyMapping:
 
 # ----------------------------------------
 
+cdef class PyAuthLink:
+    cdef AuthLink alink
+    def __init__(PyAuthLink pyalink, PyWCFS pywc):
+        with nogil:
+            _ = wcfs_openauth_pyexc(&pywc.wc)
+            pyalink.alink = _.first
+            err           = _.second
+
+        if err != nil:
+            raise pyerr(err)
+
+    def __dealloc__(PyAuthLink pyalink):
+        pyalink.alink = nil
+
+
+    def close(PyAuthLink pyalink):
+        with nogil:
+            err = alink_close_pyexc(pyalink.alink)
+        if err != nil:
+            raise pyerr(err)
+
+    def closeWrite(PyAuthLink pyalink):
+        with nogil:
+            err = alink_closeWrite_pyexc(pyalink.alink)
+        if err != nil:
+            raise pyerr(err)
+
+
+    def sendReq(PyAuthLink pyalink, context.PyContext pyctx, pyreq):  # -> reply(bstr)
+        cdef string req = pyb(pyreq)
+        with nogil:
+            _ = alink_sendReq_pyexc(pyalink.alink, pyctx.ctx, req)
+            reply = _.first
+            err   = _.second
+
+        if err != nil:
+            raise pyerr(err)
+
+        return pyb(reply)
+
+
+
 cdef class PyWatchLink:
 
     def __init__(PyWatchLink pywlink, PyWCFS pywc):
@@ -267,8 +315,9 @@ cdef class PyPinReq:
 
 def _tpywlinkwrite(PyWatchLink pywlink, pypkt):
     cdef string pkt = pyb(pypkt)
+    cdef Link link = watchlink_to_link(pywlink.wlink)
     with nogil:
-        err = _twlinkwrite_pyexc(pywlink.wlink, pkt)
+        err = _tlinkwrite_pyexc(link, pkt)
     if err != nil:
         raise pyerr(err)
 
@@ -285,6 +334,9 @@ cdef nogil:
 
     pair[WatchLink, error] wcfs_openwatch_pyexc(WCFS *wcfs)     except +topyexc:
         return wcfs._openwatch()
+
+    pair[AuthLink, error] wcfs_openauth_pyexc(WCFS *wcfs)       except +topyexc:
+        return wcfs._openauth()
 
     pair[Conn, error] wcfs_connect_pyexc(WCFS *wcfs, Tid at)    except +topyexc:
         return wcfs.connect(at)
@@ -310,6 +362,15 @@ cdef nogil:
     error wmmap_unmap_pyexc(Mapping wmmap)                      except +topyexc:
         return wmmap.unmap()
 
+    error alink_close_pyexc(AuthLink alink)                    except +topyexc:
+        return alink.close()
+
+    error alink_closeWrite_pyexc(AuthLink alink)               except +topyexc:
+        return alink.closeWrite()
+
+    pair[string, error] alink_sendReq_pyexc(AuthLink alink, context.Context ctx, const string &req)   except +topyexc:
+        return alink.sendReq(ctx, req)
+
     error wlink_close_pyexc(WatchLink wlink)                    except +topyexc:
         return wlink.close()
 
@@ -325,5 +386,5 @@ cdef nogil:
     error wlink_replyReq_pyexc(WatchLink wlink, context.Context ctx, const PinReq *req, const string& reply)    except +topyexc:
         return wlink.replyReq(ctx, req, reply)
 
-    error _twlinkwrite_pyexc(WatchLink wlink, const string& pkt)    except +topyexc:
-        return _twlinkwrite(wlink, pkt)
+    error _tlinkwrite_pyexc(Link link, const string& pkt)    except +topyexc:
+        return _tlinkwrite(link, pkt)

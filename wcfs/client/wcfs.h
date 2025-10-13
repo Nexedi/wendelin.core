@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -133,6 +133,7 @@ typedef refptr<struct _Conn> Conn;
 typedef refptr<struct _Mapping> Mapping;
 typedef refptr<struct _FileH> FileH;
 typedef refptr<struct _WatchLink> WatchLink;
+typedef refptr<struct _AuthLink> AuthLink;
 struct PinReq;
 
 
@@ -148,9 +149,14 @@ struct PinReq;
 // It is safe to use WCFS from multiple threads simultaneously.
 struct WCFS {
     string  mountpoint;
+    string authkeyfile;
 
     pair<Conn, error>       connect(zodb::Tid at);
     pair<WatchLink, error>  _openwatch();
+    pair<AuthLink, error>   _openauth();
+
+    // Read authentication key from authkeyfile
+    pair<string, error>     readAuthKey();
 
     string String() const;
     error _headWait(zodb::Tid at);
@@ -177,6 +183,7 @@ typedef refptr<struct _Conn> Conn;
 struct _Conn : xos::_IAfterFork, object {
     WCFS        *_wc;
     WatchLink   _wlink; // watch/receive pins for mappings created under this conn
+    AuthLink    _alink; // authentication link under this conn
 
     // atMu protects .at.
     // While it is rlocked, .at is guaranteed to stay unchanged and Conn

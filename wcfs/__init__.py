@@ -87,7 +87,8 @@ from wendelin.lib.zodb import zurl_normalize_main
 from wendelin.wcfs.internal import glog
 from wendelin.wcfs.client._wcfs import \
     PyWCFS          as _WCFS,       \
-    PyWatchLink     as WatchLink    \
+    PyAuthLink      as AuthLink,    \
+    PyWatchLink     as WatchLink
 
 from wendelin.wcfs.internal import os as xos, multiprocessing as xmp
 
@@ -116,6 +117,7 @@ class Server:
 # WCFS logically mirrors ZODB.DB .
 class WCFS(_WCFS):
     # .mountpoint   path to wcfs mountpoint
+    # .authkeyfile  path to the file that stores the authentication key
     # ._fwcfs       /.wcfs/zurl opened to keep the server from going away (at least cleanly)
     # ._njoin       this connection was returned for so many joins
 
@@ -168,11 +170,12 @@ _wcregistry    = {} # mntpt -> WCFS
 _wcautostarted = [] # of WCFS, with ._wcsrv != None, for wcfs we ever autostart'ed  (for tests)
 
 @func(WCFS)
-def __init__(wc, mountpoint, fwcfs, wcsrv):
+def __init__(wc, mountpoint, fwcfs, wcsrv, authkeyfile):
     wc.mountpoint = mountpoint
     wc._fwcfs     = fwcfs
     wc._njoin     = 1
     wc._wcsrv     = wcsrv
+    wc.authkeyfile = authkeyfile
 
 # close must be called to release joined connection after it is no longer needed.
 @func(WCFS)
@@ -197,13 +200,18 @@ def _default_autostart():
     autostart = autostart.lower()
     return {"yes": True, "no": False}[autostart]
 
+# _default_authkeyfile returns default authkeyfile setting for join.
+def _default_authkeyfile():
+    return os.environ["WENDELIN_CORE_WCFS_AUTHKEYFILE"]
+
 # join connects to wcfs server for ZODB @ zurl.
 #
 # If wcfs for that zurl is already running, join connects to it.
 # Otherwise it starts wcfs for zurl if autostart is True.
 #
 # For the same zurl join returns the same WCFS object.
-def join(zurl, autostart=_default_autostart()): # -> WCFS
+def join(zurl, authkeyfile="", autostart=_default_autostart()): # -> WCFS
+    authkeyfile = authkeyfile or _default_authkeyfile()
     mntpt = _mntpt_4zurl(zurl)
     with _wcmu:
         # check if we already have connection to wcfs server from this process
@@ -216,7 +224,7 @@ def join(zurl, autostart=_default_autostart()): # -> WCFS
         fwcfs, trylockstartf = _try_attach_wcsrv(mntpt)
         if fwcfs is not None:
             # already have it
-            wc = WCFS(mntpt, fwcfs, None)
+            wc = WCFS(mntpt, fwcfs, None, authkeyfile)
             _wcregistry[mntpt] = wc
             return wc
 
@@ -226,8 +234,8 @@ def join(zurl, autostart=_default_autostart()): # -> WCFS
         # start wcfs with telling it to automatically exit when there is no client activity.
         trylockstartf() # XXX retry access if another wcfs was started in the meantime
 
-        wcsrv, fwcfs = _start(zurl, "-autoexit")
-        wc = WCFS(mntpt, fwcfs, wcsrv)
+        wcsrv, fwcfs = _start(zurl, "-authkeyfile=%s" % authkeyfile, "-autoexit")
+        wc = WCFS(mntpt, fwcfs, wcsrv, authkeyfile)
         _wcautostarted.append(wc)
         assert mntpt not in _wcregistry
         _wcregistry[mntpt] = wc

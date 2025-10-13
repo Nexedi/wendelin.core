@@ -301,6 +301,8 @@ libvirtmem_h = [
 libwcfs_h = [
     'wcfs/client/wcfs.h',
     'wcfs/client/wcfs_misc.h',
+    'wcfs/client/wcfs_link.h',
+    'wcfs/client/wcfs_authlink.h',
     'wcfs/client/wcfs_watchlink.h',
 ]
 
@@ -332,6 +334,8 @@ setup(
 
                    DSO('wendelin.wcfs.client.libwcfs',
                     ['wcfs/client/wcfs.cpp',
+                     'wcfs/client/wcfs_link.cpp',
+                     'wcfs/client/wcfs_authlink.cpp',
                      'wcfs/client/wcfs_watchlink.cpp',
                      'wcfs/client/wcfs_misc.cpp'],
                     depends = libvirtmem_h + libwcfs_h,
