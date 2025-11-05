@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -33,6 +33,10 @@ from pytest import mark, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, \
         setup_module, teardown_module, setup_function, teardown_function
 
+from wendelin.conftest import authkey
+
+from wendelin.wcfs.wcfs_auth_test import (
+    tSubProcess as _tSubProcessBase, tClient as tFaultyClient)
 
 # tests in this module require WCFS to promptly react to pin handler
 # timeouts so that verifying WCFS killing logic does not take a lot of time.
@@ -42,51 +46,16 @@ def with_prompt_pintimeout(monkeypatch):
     return monkeypatch.setenv("WENDELIN_CORE_WCFS_OPTIONS", "-pintimeout %.1fs" % tkill, prepend=" ")
 
 
-# tFaultySubProcess runs f(tFaultyClient, *argv, *kw) in subprocess.
-# It's a small convenience wrapper over xmp.SubProcess - please see its documentation for details.
-class tFaultySubProcess(xmp.SubProcess):
-    def __init__(fproc, t, f, *argv, **kw):
-        kw.setdefault('zurl',       zstor_2zurl(t.root._p_jar.db().storage))
-        kw.setdefault('zfile_oid',  t.zfile._p_oid)
-        kw.setdefault('_procname',  f.__name__)
+# Extend with fault-tolerance-specific timeout validation
+class tFaultySubProcess(_tSubProcessBase):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("authenticate", True)
+        _tSubProcessBase.__init__(self, *args, **kwargs)
 
-        kw.setdefault('pintimeout', t.pintimeout)
+    # Validate pintimeout is small enough for kill detection
+    def _validate_timeout(fproc, t):
         tremain = t.ctx.deadline() - time.now()
         assert t.pintimeout < tremain/3 # 2·pintimeout is needed to reliably detect wcfs kill reaction
-
-        for k,v in list(kw.items()):
-            if isinstance(v, tAt):  # tAt is not picklable
-                kw[k] = v.raw
-
-        super(tFaultySubProcess, fproc).__init__(_tFaultySubProcess_start, f.__name__, *argv, **kw)
-        assert fproc.cout.recv() == "f: start"
-
-@func
-def _tFaultySubProcess_start(cin, cout, funcname, **kw):
-    f = tFaultyClient()
-    f.cin  = cin
-    f.cout = cout
-    f.zurl = kw.pop('zurl')
-    f.zfile_oid = kw.pop('zfile_oid')
-    f.pintimeout = kw.pop('pintimeout')
-    f.wc = wcfs.join(f.zurl, autostart=False);  defer(f.wc.close)
-    # we do not need to implement timeouts precisely in the child process
-    # because parent will kill us on its timeout anyway.
-    ctx = context.background()
-    f.cout.send("f: start")
-    testf = globals()[funcname]
-    testf(ctx, f, **kw)
-
-# tFaultyClient is placeholder for arguments + WCFS connection for running test
-# function inside tFaultySubProcess.
-class tFaultyClient:
-    # .cin
-    # .cout
-    # .zurl
-    # .zfile_oid
-    # .wc
-    # .pintimeout
-    pass
 
 
 # ---- tests ----

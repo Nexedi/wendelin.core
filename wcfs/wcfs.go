@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -88,6 +88,34 @@
 //
 // Unless accessed {head,@<revX>}/bigfile/<bigfileX> are not automatically visible in
 // wcfs filesystem. Similarly @<revX>/ become visible only after access.
+//
+//
+// Authentication protocol
+//
+// In order to support WCFS on multi-user systems where WCFS clients run under
+// different system users than the WCFS server, WCFS implements an authentication
+// protocol. By default, FUSE disallows access to FUSE filesystems by other users.
+// With the 'allow_other' mount option [1], access by other users can be explicitly
+// permitted. However, this also allows unrelated users to access WCFS, potentially
+// leaking private data. To prevent unprivileged access, WCFS provides an authentication
+// protocol that must be followed before accessing any files.
+//
+// Before accessing any other files, clients must first authenticate by opening
+// /.wcfs/auth and sending an authentication message containing an authentication
+// key that was set when starting the server. The authentication exchange works as
+// follows:
+//
+//	C: auth <key>
+//	S: ok
+//	S: error ...		; if authentication fails
+//
+// The server tracks authenticated clients by their unique identifier (PID + StartTime).
+// Clients remain authenticated until they close the AuthLink connection.
+//
+// If a client attempts to access any private file before successfully authenticating,
+// the server returns a permission denied error.
+//
+// [1] https://docs.kernel.org/filesystems/fuse.html
 //
 //
 // Isolation protocol
@@ -517,6 +545,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/hanwen/go-fuse/v2/fuse/nodefs"
 	"github.com/pkg/errors"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/xzodb"
 	"lab.nexedi.com/nexedi/wendelin.core/wcfs/internal/zdata"
@@ -552,11 +581,25 @@ type Root struct {
 	revMu  sync.Mutex
 	revTab map[zodb.Tid]*Head
 
+	// Global client registry for authentication
+	clientMu  sync.RWMutex
+	clientTab map[ClientId]*Client
+
+	// .wcfs/auth opens
+	alinkMu  sync.Mutex
+	alinkTab map[*AuthLink]struct{}
+
+	// client authentication key
+	authkey string
+
 	// time budget for a client to handle pin notification
 	pinTimeout time.Duration
 
 	// collected statistics
 	stats *Stats
+
+	// PID of WCFS server
+	PID int
 }
 
 // /(head|<rev>)/			- served by Head.
@@ -663,6 +706,40 @@ type blkLoadState struct {
 	err      error
 }
 
+// Link represents a communication channel between a client and WCFS over a file socket.
+type Link struct {
+	sk     *FileSock  // IO channel to client
+	id     int32      // ID of this /head/watch handle (for debug log)
+	txMu   sync.Mutex // mutex for sending messages
+	client *Client    // client that opened the Link
+}
+
+// ClientId uniquely identifies a WCFS client process.
+// The combination of PID and StartTime is unique for the lifetime of a single process instance.
+type ClientId struct {
+	PID       int
+	StartTime int64
+}
+
+// Client represents a WCFS client with authentication state
+type Client struct {
+	*os.Process
+	authenticated bool
+	authMu        sync.RWMutex
+	id            ClientId
+}
+
+// /.wcfs/auth - served by AuthNode.
+type AuthNode struct {
+	fsNode
+	idNext int32 // ID for next opened AuthLink
+}
+
+// /.wcfs/auth open - served by AuthLink.
+type AuthLink struct {
+	Link
+}
+
 // /head/watch				- served by WatchNode.
 type WatchNode struct {
 	fsNode
@@ -673,8 +750,8 @@ type WatchNode struct {
 
 // /head/watch open			- served by WatchLink.
 type WatchLink struct {
-	sk   *FileSock // IO channel to client
-	id   int32     // ID of this /head/watch handle (for debug log)
+	Link
+
 	head *Head
 
 	// watches associated with this watch link.
@@ -686,7 +763,6 @@ type WatchLink struct {
 
 	// IO
 	reqNext uint64 // stream ID for next wcfs-originated request; 0 is reserved for control messages
-	txMu    sync.Mutex
 	rxMu    sync.Mutex
 	rxTab   map[/*stream*/uint64]chan string // client replies go via here
 
@@ -697,7 +773,12 @@ type WatchLink struct {
 	down        chan struct{}  // ready after shutdown completes
 	pinWG       sync.WaitGroup // all pin handlers are accounted here
 
-	client *os.Process // client that opened the WatchLink
+	// watch handlers are spawned in dedicated workgroup
+	//
+	// Pin handlers are run either inside - for pins run from setupWatch, or,
+	// for pins run from readPinWatchers, under wlink.pinWG.
+	// Upon serve exit we cancel them all and wait for their completion.
+	wg *xsync.WorkGroup
 }
 
 // Watch represents watching for changes to 1 BigFile over particular watch link.
@@ -1222,6 +1303,9 @@ func (root *Root) lockRevFile(rev zodb.Tid, fid zodb.Oid) (_ *BigFile, unlock fu
 
 // /(head|<rev>)/bigfile/<bigfileX> -> Read serves reading bigfile data.
 func (f *BigFile) Read(_ nodefs.File, dest []byte, off int64, fctx *fuse.Context) (fuse.ReadResult, fuse.Status) {
+	if !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
 	f.head.zheadMu.RLock()         // TODO +fctx to cancel
 	defer f.head.zheadMu.RUnlock()
 
@@ -1433,6 +1517,82 @@ retry:
 	log.Errorf("BUG: bigfile %s: blk %d: -> pagecache: %s  (ignoring, but reading from bigfile will be very slow)", oid, blk, st)
 }
 
+// errBye represents a clean shutdown of a Link when the client sends "bye" to the server.
+var errBye = errors.New("serve: bye")
+
+// getClientId returns a unique client identifier derived from the given process PID.
+func getClientId(pid int) (id ClientId, err error) {
+	defer xerr.Contextf(&err, "pid %v: getClientId", pid)
+	thread, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return
+	}
+	tgid, err := thread.Tgid()
+	if err != nil {
+		return
+	}
+	// FUSE context Caller.Pid is actually Tid
+	proc, err := process.NewProcess(int32(tgid))
+	if err != nil {
+		return
+	}
+	startTime, err := proc.CreateTime()
+	if err != nil {
+		return
+	}
+	id = ClientId{PID: int(tgid), StartTime: startTime}
+	return
+}
+
+// getClient returns the Client for the given PID, creating it if it does not exist.
+func(root *Root) getClient(pid int) (client *Client, err error) {
+	id, err := getClientId(pid)
+	if err != nil {
+		return nil, err
+	}
+	root.clientMu.Lock()
+	defer root.clientMu.Unlock()
+	client, exists := root.clientTab[id]
+	if !exists {
+		client, err = NewClient(id)
+		if err != nil {
+			return nil, err
+		}
+		root.clientTab[id] = client
+	}
+	return client, nil
+}
+
+// isAuthenticated checks whether the client associated with the given FUSE context
+// is authenticated.
+func (root *Root) isAuthenticated(fctx *fuse.Context) bool {
+	// User who started wendelin.core is always considered 'authenticated'.
+	// This helps simplifying developing, debugging and the test infrastructure.
+	// XXX maybe we can make this optional ? and turn it mostly off for tests ?
+	//	but turn it on for one test, to see if it works reliably ?
+	// uid := int(fctx.Caller.Uid)
+	// if uid == os.Getuid() {
+	// 	return true
+	// }
+	pid := int(fctx.Caller.Pid)
+	id, err := getClientId(pid)
+	if err != nil {
+		log.InfoDepth(1, fmt.Sprintf("isAuthenticated: failed to get client id for pid=%d: %v", pid, err))
+		return false
+	}
+	// If WCFS server attempts to touch itself: always allow
+	if root.PID == id.PID {
+		return true
+	}
+	root.clientMu.RLock()
+	client, exists := root.clientTab[id]
+	root.clientMu.RUnlock()
+	if !exists {
+		return false
+	}
+	return client.IsAuthenticated()
+}
+
 // -------- isolation protocol notification/serving --------
 //
 // (see "7.2) for all registered client@at watchers ...")
@@ -1618,7 +1778,7 @@ func (wlink *WatchLink) badPinKill(reason error) {
 }
 
 func (wlink *WatchLink) _badPinKill() error {
-	client := wlink.client
+	client := wlink.client.Process
 	pid    := client.Pid
 
 	// time budget for pin + wait + fatal-notify + kill = pinTimeout + 1 + 1/3·pinTimeout
@@ -1671,6 +1831,34 @@ func (wlink *WatchLink) _badPinKill() error {
 	err = fmt.Errorf("is still alive after SIGKILL")
 	log.Errorf("pid%d:    %s", pid, err)
 	return err
+}
+
+// NewClient constructs a Client for the given ClientId.
+func NewClient(id ClientId) (*Client, error) {
+	proc, err := findAliveProcess(id.PID)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{
+		Process:       proc,
+		authenticated: false,
+		id:		       id,
+	}, nil
+}
+
+// SetAuthenticated updates the client's authentication state.
+// Authenticated clients can access WCFS private files.
+func (c *Client) SetAuthenticated(auth bool) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	c.authenticated = auth
+}
+
+// IsAuthenticated reports whether the client is authenticated.
+func (c *Client) IsAuthenticated() bool {
+	c.authMu.RLock()
+	defer c.authMu.RUnlock()
+	return c.authenticated
 }
 
 // readPinWatchers complements readBlk: it sends `pin blk` for watchers of the file
@@ -1766,6 +1954,171 @@ func (f *BigFile) readPinWatchers(ctx context.Context, blk int64, blkrevMax zodb
 	}
 
 	return nil
+}
+
+// send sends a message to client over specified stream ID.
+//
+// Multiple send can be called simultaneously; send serializes writes.
+func (link *Link) send(ctx context.Context, stream uint64, msg string) (err error) {
+	defer xerr.Contextf(&err, "send .%d", stream) // link is already put into ctx by caller
+
+	// assert '\n' not in msg
+	if strings.ContainsRune(msg, '\n') {
+		panicf("BUG: msg contains \\n  ; msg: %q", msg)
+	}
+
+	link.txMu.Lock()
+	defer link.txMu.Unlock()
+
+	pkt := []byte(fmt.Sprintf("%d %s\n", stream, msg))
+	traceIso("S: link%d: tx: %q\n", link.id, pkt)
+	_, err = link.sk.Write(ctx, pkt)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// readLines reads newline-delimited messages from the client connection until the
+// context is canceled, an error occurs, or the client disconnects.
+//
+// Each line is parsed and passed to handleMessage. The beforeRead hook runs before
+// each read. Returning errBye from handleMessage ends the loop cleanly.
+func (link *Link) readLines(
+	ctx context.Context,
+	handleMessage func(ctx context.Context, stream uint64, msg string) error,
+	beforeRead func() error,
+) error {
+	r := bufio.NewReader(xio.BindCtxR(link.sk, ctx))
+	for {
+		if err := beforeRead(); err != nil {
+			return err
+		}
+
+		// NOTE r.Read is woken up by ctx cancel because link.sk implements xio.Reader natively
+		l, err := r.ReadString('\n') // TODO limit accepted line len to prevent DOS
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			if errors.Is(err, ctx.Err()) {
+				err = nil
+			}
+			return err
+		}
+		traceIso("S: link%d: rx: %q\n", link.id, l)
+
+		stream, msg, err := parseWatchFrame(l)
+		if err != nil {
+			return err
+		}
+
+		err = handleMessage(ctx, stream, msg)
+		if err != nil {
+			if err == errBye {
+				return nil // deferred sk.Close will wake-up rx on client side
+			}
+			return err
+		}
+	}
+}
+
+// serve serves client authentication requests
+func (alink *AuthLink) serve(ctx context.Context) {
+	err := alink._serve(ctx)
+	if err != nil {
+		log.Error(err)
+	}
+}
+
+func (alink *AuthLink) _serve(ctx context.Context) (err error) {
+	defer xerr.Contextf(&err, "alink %d: serve", alink.id)
+
+	// final auth link cleanup
+	defer func() {
+		// unregister auth link
+		root := groot
+
+		root.alinkMu.Lock()
+		delete(root.alinkTab, alink)
+		root.alinkMu.Unlock()
+
+		// Unauthenticate the client only if no other active AuthLinks remain.
+		// This ensures a client with multiple AuthLinks is unauthenticated
+		// only when all have closed.
+		//
+		// NOTE: Multiple AuthLinks are mostly theoretical and only used in tests;
+		// in practice, clients usually authenticate only once (see WCFS client).
+		unauthenticate := true
+		root.alinkMu.Lock()
+		for alink2 := range root.alinkTab {
+			if alink.client == alink2.client {
+				unauthenticate = false
+				break
+			}
+		}
+		root.alinkMu.Unlock()
+
+		if unauthenticate {
+			alink.client.SetAuthenticated(false)
+
+			root.clientMu.Lock()
+			delete(root.clientTab, alink.client.id)
+			root.clientMu.Unlock()
+
+			// Release process handle
+			alink.client.Process.Release()
+		}
+
+		// close socket
+		err2 := alink.sk.Close()
+		if err == nil {
+			err = err2
+		}
+	}()
+
+	return alink.readLines(ctx, alink.handleMessage, func() error { return nil })
+}
+
+// handleMessage processes a single client message over the authentication link.
+func (alink *AuthLink) handleMessage(ctx context.Context, stream uint64, msg string) (err error) {
+	// handle auth messages
+	if strings.HasPrefix(msg, "auth ") {
+		err = alink.handleAuth(ctx, msg)
+		reply := "ok"
+		if err != nil {
+			reply = fmt.Sprintf("error %s", err)
+		}
+		alink.send(ctx, stream, reply)
+		return nil
+	}
+
+	// handle bye
+	if msg == "bye" {
+		return errBye
+	}
+
+	// unknown message
+	alink.send(ctx, 0, "error unknown command")
+	return nil
+}
+
+// handleAuth processes a client's authentication request.
+func (alink *AuthLink) handleAuth(ctx context.Context, msg string) error {
+	parts := strings.SplitN(msg, " ", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid auth message format")
+	}
+
+	authkey := parts[1]
+
+	if authkey == groot.authkey {
+		alink.client.SetAuthenticated(true)
+		return nil
+	}
+
+	return fmt.Errorf("invalid authentication key")
 }
 
 // setupWatch sets up or updates a Watch when client sends `watch <file> @<at>` request.
@@ -1993,8 +2346,45 @@ func (wlink *WatchLink) setupWatch(ctx context.Context, foid zodb.Oid, at zodb.T
 	return nil
 }
 
+// Open serves /.wcfs/auth opens.
+func (anode *AuthNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	node, err := anode.open(flags, fctx)
+	return node, err2LogStatus(err)
+}
+
+func (anode *AuthNode) open(flags uint32, fctx *fuse.Context) (_ nodefs.File, err error) {
+	defer xerr.Contextf(&err, "/.wcfs/auth: open")
+
+	root := groot
+
+	client, err := root.getClient(int(fctx.Caller.Pid))
+	if err != nil {
+		return nil, err
+	}
+
+	serveCtx := context.TODO()
+	alink := &AuthLink{
+		Link: Link{
+			sk:          NewFileSock(),
+			id:          atomic.AddInt32(&anode.idNext, +1),
+			client:      client,
+		},
+	}
+
+	groot.alinkMu.Lock()
+	groot.alinkTab[alink] = struct{}{}
+	groot.alinkMu.Unlock()
+
+	go alink.serve(serveCtx)
+	return alink.sk.File(), nil
+}
+
+
 // Open serves /head/watch opens.
 func (wnode *WatchNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	if !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
 	node, err := wnode.open(flags, fctx)
 	return node, err2LogStatus(err)
 }
@@ -2007,22 +2397,25 @@ func (wnode *WatchNode) open(flags uint32, fctx *fuse.Context) (_ nodefs.File, e
 
 	// remember our client who opened the watchlink.
 	// We will need to kill the client if it will be e.g. slow to respond to pin notifications.
-	client, err := findAliveProcess(int(fctx.Caller.Pid))
+	client, err := groot.getClient(int(fctx.Caller.Pid))
 	if err != nil {
 		return nil, err
 	}
 
 	serveCtx, serveCancel := context.WithCancel(context.TODO() /*TODO ctx of wcfs running*/)
 	wlink := &WatchLink{
-		sk:          NewFileSock(),
-		id:          atomic.AddInt32(&wnode.idNext, +1),
+		Link: Link{
+			sk:          NewFileSock(),
+			id:          atomic.AddInt32(&wnode.idNext, +1),
+			client:      client,
+		},
 		head:        head,
 		byfile:      make(map[zodb.Oid]*Watch),
 		rxTab:       make(map[uint64]chan string),
 		serveCtx:    serveCtx,
 		serveCancel: serveCancel,
 		down:        make(chan struct{}),
-		client:      client,
+		wg:          xsync.NewWorkGroup(serveCtx),
 	}
 
 	head.wlinkMu.Lock()
@@ -2113,17 +2506,8 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 		if err == nil {
 			err = err2
 		}
-
-		// release client process
-		wlink.client.Release()
 	}()
 
-	// watch handlers are spawned in dedicated workgroup
-	//
-	// Pin handlers are run either inside - for pins run from setupWatch, or,
-	// for pins run from readPinWatchers, under wlink.pinWG.
-	// Upon serve exit we cancel them all and wait for their completion.
-	wg := xsync.NewWorkGroup(ctx)
 	defer func() {
 		// cancel all watch and pin handlers on both error and ok return.
 		//
@@ -2145,7 +2529,7 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 		}
 
 		// wait for setupWatch and pin handlers spawned from it to complete
-		err2 := wg.Wait()
+		err2 := wlink.wg.Wait()
 		if err == nil {
 			err = err2
 		}
@@ -2161,7 +2545,7 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 	// cancel main thread on any watch handler error
 	ctx, mainCancel := context.WithCancel(ctx)
 	defer mainCancel()
-	wg.Go(func(ctx context.Context) error {
+	wlink.wg.Go(func(ctx context.Context) error {
 		// monitor is always canceled - either due to parent ctx cancel, error in workgroup,
 		// or return from serve and running "cancel all watch handlers ..." above.
 		<-ctx.Done()
@@ -2169,53 +2553,45 @@ func (wlink *WatchLink) _serve(ctx context.Context) (err error) {
 		return nil
 	})
 
-	r := bufio.NewReader(xio.BindCtxR(wlink.sk, ctx))
-	for {
-		// NOTE r.Read is woken up by ctx cancel because wlink.sk implements xio.Reader natively
-		l, err := r.ReadString('\n') // TODO limit accepted line len to prevent DOS
-		if err != nil {
-			if err == io.EOF {
-				err = io.ErrUnexpectedEOF
-			}
-			if errors.Is(err, ctx.Err()) {
-				err = nil
-			}
-			return err
+	return wlink.readLines(ctx, wlink.handleMessage, wlink.beforeRead)
+}
+
+// handleMessage processes a single client message over the watch link.
+func (wlink *WatchLink) handleMessage(ctx context.Context, stream uint64, msg string)error {
+	// reply from client to wcfs
+	reply := (stream % 2 == 0)
+	if reply {
+		wlink.rxMu.Lock()
+		rxq := wlink.rxTab[stream]
+		delete(wlink.rxTab, stream)
+		wlink.rxMu.Unlock()
+
+		if rxq == nil {
+			return fmt.Errorf("%d: reply on unexpected stream", stream)
 		}
-		traceIso("S: wlink%d: rx: %q\n", wlink.id, l)
-
-		stream, msg, err := parseWatchFrame(l)
-		if err != nil {
-			return err
-		}
-
-		// reply from client to wcfs
-		reply := (stream % 2 == 0)
-		if reply {
-			wlink.rxMu.Lock()
-			rxq := wlink.rxTab[stream]
-			delete(wlink.rxTab, stream)
-			wlink.rxMu.Unlock()
-
-			if rxq == nil {
-				return fmt.Errorf("%d: reply on unexpected stream", stream)
-			}
-			rxq <- msg
-			continue
-		}
-
-		// client-initiated request
-
-		// bye
-		if msg == "bye" {
-			return nil // deferred sk.Close will wake-up rx on client side
-		}
-
-		// watch ...
-		wg.Go(func(ctx context.Context) error {
-			return wlink.handleWatch(ctx, stream, msg)
-		})
+		rxq <- msg
+		return nil
 	}
+
+	// client-initiated request
+
+	// bye
+	if msg == "bye" {
+		return errBye
+	}
+
+	// watch ...
+	wlink.wg.Go(func(ctx context.Context) error {
+		return wlink.handleWatch(ctx, stream, msg)
+	})
+	return nil
+}
+
+func (wlink *WatchLink) beforeRead() error {
+	if !wlink.client.IsAuthenticated() {
+		return fmt.Errorf("client authentication revoked")
+	}
+	return nil
 }
 
 // handleWatch handles watch request from client.
@@ -2294,31 +2670,6 @@ func (wlink *WatchLink) sendReq(ctx context.Context, req string) (reply string, 
 		return reply, nil
 	}
 }
-
-// send sends a message to client over specified stream ID.
-//
-// Multiple send can be called simultaneously; send serializes writes.
-func (wlink *WatchLink) send(ctx context.Context, stream uint64, msg string) (err error) {
-	defer xerr.Contextf(&err, "send .%d", stream) // wlink is already put into ctx by caller
-
-	// assert '\n' not in msg
-	if strings.ContainsRune(msg, '\n') {
-		panicf("BUG: msg contains \\n  ; msg: %q", msg)
-	}
-
-	wlink.txMu.Lock()
-	defer wlink.txMu.Unlock()
-
-	pkt := []byte(fmt.Sprintf("%d %s\n", stream, msg))
-	traceIso("S: wlink%d: tx: %q\n", wlink.id, pkt)
-	_, err = wlink.sk.Write(ctx, pkt)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 
 // ---- Lookup ----
 
@@ -2623,6 +2974,9 @@ type _wcfs_debug_ZheadH struct {
 }
 
 func (*_wcfs_debug_Zhead) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	if !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
 	// TODO(?) check flags
 	sk := NewFileSock()
 	sk.CloseRead()
@@ -2733,6 +3087,7 @@ func _main() (err error) {
 	tracefuse := flag.Bool("trace.fuse", false, "trace FUSE exchange")
 	autoexit := flag.Bool("autoexit", false, "automatically stop service when there is no client activity")
 	pintimeout := flag.Duration("pintimeout", 30*time.Second, "clients are killed if they do not handle pin notification in pintimeout time")
+	authkeyfile := flag.String("authkeyfile", "", "authentication key that clients must use to connect to this server")
 
 	flag.Parse()
 	if len(flag.Args()) != 2 {
@@ -2741,6 +3096,20 @@ func _main() (err error) {
 	}
 	zurl := flag.Args()[0]
 	mntpt := flag.Args()[1]
+
+	var authkey string
+	if *authkeyfile != "" {
+		data, err := os.ReadFile(*authkeyfile)
+		if err != nil {
+			return fmt.Errorf("Failed to read auth key file: %v", err)
+		}
+		authkey = strings.TrimSpace(string(data))
+		if authkey == "" {
+			return fmt.Errorf("auth key file %v is empty", authkeyfile)
+		}
+	} else {
+		return fmt.Errorf("no auth key file provided")
+	}
 
 	xclose := func(c io.Closer) {
 		err = xerr.First(err, c.Close())
@@ -2822,6 +3191,10 @@ func _main() (err error) {
 		revTab:     make(map[zodb.Tid]*Head),
 		pinTimeout: *pintimeout,
 		stats:      &Stats{},
+		authkey:    authkey,
+		clientTab:  make(map[ClientId]*Client),
+		alinkTab:   make(map[*AuthLink]struct{}),
+		PID:        os.Getpid(),
 	}
 
 	opts := &fuse.MountOptions{
@@ -2839,11 +3212,26 @@ func _main() (err error) {
 
 		DisableXAttrs: true,        // we don't use
 		Debug:         *tracefuse,  // go-fuse "Debug" is mostly logging FUSE messages
+
+		// If true, WCFS allows access by other users (requires "user_allow_other"
+		// in /etc/fuse.conf). This is needed for multi-user setups where WCFS
+		// clients run under different system users than the one that started
+		// the server. We set the default to true to attempt multi-user support;
+		// if mounting fails, it is automatically disabled (set to false).
+		AllowOther: true,
 	}
 
 	fssrv, fsconn, err := mount(mntpt, root, opts)
 	if err != nil {
-		return err
+		opts.AllowOther = false
+		w1 := fmt.Sprintf("mounting WCFS failed: %v", err)
+		w2 := "-> retrying mounting without 'allow_other' (disables multi-user access)..."
+		w3 := "-> to enable multi-user access, add 'user_allow_other' to /etc/fuse.conf"
+		log.Error(w1); log.Error(w2); log.Error(w3)
+		fssrv, fsconn, err = mount(mntpt, root, opts)
+		if err != nil {
+			return err
+		}
 	}
 	groot   = root   // FIXME temp workaround (see ^^^)
 	gfsconn = fsconn // FIXME ----//----
@@ -2876,9 +3264,17 @@ func _main() (err error) {
 	// information about wcfs itself
 	_wcfs := newFSNode(fSticky)
 	mkdir(root, ".wcfs", &_wcfs)
-	mkfile(&_wcfs, "zurl", NewStaticFile([]byte(zurl)))
+	fzurl := NewStaticFile([]byte(zurl))
+	// fzurl must be publicly accessible so clients can verify WCFS is mounted
+	fzurl.public = true
+	mkfile(&_wcfs, "zurl", fzurl)
 	mkfile(&_wcfs, "pintimeout", NewStaticFile([]byte(fmt.Sprintf("%.1f", float64(root.pinTimeout) / float64(time.Second)))))
 	mkfile(&_wcfs, "stats", NewSmallFile(_wcfs_Stats)) // collected statistics
+
+	// Create AuthNode
+	authNode := &AuthNode{fsNode: newFSNode(fSticky)}
+	// Mount under /.wcfs/auth
+	mkfile(&_wcfs, "auth", authNode)
 
 	// for debugging/testing
 	if *debug {

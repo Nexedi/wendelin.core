@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -132,7 +132,11 @@ type fsNode struct {
 	xpath atomic.Value
 }
 
-func (n *fsNode) Open(flags uint32, _ *fuse.Context) (nodefs.File, fuse.Status) {
+func (n *fsNode) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	if groot != nil && !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
+
 	return &nodefs.WithFlags{
 		File:      nil,
 		FuseFlags: fuse.FOPEN_KEEP_CACHE,
@@ -198,6 +202,9 @@ type SmallFile struct {
 	fsNode
 	fuseFlags uint32 // fuse.FOPEN_*
 
+	// public indicates if the file can be read without authentication.
+	public bool
+
 	// readData gives whole file data
 	readData func(fctx *fuse.Context) ([]byte, error)
 }
@@ -217,7 +224,10 @@ func NewSmallFile(readData func(*fuse.Context) ([]byte, error)) *SmallFile {
 	return newSmallFile(readData, fuse.FOPEN_DIRECT_IO)
 }
 
-func (f *SmallFile) Open(flags uint32, _ *fuse.Context) (nodefs.File, fuse.Status) {
+func (f *SmallFile) Open(flags uint32, fctx *fuse.Context) (nodefs.File, fuse.Status) {
+	if !f.public && groot != nil && !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
 	return &nodefs.WithFlags{
 		File:      nil,
 		FuseFlags: f.fuseFlags,
@@ -235,6 +245,9 @@ func (f *SmallFile) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) f
 }
 
 func (f *SmallFile) Read(_ nodefs.File, dest []byte, off int64, fctx *fuse.Context) (fuse.ReadResult, fuse.Status) {
+	if !f.public && groot != nil && !groot.isAuthenticated(fctx) {
+		return nil, fuse.EACCES
+	}
 	data, err := f.readData(fctx)
 	if err != nil {
 		return nil, err2LogStatus(err)

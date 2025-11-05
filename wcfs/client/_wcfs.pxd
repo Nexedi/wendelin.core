@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2021  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -44,16 +44,36 @@ cdef extern from "wcfs/client/wcfs_misc.h" namespace "wcfs" nogil:
 
 
 # pyx/nogil description for C++ classes
-cdef extern from "wcfs/client/wcfs_watchlink.h" namespace "wcfs" nogil:
-    cppclass _WatchLink:
+cdef extern from "wcfs/client/wcfs_link.h" namespace "wcfs" nogil:
+    ctypedef refptr[_Link] Link
+
+    cdef cppclass _Link:
+        # Shared methods
         error close()
         error closeWrite()
         pair[string, error] sendReq(context.Context ctx, const string &req)
-        error recvReq(context.Context ctx, PinReq *prx)
-        error replyReq(context.Context ctx, const PinReq *req, const string& reply);
 
         vector[string] fatalv
         chan[structZ]  rx_eof
+
+    Link watchlink_to_link(WatchLink wlink)
+    error _tlinkwrite(Link link, const string& pkt)
+
+
+cdef extern from "wcfs/client/wcfs_authlink.h" namespace "wcfs" nogil:
+    cdef cppclass _AuthLink(_Link):
+        pass
+
+    cppclass AuthLink(refptr[_AuthLink]):
+        error               close          "_ptr()->close"          ()
+        error               closeWrite     "_ptr()->closeWrite"     ()
+        pair[string, error] sendReq        "_ptr()->sendReq"        (context.Context ctx, const string &req)
+
+
+cdef extern from "wcfs/client/wcfs_watchlink.h" namespace "wcfs" nogil:
+    cdef cppclass _WatchLink(_Link):
+        error recvReq(context.Context ctx, PinReq* prx)
+        error replyReq(context.Context ctx, const PinReq* req, const string& reply)
 
     cppclass WatchLink (refptr[_WatchLink]):
         # WatchLink.X = WatchLink->X in C++
@@ -72,14 +92,14 @@ cdef extern from "wcfs/client/wcfs_watchlink.h" namespace "wcfs" nogil:
         Tid     at
         string  msg
 
-    error _twlinkwrite(WatchLink wlink, const string& pkt)
-
 
 cdef extern from "wcfs/client/wcfs.h" namespace "wcfs" nogil:
     cppclass WCFS:
         string  mountpoint
+        string  authkeyfile
 
         pair[WatchLink, error] _openwatch()
+        pair[AuthLink, error]  _openauth()
         pair[Conn, error]      connect(Tid at)
 
     cppclass _Conn:

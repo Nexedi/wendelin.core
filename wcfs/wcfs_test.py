@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -37,6 +37,7 @@ from wendelin.lib.mem import memcpy
 from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.bigfile.tests.test_filezodb import blksize
 from wendelin import wcfs
+from wendelin.conftest import authkey
 
 import transaction
 from persistent import Persistent
@@ -46,17 +47,18 @@ from ZODB.utils import z64, u64, p64
 import sys, os, os.path, subprocess
 import six
 from six.moves._thread import get_ident as gettid
+from signal import SIGKILL
 from time import gmtime
-from errno import EINVAL, ENOTCONN
+from errno import EINVAL, ENOTCONN, ECONNABORTED
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
 from zodbtools.util import ashex as h, fromhex
-from pytest import raises, fail
+from pytest import raises, fail, fixture
 from wendelin.wcfs.internal import io, mm, os as xos, multiprocessing as xmp
 from wendelin.wcfs.internal.wcfs_test import _tWCFS, read_exfault_nogil, SegmentationFault, install_sigbus_trap, fadvise_dontneed
 from wendelin.wcfs.client._wcfs import _tpywlinkwrite as _twlinkwrite
-from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
+from wendelin.wcfs import _is_mountpoint as is_mountpoint, _procwait as procwait, _procwait_ as procwait_, _waitfor as waitfor, _ready as ready, _rmdir_ifexists as rmdir_ifexists
 
 bstr = type(b(''))  # TODO import directly after https://lab.nexedi.com/nexedi/pygolang/-/merge_requests/21 is merged
 
@@ -119,6 +121,16 @@ def teardown_function(f):
 def fuse_unmount(mntpt):
     assert is_mountpoint(mntpt)
     wcfs._fuse_unmount(mntpt)
+
+@fixture(autouse=True)
+def auto_add_authkeyfile(monkeypatch):
+    authkeyfile = wcfs._default_authkeyfile(); assert authkeyfile
+    opt = "-authkeyfile=%s" % authkeyfile
+    start = wcfs.start
+    serve = wcfs.serve
+    _ = lambda attr, func: monkeypatch.setattr(wcfs, attr, func)
+    _("start", lambda *args, **kw: start(*args + (opt,), **kw))
+    _("serve", lambda zurl, optv, **kw: serve(zurl, (optv or []) + [opt], **kw))
 
 
 # ---- test join/autostart/serve ----
@@ -272,21 +284,21 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     # /proc/mounts should now contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
 
-
     # kill the server
-    wcsrv._proc.kill() # sends SIGKILL
-    assert wcsrv._proc.wait() != 0
+    os.kill(wcsrv._proc.pid, SIGKILL)
+    assert procwait_(context.background(), wcsrv._proc)
 
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
         xos.readfile(mntpt + "/.wcfs/zurl")
-    assert exc.value.errno == ENOTCONN
+    # NOTE There is a race between ECONNABORTED (initial state after kill) => ENOTCONN (final state)
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
     assert wcfs._wcregistry[mntpt] is wc
     with raises(IOError) as exc:
         wc.close()
-    assert exc.value.errno == ENOTCONN
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
     assert mntpt not in wcfs._wcregistry
 
     # /proc/mounts should still contain wcfs entry
@@ -361,7 +373,6 @@ class tWCFS(_tWCFS):
         assert os.path.exists(wc.mountpoint)
         assert is_mountpoint(wc.mountpoint)
         t.wc = wc
-        t.pintimeout = float(t.wc._read(".wcfs/pintimeout"))
 
         # multiproc=True indicates that wcfs server will be used by multiple client processes
         t.multiproc=multiproc
@@ -387,9 +398,17 @@ class tWCFS(_tWCFS):
         nogilready.recv()   # wait till _abort_ontimeout enters nogil
 
         t._stats_prev = None
+        t._alinks = set()
+        t.authenticate()
         t.assertStats({'BigFile':   0,  'RevHead':  0,  'ZHeadLink':  0,
                        'WatchLink': 0,  'Watch':    0,  'PinnedBlk':  0,
                        'pin':       0,  'pinkill':  0})
+        t.pintimeout = float(t.wc._read(".wcfs/pintimeout"))
+
+    def authenticate(t):
+        alink = tAuthLink(t)
+        reply = alink.sendReq(timeout(), "auth %s" % authkey)
+        assert reply == b"ok", "authentication failed: %s" % reply
 
     # _abort_ontimeout is in wcfs_test.pyx
 
@@ -436,6 +455,11 @@ class tWCFS(_tWCFS):
                               _on_last_unmount_try=on_last_unomount_try)
         defer(_)
         defer(t.wc.close)
+        def _():
+            for ta in t._alinks.copy():
+                ta.close()
+            assert len(t._alinks) == 0
+        defer(_)
         assert is_mountpoint(t.wc.mountpoint)
 
     # assertStats asserts that content of .wcfs/stats eventually reaches expected state.
@@ -1023,6 +1047,20 @@ class tWatchLink(wcfs.WatchLink):
 
         if not tdb.multiproc:
             tdb.assertStats({'WatchLink': len(tdb._wlinks)})
+
+
+# tAuthLink provides testing environment for /head/auth link opened on wcfs.
+class tAuthLink(wcfs.AuthLink):
+    def __init__(t, tdb):
+        super(tAuthLink, t).__init__(tdb.wc)
+        t.tdb = tdb
+        tdb._alinks.add(t)
+
+    def close(t):
+        tdb = t.tdb
+        tdb._alinks.remove(t)
+        super(tAuthLink, t).close()
+
 
 
 # ---- infrastructure: watch setup/adjust ----

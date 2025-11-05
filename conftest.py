@@ -1,5 +1,5 @@
 # Wendelin.core | pytest config
-# Copyright (C) 2020-2024  Nexedi SA and Contributors.
+# Copyright (C) 2020-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -25,6 +25,7 @@ import transaction
 from golang import func, defer
 from functools import partial
 import os, gc
+import tempfile
 
 # reset transaction synchronizers before every test run.
 #
@@ -101,3 +102,15 @@ def pytest_unconfigure(config):
 def _wcclose_and_stop(wc):
     defer(wc._wcsrv.stop)
     defer(wc.close)
+
+
+authkey = b"test-auth-key-123456"
+@pytest.fixture(scope="session", autouse=True)
+def authkeyfile():
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        f.write(authkey)
+        authkeyfile = f.name
+    os.environ["WENDELIN_CORE_WCFS_AUTHKEYFILE"] = authkeyfile
+    yield
+    if os.path.exists(authkeyfile):
+        os.remove(authkeyfile)

@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -206,6 +206,7 @@
 
 #include "wcfs_misc.h"
 #include "wcfs.h"
+#include "wcfs_authlink.h"
 #include "wcfs_watchlink.h"
 
 #include <wendelin/bigfile/virtmem.h>
@@ -300,6 +301,24 @@ pair<Conn, error> WCFS::connect(zodb::Tid at) {
 
     error err;
 
+    // Open authentication link first
+    AuthLink alink;
+    tie(alink, err) = wc->_openauth();
+    if (err != nil)
+        return make_pair(nil, E(err));
+
+    string authkey;
+    tie(authkey, err) = wc->readAuthKey();
+    if (err != nil) {
+        alink->close();
+        return make_pair(nil, E(err));
+    }
+    err = alink->authenticate(context::background(), authkey);
+    if (err != nil) {
+        alink->close();
+        return make_pair(nil, E(err));
+    }
+
     // TODO support !isolated mode
 
     // need to wait till `wcfs/head/at ≥ at` because e.g. Conn.open stats
@@ -318,6 +337,7 @@ pair<Conn, error> WCFS::connect(zodb::Tid at) {
     wconn->_wc      = wc;
     wconn->_at      = at;
     wconn->_wlink   = wlink;
+    wconn->_alink   = alink;
 
     xos::RegisterAfterFork(newref(
         static_cast<xos::_IAfterFork*>( wconn._ptr() )
@@ -333,6 +353,33 @@ pair<Conn, error> WCFS::connect(zodb::Tid at) {
     return make_pair(wconn, nil);
 }
 
+// readAuthKey reads authentication key from authkeyfile.
+//
+// Returns the authentication key string, or error if reading fails.
+pair<string, error> WCFS::readAuthKey() {
+    WCFS& wc = *this;
+    xerr::Contextf E("%s: readAuthKey", v(wc));
+
+    // Check if authkeyfile is set
+    if (wc.authkeyfile.empty()) {
+        return make_pair("", E(fmt::errorf("authkeyfile not configured")));
+    }
+
+    // Read the authentication key from file
+    string authkey;
+    error err;
+    tie(authkey, err) = os::ReadFile(wc.authkeyfile);
+    if (err != nil) {
+        return make_pair("", E(fmt::errorf("failed to read authkeyfile: %w", err)));
+    }
+
+    if (authkey.empty()) {
+        return make_pair("", E(fmt::errorf("authkeyfile is empty")));
+    }
+
+    return make_pair(authkey, nil);
+}
+
 static global<error> errConnClosed = errors::New("connection closed");
 
 // close releases resources associated with wconn.
@@ -340,8 +387,8 @@ static global<error> errConnClosed = errors::New("connection closed");
 // opened fileh and mappings become invalid to use except close and unmap.
 error _Conn::close() {
     // NOTE keep in sync with Conn.afterFork
-    _Conn& wconn = *this;
 
+    _Conn& wconn = *this;
     // lock virtmem early. TODO more granular virtmem locking (see __pin1 for
     // details and why virt_lock currently goes first)
     virt_lock();
@@ -432,6 +479,10 @@ error _Conn::close() {
     if (!errors::Is(err, context::canceled)) // canceled - ok
         reterr1(err);
 
+    err = wconn._alink->close();
+    if (err != nil)
+        reterr1(err);
+
     xos::UnregisterAfterFork(newref(
         static_cast<xos::_IAfterFork*>( &wconn )
     ));
@@ -514,7 +565,7 @@ error _Conn::__pinner(context::Context ctx) {
         err = wconn._wlink->recvReq(ctx, &req);
         if (err != nil) {
             // it is ok if we receive EOF due to us (client) closing the connection
-            if (err == io::EOF_) {
+            if (errors::Is(err, io::EOF_)) {
                 wconn._filehMu.RLock();
                 err = (wconn._downErr == errConnClosed) ? nil : io::ErrUnexpectedEOF;
                 wconn._filehMu.RUnlock();
