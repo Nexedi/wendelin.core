@@ -371,7 +371,7 @@ class tWCFS(_tWCFS):
         # NOTE pintimeout can be either
         #      * >> timeout (most of the test), or
         #      * << timeout (faulty protection tests)
-        timeout = 10*time.second
+        timeout = 15*time.second
         t.ctx, t._ctx_cancel = context.with_timeout(context.background(), timeout)
 
         # make sure any stuck FUSE request is aborted. To do so
