@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -805,7 +805,7 @@ func diffB(ctx context.Context, a, b *Bucket) (δ map[Key]ΔValue, err error) {
 func vOid(xvalue interface{}) (zodb.Oid, error) {
 	value, ok := xvalue.(zodb.IPersistent)
 	if !ok {
-		return zodb.InvalidOid, fmt.Errorf("%T is not a persitent object", xvalue)
+		return zodb.InvalidOid, fmt.Errorf("%T is not a persistent object", xvalue)
 	}
 	return value.POid(), nil
 }

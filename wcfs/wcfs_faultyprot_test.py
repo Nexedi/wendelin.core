@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -112,7 +112,7 @@ def _bad_watch_no_pin_read(ctx, f, at):
     # -> wcfs must kill us after timing out with sending pin request
     f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
 
-@func   # faulty client that terminates connnection abruptly after receiving pin during watch setup.
+@func   # faulty client that terminates connection abruptly after receiving pin during watch setup.
 def _bad_watch_eof_pin_reply(ctx, f, at):
     wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
 
@@ -213,7 +213,7 @@ def _bad_pinh_no_pin_read(ctx, f, at):
     # sleep > wcfs pin timeout - wcfs must kill us
     f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
 
-@func   # faulty client that terminates connnection abruptly after receiving pin triggered by read.
+@func   # faulty client that terminates connection abruptly after receiving pin triggered by read.
 def _bad_pinh_eof_pin_reply(ctx, f, at):
     wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
 

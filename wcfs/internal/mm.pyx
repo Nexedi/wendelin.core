@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2021  Nexedi SA and Contributors.
+# Copyright (C) 2019-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -167,7 +167,7 @@ def unmap(const unsigned char[::1] mem not None):
 
     return
 
-# map_zero_ro creats new read-only mmaping that all reads as zero.
+# map_zero_ro creates new read-only mmaping that all reads as zero.
 # created mapping, even after it is accessed, does not consume memory.
 def map_zero_ro(size_t size):
     cdef void *addr

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# Copyright (C) 2020-2024  Nexedi SA and Contributors.
+# Copyright (C) 2020-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -297,12 +297,12 @@ def TreesSrv(zstor, r):
                     elif v2 is None:
                         del valdict[k]
 
-            zdummy._p_changed = True # alayws non-empty commit
+            zdummy._p_changed = True # always non-empty commit
             head = commit(subj)
             xprint("%s" % ashex(head))
             continue
 
-        # everything else is considerd to be a tree topology
+        # everything else is considered to be a tree topology
 
         # mark something as changed if the same topology is requested twice.
         # this ensures we can actually make a non-empty commit

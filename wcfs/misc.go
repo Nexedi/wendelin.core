@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -420,7 +420,7 @@ func (sk *FileSock) Close() error {
 
 // Release implements nodefs.File to handle when last user reference to the file is gone.
 //
-// Note: it is not Flush, since Fush is called on close(file) and in general
+// Note: it is not Flush, since Flush is called on close(file) and in general
 // multiple time (e.g. in case of duplicated file descriptor).
 func (f *skFile) Release() {
 	err := f.rx.Close()

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2022  Nexedi SA and Contributors.
+// Copyright (C) 2020-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1111,7 +1111,7 @@ func TestΔBtailForget(t_ *testing.T) {
 	assertΔTtail(t.T, "forget ≤ at3", δbtail, t3, t.Root(),                          )
 
 	// verify aliasing: init/at0 should be aliased, because there is no change @at0
-	// at1 must be unaliased from at0; at3 must be unualiased from at1.
+	// at1 must be unaliased from at0; at3 must be unaliased from at1.
 
 	vδT_at0[2].Rev = 0
 	if vδT_init[2].Rev != 0 {

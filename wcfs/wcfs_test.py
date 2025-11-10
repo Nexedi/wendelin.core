@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -510,7 +510,7 @@ class tWCFS(_tWCFS):
 class tDB(tWCFS):
     # __init__ initializes test database and wcfs.
     #
-    # old_data can be optinally provided to specify ZBigFile revisions to
+    # old_data can be optionally provided to specify ZBigFile revisions to
     # create before wcfs startup. old_data is []changeDelta - see .commit
     # and .change for details.
     @func
