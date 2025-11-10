@@ -97,43 +97,44 @@ class tFaultyClient:
 #
 # This verifies setupWatch codepath.
 
-@func   # faulty client that does not read pin notifications during watch setup.
+@func   # faulty client that behaves in problematic way in its pin handler during watch setup at raw level.
+def __bad_rawwatch_pinh(ctx, f, at, rawpinh, skip_pin_read=False):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # wait for command to start watching
+    _ = f.cin.recv()
+    assert _ == "start watch", _
+
+    # send watch; the write should go ok.
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+
+    if not skip_pin_read:
+        # pin notification must be coming
+        _ = wlf.readline()
+        assert _.startswith(b"2 pin "), _
+        f.cout.send(_[2:].rstrip())  # received message without sequence number and trailing \n
+
+    rawpinh(wlf)
+
+# faulty client that does not read pin notifications during watch setup.
 def _bad_watch_no_pin_read(ctx, f, at):
-    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    def _(wlf):
+        # there is no pin handler, because noone reads pin notifications
+        # -> wcfs must kill us after timing out with sending pin request
+        f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
+    __bad_rawwatch_pinh(ctx, f, at, _, skip_pin_read=True)
 
-    # wait for command to start watching
-    _ = f.cin.recv()
-    assert _ == "start watch", _
-
-    # send watch; the write should go ok.
-    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
-
-    # there is no pin handler, because noone reads pin notifications
-    # -> wcfs must kill us after timing out with sending pin request
-    f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
-
-@func   # faulty client that terminates connection abruptly after receiving pin during watch setup.
+# faulty client that terminates connection abruptly after receiving pin during watch setup.
 def _bad_watch_eof_pin_reply(ctx, f, at):
-    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    def _(wlf):
+        # we don't reply to pin notification and just close the connection instead
+        # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
+        wlf.close()
 
-    # wait for command to start watching
-    _ = f.cin.recv()
-    assert _ == "start watch", _
+        # wcfs must kill us right after receiving EOF
+        f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
+    __bad_rawwatch_pinh(ctx, f, at, _)
 
-    # send watch; the write should go ok.
-    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
-
-    # pin notification must be coming
-    _ = wlf.readline()
-    assert _.startswith(b"2 pin "), _
-    f.cout.send(_[2:].rstrip())  # received message without sequence number and trailing \n
-
-    # we don't reply to pin notification and just close the connection instead
-    # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
-    wlf.close()
-
-    # wcfs must kill us right after receiving EOF
-    f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
 
 
 @func   # faulty client that behaves in problematic way in its pin handler during watch setup.
@@ -200,40 +201,42 @@ def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
 #
 # This verifies readPinWatchers codepath.
 
-@func   # faulty client that does not read pin notifications triggered by read.
+@func   # faulty client that behaves in problematic way in its raw pin notifications triggered by read.
+def __bad_rawpinh(ctx, f, at, rawpinh, skip_pin_read=False):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # initial watch setup goes ok
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+    _ = wlf.readline()
+    assert _ == b"1 ok\n",  _
+    f.cout.send("f: watch setup ok")
+
+    if not skip_pin_read:
+        # wait for "pin ..." due to read access in the parent
+        _ = wlf.readline()
+        assert _.startswith(b"2 pin "), _
+        f.cout.send(_[2:].rstrip())
+
+    rawpinh(wlf)
+
+# faulty client that does not read pin notifications triggered by read.
 def _bad_pinh_no_pin_read(ctx, f, at):
-    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    def _(wlf):
+        # sleep > wcfs pin timeout - wcfs must kill us
+        f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
+    __bad_rawpinh(ctx, f, at, _, skip_pin_read=True)
 
-    # initial watch setup goes ok
-    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
-    _ = wlf.readline()
-    assert _ == b"1 ok\n",  _
-    f.cout.send("f: watch setup ok")
-
-    # sleep > wcfs pin timeout - wcfs must kill us
-    f.assertKilled(ctx, "wcfs did not kill client that does not read pin requests")
-
-@func   # faulty client that terminates connection abruptly after receiving pin triggered by read.
+# faulty client that terminates connection abruptly after receiving pin triggered by read.
 def _bad_pinh_eof_pin_reply(ctx, f, at):
-    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    def _(wlf):
+        # close connection abruptly.
+        # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
+        wlf.close()
 
-    # initial watch setup goes ok
-    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
-    _ = wlf.readline()
-    assert _ == b"1 ok\n",  _
-    f.cout.send("f: watch setup ok")
+        # wcfs must kill us right after receiving EOF
+        f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
+    __bad_rawpinh(ctx, f, at, _)
 
-    # wait for "pin ..." due to read access in the parent
-    _ = wlf.readline()
-    assert _.startswith(b"2 pin "), _
-    f.cout.send(_[2:].rstrip())
-
-    # close connection abruptly.
-    # NOTE it is different from WatchLink.closeWrite which sends "bye" before doing OS-level close
-    wlf.close()
-
-    # wcfs must kill us right after receiving EOF
-    f.assertKilled(ctx, "wcfs did not kill client that replied EOF to pin")
 
 @func   # faulty client that behaves in problematic way in its pin notifications triggered by read.
 def __bad_pinh(ctx, f, at, pinh):
