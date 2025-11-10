@@ -113,7 +113,7 @@ def __bad_rawwatch_pinh(ctx, f, at, rawpinh, skip_pin_read=False):
         _ = wlf.readline()
         assert _.startswith(b"2 pin "), _
         f.cout.send(_[2:].rstrip())  # received message without sequence number and trailing \n
-
+                                     # (same as what WatchLink.recvReq returns)
     rawpinh(wlf)
 
 # faulty client that does not read pin notifications during watch setup.
