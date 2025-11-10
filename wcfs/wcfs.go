@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2024  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -1491,6 +1491,8 @@ type PinError struct {
 	blk int64
 	rev zodb.Tid
 	err error
+
+	deadline time.Time // original pin handler deadline
 }
 
 func (e *PinError) Error() string {
@@ -1501,10 +1503,25 @@ func (e *PinError) Unwrap() error {
 	return e.err
 }
 
+// PinLogicError is PinError cause that indicates that pinning a block failed due
+// to logic error in over-WatchLink exchange.
+type PinLogicError struct {
+	err error
+}
+
+func (e *PinLogicError) Error() string {
+	return e.err.Error()
+}
+
+func (e *PinLogicError) Unwrap() error {
+	return e.err
+}
+
 func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) {
+	deadline, _ := ctx.Deadline()
 	defer func() {
 		if err != nil {
-			err = &PinError{blk, rev, err}
+			err = &PinError{blk, rev, err, deadline}
 		}
 	}()
 
@@ -1575,12 +1592,12 @@ func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) 
 	}
 
 	if ack != "ack" {
-		blkpin.err = fmt.Errorf("expect %q; got %q", "ack", ack)
+		blkpin.err = &PinLogicError{fmt.Errorf("expect %q; got %q", "ack", ack)}
 		return blkpin.err
 	}
 
 	if blkpin != w.pinned[blk] {
-		blkpin.err = fmt.Errorf("BUG: pinned[#%d] mutated while doing IO", blk)
+		blkpin.err = &PinLogicError{fmt.Errorf("BUG: pinned[#%d] mutated while doing IO", blk)}
 		panicf("f<%s>: wlink%d: %s", foid, w.link.id, blkpin.err)
 	}
 
@@ -1594,9 +1611,38 @@ func (w *Watch) __pin(ctx context.Context, blk int64, rev zodb.Tid) (err error) 
 // fatal error if the client could not be killed as wcfs no longer can
 // continue to provide correct uncorrupted data to it. The filesystem is
 // switched to EIO mode in such case.
-func (wlink *WatchLink) badPinKill(reason error) {
-	pid := wlink.client.Pid
+func (wlink *WatchLink) badPinKill(reason *PinError) {
+	// the error reason could be due to OS terminating client process and automatically closing
+	// its file descriptors including fd for watchlink communication. If that is indeed the case
+	// we are ok to go as is because the client will soon be already terminated / in zombie
+	// state. Do not log an error nor increase pinkill counter in such case because it is normal.
+	//
+	// NOTE Linux first closes opened file descriptors and only then sets process to zombie state.
+	//      That's why we need to wait a bit while checking whether process is terminated or not.
+	var elogic *PinLogicError
+	switch {
+	default:
+		// any kind of prompt IO error
+		// wait a bit, but cap waiting time to original pin handling timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		ctx, cancel = context.WithDeadline(ctx, reason.deadline)
+		defer cancel()
+		dead, err := waitProcessEnd(ctx, wlink.client)
+		if err == nil && dead {
+			return
+		}
+	case errors.Is(reason, context.DeadlineExceeded):
+		// timed out while waiting for reply, still check just in case
+		alive, err := isProcessAlive(wlink.client)
+		if err == nil && !alive {
+			return
+		}
+	case errors.As(reason, &elogic):
+		// bad reply over watchlink is always bad
+	}
 
+	pid := wlink.client.Pid
 	logf := func(format string, argv ...any) {
 		emsg := fmt.Sprintf("pid%d: ", pid)
 		emsg += fmt.Sprintf(format, argv...)
@@ -2047,9 +2093,8 @@ func (wlink *WatchLink) shutdown(reason error) {
 		wlink.serveCancel()
 
 		// give client a chance to be notified if shutdown was due to some logical error
-		kill := false
+		kreason, kill := reason.(*PinError)
 		if reason != nil {
-			_, kill = reason.(*PinError)
 			emsg := "error: "
 			if kill {
 				emsg = "fatal: "
@@ -2063,7 +2108,7 @@ func (wlink *WatchLink) shutdown(reason error) {
 
 		// kill client if shutdown is due to faulty pin handling
 		if kill {
-			wlink.badPinKill(reason) // only fatal error
+			wlink.badPinKill(kreason) // only fatal error
 		}
 
 		// NOTE unregistering watches and wlink itself is done on serve exit, not

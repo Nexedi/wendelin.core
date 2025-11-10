@@ -29,7 +29,6 @@ from wendelin import wcfs
 from golang import select, func, defer
 from golang import context, sync, time
 
-import pytest
 from pytest import mark, fixture
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, \
         setup_module, teardown_module, setup_function, teardown_function
@@ -174,7 +173,7 @@ def _bad_watch_nak_pin_reply(ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinne
 @mark.parametrize('faulty', [
     _bad_watch_no_pin_read,
     _bad_watch_no_pin_reply,
-    pytest.param(_bad_watch_stop_on_pin, marks=mark.xfail),
+    _bad_watch_stop_on_pin,
     _bad_watch_eof_pin_reply,
     _bad_watch_nak_pin_reply,
 ])
@@ -280,7 +279,7 @@ def _bad_pinh_nak_pin_reply(ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_nak_p
 @mark.parametrize('faulty', [
     _bad_pinh_no_pin_read,
     _bad_pinh_no_pin_reply,
-    pytest.param(_bad_pinh_stop_on_pin, marks=mark.xfail),
+    _bad_pinh_stop_on_pin,
     _bad_pinh_eof_pin_reply,
     _bad_pinh_nak_pin_reply,
 ])
