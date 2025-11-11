@@ -50,7 +50,7 @@ import stat
 from six.moves._thread import get_ident as gettid
 from signal import SIGKILL
 from time import gmtime
-from errno import EINVAL, ENOTCONN
+from errno import EINVAL, ENOTCONN, ECONNABORTED
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
@@ -282,13 +282,14 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
         xos.readfile(mntpt + "/.wcfs/zurl")
-    assert exc.value.errno == ENOTCONN
+    # NOTE There is a race between ECONNABORTED (initial state after kill) => ENOTCONN (final state)
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
     assert wcfs._wcregistry[mntpt] is wc
     with raises(IOError) as exc:
         wc.close()
-    assert exc.value.errno == ENOTCONN
+    assert exc.value.errno in (ENOTCONN, ECONNABORTED)
     assert mntpt not in wcfs._wcregistry
 
     # /proc/mounts should still contain wcfs entry
