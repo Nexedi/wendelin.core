@@ -440,7 +440,8 @@ func (f *skFile) Release() {
 // fatalEIO switches filesystem into EIO mode and terminates the program.
 func fatalEIO() {
 	// log.Fatal terminates the program and so any attempt to access
-	// was-mounted filesystem starts to return ENOTCONN
+	// was-mounted filesystem starts to return ENOTCONN.
+	// NOTE ECONNABORTED is returned while server shutdown is inprogress.
 	log.Fatal("switching filesystem to EIO mode")
 }
 

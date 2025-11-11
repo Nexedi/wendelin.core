@@ -73,7 +73,7 @@ import os, sys, hashlib, subprocess, stat
 import logging; log = logging.getLogger('wcfs')
 from os.path import dirname
 from stat import S_ISDIR
-from errno import ENOENT, ENOTCONN, EEXIST
+from errno import ENOENT, ENOTCONN, ECONNABORTED, EEXIST
 from signal import SIGTERM, SIGQUIT, SIGKILL
 
 from golang import chan, select, default, func, defer, b
@@ -249,7 +249,7 @@ def _try_attach_wcsrv(mntpt): # -> (fwcfs, trylockstartf)
     except IOError as e:
         if   e.errno == ENOENT:     # wcfs cleanly unmounted
             pass
-        elif e.errno == ENOTCONN:   # wcfs crashed/killed
+        elif e.errno in (ENOTCONN, ECONNABORTED):   # wcfs crashed/killed or crash/kill inprogress
             unclean = True
         else:
             raise
@@ -365,7 +365,7 @@ def _waitmount(ctx, zurl, mntpt): # -> fwcfs
         try:
             f = open("%s/.wcfs/zurl" % mntpt)
         except IOError as e:
-            # ENOTCONN (wcfs crashed/killed) is an error here
+            # ENOTCONN|ECONNABORTED (wcfs crashed/killed or crash/kill inprogress) is an error here
             if e.errno != ENOENT:
                 raise
         else:
@@ -470,13 +470,13 @@ def __stop(wcsrv, ctx, _on_wcfs_stuck, _on_fs_busy, _on_last_unmount_try):
         # NOTE if we do `fusermount -uz` (lazy unmount = MNT_DETACH), we will
         #      remove the mount from filesystem tree and /proc/mounts, but the
         #      clients will be left alive and using the old filesystem which is
-        #      left in a bad ENOTCONN state. From this point of view restart of
-        #      the clients is more preferred compared to leaving them running
-        #      but actually disconnected from the data.
+        #      left in a bad ENOTCONN/ECONNABORTED state. From this point of
+        #      view restart of the clients is more preferred compared to
+        #      leaving them running but actually disconnected from the data.
         #
-        # TODO try to teach wcfs clients to detect filesystem in ENOTCONN state
-        #      and reconnect automatically instead of being killed. Then we could
-        #      use MNT_DETACH.
+        # TODO try to teach wcfs clients to detect filesystem in ENOTCONN/ECONNABORTED
+        #      state and reconnect automatically instead of being killed. Then
+        #      we could use MNT_DETACH.
         if _is_mountpoint(wcsrv.mountpoint):
             lsof = list(wcsrv._mnt.lsof())
             for (proc, use) in lsof:
@@ -908,15 +908,16 @@ def _lsof(mnt): # -> str
 # _is_mountpoint returns whether path is a mountpoint
 def _is_mountpoint(path):    # -> bool
     # NOTE we don't call mountpoint directly on path, because if FUSE
-    # fileserver failed, the mountpoint will also fail and print ENOTCONN
+    # fileserver failed, the mountpoint will also fail and print ENOTCONN/ECONNABORTED
     try:
         _ = os.lstat(path)
     except OSError as e:
         if e.errno == ENOENT:
             return False
-        # "Transport endpoint is not connected" -> it is a failed FUSE server
+        # "Transport endpoint is not connected" -> it is a failed  FUSE server
+        # "Software caused connection abort"    -> if is a failing FUSE server
         # (XXX we can also grep /proc/mounts)
-        if e.errno == ENOTCONN:
+        if e.errno in (ENOTCONN, ECONNABORTED):
             return True
         raise
 

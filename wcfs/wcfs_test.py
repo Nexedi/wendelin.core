@@ -48,7 +48,7 @@ import six
 from six.moves._thread import get_ident as gettid
 from signal import SIGKILL
 from time import gmtime
-from errno import EINVAL, ENOTCONN
+from errno import EINVAL, ENOTCONN, ECONNABORTED
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
 from golang import go, chan, select, func, defer, error, b
 from golang import context, errors, sync, time
@@ -279,21 +279,43 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
     procwait(timeout(), wcsrv._proc)
 
     # access to filesystem should raise "Transport endpoint not connected"
-    with raises(IOError) as exc:
+    # though interim "Software caused connection abort" might be returned
+    # because automatic /dev/fuse closure done by kernel is asynchronous.
+    def _():
         xos.readfile(mntpt + "/.wcfs/zurl")
-    assert exc.value.errno == ENOTCONN
+    assertENOTCONN(_)
 
     # client close should also raise "Transport endpoint not connected" but remove wc from _wcregistry
     assert wcfs._wcregistry[mntpt] is wc
-    with raises(IOError) as exc:
-        wc.close()
-    assert exc.value.errno == ENOTCONN
+    assertENOTCONN(wc.close)
     assert mntpt not in wcfs._wcregistry
 
     # /proc/mounts should still contain wcfs entry
     assert procmounts_lookup_wcfs(zurl) == mntpt
 
     return wc
+
+# assertENOTCONN asserts that eventually call to f() raises IOError(ENOTCONN).
+#
+# During interim period ECONNABORTED is also allowed because when wcfs server
+# is in-progress of crashing or being killed, that might be the error returned
+# by kernel for any filesystem access. See the following linux v6.19-rc7
+# callchains for details:
+#
+#   exit_files->put_files_struct->close_files->filp_close->fput_close->__fput_deferred
+#   fuse_lookup->...->fuse_get_req
+def assertENOTCONN(f):
+    ctx = timeout()
+    while 1:
+        with raises(IOError) as exc:
+            f()
+        err = exc.value.errno
+        assert err in (ENOTCONN, ECONNABORTED)
+        if err == ENOTCONN:
+            break
+        if ctx.err() is not None:
+            assert err == ENOTCONN, "timeout waiting to reach ENOTCONN"
+        tdelay()
 
 
 # ---- infrastructure for data access tests ----
@@ -1918,7 +1940,8 @@ def test_wcfs_watch_2files():
 # ----------------------------------------
 
 # verify that wcfs switches to EIO mode after zwatcher failure.
-# in EIO mode accessing anything on the filesystem returns ENOTCONN error.
+# in EIO mode accessing anything on the filesystem returns ENOTCONN, and
+# ECONNABORTED while the switch is inprogress.
 @func
 def test_wcfs_eio_after_zwatcher_fail(capfd):
     # we will use low-level tWCFS instead of tDB for precise control of access
@@ -1937,9 +1960,7 @@ def test_wcfs_eio_after_zwatcher_fail(capfd):
     # start wcfs
     t = tWCFS()
     def _():
-        with raises(IOError) as exc:
-            t.close()
-        assert exc.value.errno == ENOTCONN
+        assertENOTCONN(t.close)
     defer(_)
     t.wc._stat("head/bigfile/%s" % h(zf._p_oid))  # wcfs starts to track zf
 
@@ -1969,9 +1990,9 @@ def test_wcfs_eio_after_zwatcher_fail(capfd):
 
     # verify that accessing any file returns ENOTCONN after the switch
     def checkeio(path):
-        with raises(IOError) as exc:
+        def _():
             t.wc._read(path)
-        assert exc.value.errno == ENOTCONN
+        assertENOTCONN(_)
 
     checkeio(".wcfs/zurl")
     checkeio("head/at")
