@@ -46,6 +46,7 @@ from ZODB.utils import z64, u64, p64
 import sys, os, os.path, subprocess
 import six
 from six.moves._thread import get_ident as gettid
+from signal import SIGKILL
 from time import gmtime
 from errno import EINVAL, ENOTCONN
 from resource import setrlimit, getrlimit, RLIMIT_MEMLOCK
@@ -274,8 +275,8 @@ def start_and_crash_wcfs(zurl, mntpt): # -> WCFS
 
 
     # kill the server
-    wcsrv._proc.kill() # sends SIGKILL
-    assert wcsrv._proc.wait() != 0
+    os.kill(wcsrv._proc.pid, SIGKILL)
+    procwait(timeout(), wcsrv._proc)
 
     # access to filesystem should raise "Transport endpoint not connected"
     with raises(IOError) as exc:
@@ -2048,6 +2049,16 @@ def _test_wcfs_main(cmd, argv, argv_ok):
 
     assert run['ok'],               run
     assert run['argv'] == argv_ok,  (run, argv_ok)
+
+
+# verify that wcfs.Server._stuckdump does not crash when wcfs.Server was spawned by us.
+# (it used to crash because in that case wcsrv._proc was subprocess.Popen, not xos.Proc)
+@func
+def test_wcfs_stuckdump_crash_after_start():
+    wcsrv = wcfs.start(testzurl)
+    defer(wcsrv.stop)
+
+    wcsrv._stuckdump()  # used to AttributeError: 'Popen' object has no attribute 'get'
 
 
 # ---- misc ---
