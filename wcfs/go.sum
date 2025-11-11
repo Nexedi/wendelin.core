@@ -233,6 +233,8 @@ lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf h1:UwAEraoydFHxDqud
 lab.nexedi.com/kirr/go123 v0.0.0-20230822135329-95433de34faf/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=
 lab.nexedi.com/kirr/go123 v0.0.0-20240626173136-48920809d24c h1:GboU09uDjU09xORiCgCco5hPI4pmMOw6Qye2hJNal70=
 lab.nexedi.com/kirr/go123 v0.0.0-20240626173136-48920809d24c/go.mod h1:pwDpdCuvtz0QxisDzV/z9eUb9zc/rMQec520h4i8VWQ=
+lab.nexedi.com/kirr/go123 v0.0.0-20250817102603-bdd89cab9f4a h1:v6AAVN/YJTq5XHCKLvpRf+eRQZi5wOzRyxuimto2j0E=
+lab.nexedi.com/kirr/go123 v0.0.0-20250817102603-bdd89cab9f4a/go.mod h1:PW4cxl3svURSFmomv8ZHCqw9zj1D0S2ywwPDBZZ1UGQ=
 lab.nexedi.com/kirr/neo/go v0.0.0-20240723085959-839ee634bd66 h1:xAQcab3p0CiJ36aLqNGB8kH6hpsalgOnEL9D5CZgoN0=
 lab.nexedi.com/kirr/neo/go v0.0.0-20240723085959-839ee634bd66/go.mod h1:0Wk1qKrdjMWr8njsuBIbgPMBNjPlNFozuBDe15Lqq6A=
 lab.nexedi.com/kirr/neo/go v0.0.0-20240806095154-6fb93a602cbe h1:E8qMqhZJlVtsNTzVxdj2zsDq8XJx/QOBODGhid9gqxM=
