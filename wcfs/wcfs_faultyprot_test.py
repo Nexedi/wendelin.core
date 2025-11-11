@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (C) 2018-2024  Nexedi SA and Contributors.
+# Copyright (C) 2018-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,6 +22,8 @@ protection against slow/faulty clients in isolation protocol."""
 
 from __future__ import print_function, absolute_import
 
+import sys
+
 from wendelin.lib.zodb import zstor_2zurl
 from wendelin.wcfs.internal import multiprocessing as xmp
 from wendelin import wcfs
@@ -29,7 +31,7 @@ from wendelin import wcfs
 from golang import select, func, defer
 from golang import context, sync, time
 
-from pytest import mark, fixture
+from pytest import mark, fixture, raises
 from wendelin.wcfs.wcfs_test import tDB, h, tAt, \
         setup_module, teardown_module, setup_function, teardown_function
 
@@ -159,14 +161,35 @@ def __bad_watch_pinh(ctx, f, at, pinh, pinhFailReason):
 def _bad_watch_no_pin_reply (ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_no_pin_reply,  "is stuck")
 def _bad_watch_nak_pin_reply(ctx, f, at):  __bad_watch_pinh(ctx, f, at, f._pinner_nak_pin_reply, "replies nak")
 
+@func  # client that stops itself just after it received pin request
+def _bad_watch_suicide(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+
+    # wait for command to start watching
+    _ = f.cin.recv()
+    assert _ == "start watch", _
+
+    # send watch; the write should go ok.
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+
+    f.cout.send(wlf.readline())
+
+    # Instead of replying to pin request: just exit
+    # (simulate client that stops itself).
+    sys.exit(1)
+
 @mark.parametrize('faulty', [
     _bad_watch_no_pin_read,
     _bad_watch_no_pin_reply,
     _bad_watch_eof_pin_reply,
     _bad_watch_nak_pin_reply,
+    _bad_watch_suicide,
 ])
 @func
 def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
+    # In case client exits by itself, WCFS must not kill client.
+    must_kill = faulty != _bad_watch_suicide
+
     t = tDB(multiproc=True); zf = t.zfile
     defer(t.close)
 
@@ -182,17 +205,29 @@ def test_wcfs_pinhfaulty_kill_on_watch(faulty, with_prompt_pintimeout):
 
     # wait till faulty client issues its watch, receives pin and pauses/misbehaves
     p.send("start watch")
+
+    # Only the suicide client sends the full pin notification line including
+    # the sequence number prefix ("2 ") and trailing newline.
+    # Other faulty clients send just the pin message without the prefix or newline
+    # simulating partial or malformed responses.
     if faulty != _bad_watch_no_pin_read:
-        assert p.recv(t.ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 2, h(at1))
+        expected = b"2 pin %s #%d @%s\n" % (h(zf._p_oid), 2, h(at1))
+        if must_kill:
+            expected = expected[2:-1]
+        assert p.recv(t.ctx) == expected
 
     # issue our watch request - it should be served well and without any delay
     wl = t.openwatch()
     wl.watch(zf, at1, {2:at1})
 
     # the faulty client must become killed by wcfs
-    p.join(t.ctx)
+    if must_kill:
+        p.join(t.ctx)
+    else:
+        with raises(SystemExit):
+            p.join(t.ctx)
     assert p.exitcode is not None
-    t.assertStats({'pinkill': 1})
+    t.assertStats({'pinkill': must_kill})
 
 
 # verify that wcfs kills slow/faulty client who does not handle pin
@@ -250,14 +285,30 @@ def __bad_pinh(ctx, f, at, pinh):
 def _bad_pinh_no_pin_reply (ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_no_pin_reply)
 def _bad_pinh_nak_pin_reply(ctx, f, at):  __bad_pinh(ctx, f, at, f._pinner_nak_pin_reply)
 
+@func  # client that stops itself just after it received pin request
+def _bad_pin_suicide(ctx, f, at):
+    wlf = f.wc._open("head/watch", mode='r+b')  ; defer(wlf.close)
+    # initial watch setup goes ok
+    wlf.write(b"1 watch %s @%s\n" % (h(f.zfile_oid), h(at)))
+    _ = wlf.readline()
+    assert _ == b"1 ok\n",  _
+    f.cout.send("f: watch setup ok")
+    f.cout.send(wlf.readline())
+    # Instead of replying to pin request: just exit
+    # (simulate client that stops itself).
+    sys.exit(1)
+
 @mark.parametrize('faulty', [
     _bad_pinh_no_pin_read,
     _bad_pinh_no_pin_reply,
     _bad_pinh_eof_pin_reply,
     _bad_pinh_nak_pin_reply,
+    _bad_pin_suicide,
 ])
 @func
 def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
+    # In case client exits by itself, WCFS must not kill client.
+    must_kill = faulty != _bad_pin_suicide
     t = tDB(multiproc=True); zf = t.zfile; at0=t.at0
     defer(t.close)
 
@@ -286,14 +337,25 @@ def test_wcfs_pinhfaulty_kill_on_access(faulty, with_prompt_pintimeout):
         f.assertBlk(1, 'b3', {wl: {1:at0}}, timeout=2*t.pintimeout)
     wg.go(_)
     def _(ctx):
+        # Only the suicide client sends the full pin notification line including
+        # the sequence number prefix ("2 ") and trailing newline.
+        # Other faulty clients send just the pin message without the prefix or newline
+        # simulating partial or malformed responses.
         if faulty != _bad_pinh_no_pin_read:
-            assert p.recv(ctx) == b"pin %s #%d @%s" % (h(zf._p_oid), 1, h(at0))
+            expected = b"2 pin %s #%d @%s\n" % (h(zf._p_oid), 1, h(at0))
+            if must_kill:
+                expected = expected[2:-1]
+            assert p.recv(t.ctx) == expected
     wg.go(_)
     wg.wait()
 
-    p.join(t.ctx)
+    if must_kill:
+        p.join(t.ctx)
+    else:
+        with raises(SystemExit):
+            p.join(t.ctx)
     assert p.exitcode is not None
-    t.assertStats({'pinkill': 1})
+    t.assertStats({'pinkill': must_kill})
 
 
 # _pinner_<problem> simulates faulty pinner inside client that behaves in
