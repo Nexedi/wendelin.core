@@ -10,7 +10,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/shirou/gopsutil/v4 v4.24.8
 	github.com/stretchr/testify v1.9.0
-	lab.nexedi.com/kirr/go123 v0.0.0-20240626173136-48920809d24c
+	lab.nexedi.com/kirr/go123 v0.0.0-20250817102603-bdd89cab9f4a
 	lab.nexedi.com/kirr/neo/go v0.0.0-20240924102820-6235fb602308
 )
 
