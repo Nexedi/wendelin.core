@@ -1,4 +1,4 @@
-# Copyright (C) 2019-2021  Nexedi SA and Contributors.
+# Copyright (C) 2019-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -18,6 +18,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: legacy_implicit_noexcept=True
 
 """Package mm provides access to OS memory management interfaces like mlock and mincore."""
 
