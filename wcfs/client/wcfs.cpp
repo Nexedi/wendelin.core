@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022  Nexedi SA and Contributors.
+// Copyright (C) 2018-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -65,11 +65,9 @@
 // OS-level files can also go beyond file size, however accessing memory
 // corresponding to file region after file.size triggers SIGBUS. To preserve
 // wendelin.core semantic wcfs client mmaps-in zeros for Mapping regions after
-// wcfs/head/f.size. For simplicity it is assumed that bigfiles only grow and
-// never shrink. It is indeed currently so, but will have to be revisited
-// if/when wendelin.core adds bigfile truncation. Wcfs client restats
-// wcfs/head/f at every transaction boundary (Conn.resync) and remembers f.size
-// in FileH._headfsize for use during one transaction(%).
+// wcfs/head/f.size. Wcfs client restats wcfs/head/f at every transaction boundary
+// (Conn.resync) and remembers f.size in FileH._headfsize for use during one
+// transaction(%).
 //
 //
 // Integration with wendelin.core virtmem layer
@@ -634,6 +632,12 @@ error _Conn::__pin1(PinReq *req) {
             BigFileH *virt_fileh = mmap->vma->fileh;
             TODO (mmap->fileh->blksize != virt_fileh->ramh->ram->pagesize);
             do_pin = !__fileh_page_isdirty(virt_fileh, req->blk);
+
+            Page *page = pagemap_get(&virt_fileh->pagemap, req->blk);
+            if (page && page->state == PAGE_DESTROYED) {
+                do_pin = false;
+            }
+
         }
 
         if (do_pin)
@@ -760,10 +764,24 @@ error _Conn::resync(zodb::Tid at) {
         if ((size_t)st.st_blksize != f->blksize)    // blksize must not change
             return E(fmt::errorf("wcfs bug: blksize changed: %zd -> %ld", f->blksize, st.st_blksize));
         auto headfsize = st.st_size;
-        if (!(f->_headfsize <= headfsize))          // head/file size ↑=
-            return E(fmt::errorf("wcfs bug: head/file size not ↑="));
         if (!(headfsize % f->blksize == 0))
             return E(fmt::errorf("wcfs bug: head/file size %% blksize != 0"));
+
+        // If file size shrank, zero removed regions in all mappings to prevent SIGBUS
+        if (f->_headfsize > headfsize) {
+            for (auto mapping : f->_mmaps) {
+                size_t blk_offset = mapping->blk_start * f->blksize;
+                uint8_t* zero_start = max(mapping->mem_start,
+                    mapping->mem_start + (headfsize - blk_offset));
+                uint8_t* zero_end = min(mapping->mem_stop,
+                    mapping->mem_start + (f->_headfsize - blk_offset));
+                if (zero_end > zero_start) {
+                    err = mmap_zero_into_ro(zero_start, zero_end - zero_start);
+                    if (err != nil)
+                        return E(err);
+                }
+            }
+        }
 
         // replace zero regions in f mappings in accordance to adjusted f._headfsize.
         // NOTE it is ok to access f._mmaps without locking f._mmapMu because we hold wconn.atMu.W
@@ -1174,7 +1192,8 @@ pair<Mapping, error> _FileH::mmap(int64_t blk_start, int64_t blk_len, VMA *vma) 
     });
 
     // part of mmapped region is beyond file size - mmap that with zeros - else
-    // access to memory after file.size will raise SIGBUS. (assumes head/f size ↑=)
+    // access to memory after file.size will raise SIGBUS. (assumes head/f size ↑=
+    // during one transaction)
     if (stop > f._headfsize) {
         uint8_t *zmem_start = mem_start + (max(f._headfsize, start) - start);
         err = mmap_zero_into_ro(zmem_start, mem_stop - zmem_start);
@@ -1352,7 +1371,8 @@ error _Mapping::_remmapblk(int64_t blk, zodb::Tid at) {
         return E(fmt::errorf("wcfs bug: blksize changed: %zd -> %ld", f->blksize, st.st_blksize));
 
     // block is beyond file size - mmap with zeros - else access to memory
-    // after file.size will raise SIGBUS. (assumes head/f size ↑=)
+    // after file.size will raise SIGBUS. (assumes head/f size ↑= during one
+    // transaction)
     if ((blk+1)*f->blksize > (size_t)st.st_size) {
         err = mmap_zero_into_ro(blkmem, 1*f->blksize);
         if (err != nil)
