@@ -18,6 +18,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: legacy_implicit_noexcept=True
 
 """Package mm provides access to OS memory management interfaces like mlock and mincore."""
 
