@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -230,7 +231,7 @@ func (f *SmallFile) GetAttr(out *fuse.Attr, _ nodefs.File, fctx *fuse.Context) f
 		return err2LogStatus(err)
 	}
 	out.Size = uint64(len(data))
-	out.Mode = fuse.S_IFREG | 0644
+	out.Mode = fuse.S_IFREG | 0440
 	return fuse.OK
 }
 
@@ -266,9 +267,10 @@ func mkfile(parent nodefs.Node, name string, child nodefs.Node) {
 
 
 // mount is like nodefs.MountRoot but allows to pass in full fuse.MountOptions.
-func mount(mntpt string, root nodefs.Node, opts *fuse.MountOptions) (*fuse.Server, *nodefs.FileSystemConnector, error) {
+func mount(mntpt string, root nodefs.Node, opts *fuse.MountOptions, gid uint32) (*fuse.Server, *nodefs.FileSystemConnector, error) {
 	nodefsOpts := nodefs.NewOptions()
 	nodefsOpts.Debug = opts.Debug
+	nodefsOpts.Owner = &fuse.Owner{Uid: uint32(os.Getuid()), Gid: gid}
 
 	return nodefs.Mount(mntpt, root, opts, nodefsOpts)
 }
@@ -514,6 +516,42 @@ func isoRevstr(rev zodb.Tid) string {
 		return "head"
 	}
 	return rev.String()
+}
+
+// parseSharewith returns the GID to use based on the optional -sharewith flag.
+//
+//	-sharewith group:XXX
+func parseSharewith(sharewith *string) uint32 {
+	gid := uint32(os.Getgid())
+	if sharewith != nil && *sharewith != "" {
+		if parsed, err := _parseSharewith(*sharewith); err == nil {
+			gid = parsed
+		} else {
+			log.Errorf("couldn't parse sharewith %q — fallback to default GID: %v", *sharewith, err)
+		}
+	}
+	return gid
+}
+
+func _parseSharewith(sharewith string) (uint32, error) {
+	var groupName string
+	// expected format: "group:NAME"
+	n, err := fmt.Sscanf(sharewith, "group:%s", &groupName)
+	if n != 1 || err != nil {
+		return 0, fmt.Errorf("invalid -sharewith syntax, expected: group:NAME")
+	}
+
+	grp, err := user.LookupGroup(groupName)
+	if err != nil {
+		return 0, fmt.Errorf("cannot find group %q: %v", groupName, err)
+	}
+
+	gid, err := strconv.Atoi(grp.Gid)
+	if err != nil {
+		return 0, fmt.Errorf("invalid GID %q for group %q: %v", grp.Gid, groupName, err)
+	}
+
+	return uint32(gid), nil
 }
 
 // ---- make df happy (else it complains "function not supported") ----

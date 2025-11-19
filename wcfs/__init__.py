@@ -97,9 +97,7 @@ from wendelin.wcfs.internal import os as xos, multiprocessing as xmp
 # Use start to create it.
 class Server:
     # ._mnt         mount entry
-    # ._proc        wcfs process:
-    #                   \/ subprocess.Popen     ; we spawned it
-    #                   \/ xos.Proc | None      ; we discovered it during status or stop
+    # ._proc        wcfs process: xos.Proc
     # ._fuseabort   opened /sys/fs/fuse/connections/X/abort for server's mount
     # ._stopOnce
     pass
@@ -325,7 +323,8 @@ def _start(zurl, *optv): # -> Server, fwcfs
                 raise ctx.err()
             if _ == 1:
                 # startup was ok - don't monitor spawned wcfs any longer
-                wcsrv._proc = proc
+                pdbc = xos.ProcDB.open(isolation_level=xos.ISOLATION_NONE)
+                wcsrv._proc = pdbc.get(proc.pid)
                 return
 
             time.sleep(0.1*time.second)
