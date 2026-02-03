@@ -1,5 +1,5 @@
 /* Wendelin.bigfile | virtual memory tests
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -668,7 +668,7 @@ void test_file_access_synthetic(void)
 
     /* discard - changes should go away */
     diag("discard");
-    fileh_dirty_discard(fh);
+    fileh_dirty_discard(fh, 0);
 
     ok1(!M(vma, 0));    MUST_FAULT( B(vma, 0*PSb) );    MUST_FAULT( B(vma, 0*PSb) = 10  );
     ok1(!M(vma, 1));    MUST_FAULT( B(vma, 1*PSb) );    MUST_FAULT( B(vma, 1*PSb) = 11  );
@@ -1469,7 +1469,7 @@ void test_file_access_mmapoverlay(void)
     /* discard - changes should go away */
     diag("discard");
     ok1(file.nremmapblk == 0);
-    fileh_dirty_discard(fh);
+    fileh_dirty_discard(fh, 0);
     ok1(file.nremmapblk == 3); /* 3 previously dirty pages remmaped from base layer */
 
     CHECK_NOPAGE(         100                      );

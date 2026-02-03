@@ -168,12 +168,17 @@ from wendelin.lib.mem import bzero, memcpy, memdelta
 from wendelin.lib.zodb import LivePersistent, deactivate_btree
 
 from transaction.interfaces import IDataManager, ISynchronizer
+import transaction
 from persistent import Persistent, GHOST
+import ZODB
 from BTrees.LOBTree import LOBTree
 from BTrees.IOBTree import IOBTree
 from zope.interface import implementer
 from weakref import WeakSet
 import os
+import logging as log
+
+from wendelin.lib.zodb import zmajor
 
 # TODO document that first data access must be either after commit or Connection.add
 
@@ -545,6 +550,8 @@ class ZBigFile(LivePersistent):
         self.blksize, self.blktab = state
         self._v_file = _ZBigFile._new(self, self.blksize)
         self._v_filehset = WeakSet()
+        self._v_orphans = []  # Collect orphaned blocks
+        self._v_discard_from_blk = None  # None | int
 
 
     # load data     ZODB obj -> page
@@ -575,9 +582,15 @@ class ZBigFile(LivePersistent):
         self._setzblk(blk, zblk, buf, zblk_type_write)
 
     def _setzblk(self, blk, zblk, buf, zblk_type_write):  # helper
+        zblk_type_changed = type(zblk) is not zblk_type_write
+
+        # mark old zblk as removed to avoid putting pressure of orphans
+        # to storage
+        if zblk is not None and zblk_type_changed:
+            self._v_orphans.append(zblk)
+
         # if zblk was absent or of different type - we (re-)create it anew
-        if zblk is None  or \
-           type(zblk) is not zblk_type_write:
+        if zblk is None or zblk_type_changed:
             zblk = self.blktab[blk] = zblk_type_write()
 
         blkchanged = zblk.setblkdata(buf)
@@ -695,9 +708,43 @@ class ZBigFile(LivePersistent):
             _use_wcfs = _default_use_wcfs()
 
         fileh = _ZBigFileH(self, _use_wcfs)
+
+        if self._v_discard_from_blk is not None:
+            # Apply previously recorded discard state to new file handle.
+            # See discard_data() for details.
+            fileh.zfileh.discard_pages(self._v_discard_from_blk)
+
         self._v_filehset.add(fileh)
         return fileh
 
+
+    # 'discard_data' removes all data from 'discard_from_blk'.
+    # In cooperation with _ZBigFileH it takes care to mark removed data as
+    # stale in the storage backend to allow for packing without explicit GC.
+    # NOTE Discarded blocks are removed from the file and storage backend,
+    # but existing memory-mapped views remain valid. Mutating these views
+    # after discard will implicitly reallocate a new block containing only
+    # the mutated data. Unmodified portions will be zero-initialized.
+    def discard_data(self, discard_from_blk=0):
+        for blk, zblk in reversed(self.blktab.items()):
+            if blk < discard_from_blk:
+                continue
+            del self.blktab[blk]
+            self._v_orphans.append(zblk)
+        use_wcfs = False
+        for fileh in self._v_filehset:
+            # Clear any pending writes for the discarded range
+            fileh.zfileh.dirty_discard(discard_from_blk)
+            # Zero mapped pages to avoid stale data
+            fileh.zfileh.discard_pages(discard_from_blk)
+        # The discard must apply to all open and future file handles.
+        # Existing file handles track discarded pages in their pagemaps and their
+        # .destroyed_from_page and .has_destroyed_range attributes. But newly
+        # opened file handles (before the current transaction commits) cannot
+        # detect this discard on their own, since these attributes are per-fileh.
+        # To handle this, we store the current discard state in _v_discard_from_blk,
+        # so future file handles can inherit it.
+        self._v_discard_from_blk = discard_from_blk
 
 
 # BigFileH wrapper that also acts as DataManager proxying changes ZODB <- virtmem
@@ -824,7 +871,7 @@ class _ZBigFileH(object):
         # make sure we are called only when connection is opened
         assert self.zfile._p_jar.opened
 
-        if not self.zfileh.isdirty():
+        if not (self.zfileh.isdirty() or self.zfile._v_orphans):
             return
 
         assert self not in txn._resources       # (not to join twice)
@@ -877,7 +924,14 @@ class _ZBigFileH(object):
 
     # abort txn which is not in TPC phase
     def abort(self, txn):
+        self._restore_discard()
         self.zfileh.dirty_discard()
+
+    def _restore_discard(self):
+        if self.zfile._v_discard_from_blk is None:
+            return
+        self.zfile._v_discard_from_blk = None
+        self.zfileh.restore_pages()
 
 
     def tpc_begin(self, txn):
@@ -892,6 +946,66 @@ class _ZBigFileH(object):
         # - in case of following tpc_abort() we'll just drop dirty pages and
         # changes to objects we'll be done by ZODB data manager (= Connection)
         self.zfileh.dirty_writeout(WRITEOUT_STORE)
+        self._mark_orphans(txn)  # order matters: writeout may create orphans
+        self._restore_discard()
+
+    # Mark discarded (orphaned) blocks as deleted to help
+    # the storage to pack. Otherwise the storage itself or
+    # an external GC tools needs to detect the orphans that
+    # are created by wendelin.core before packing them.
+    def _mark_orphans(self, txn):
+        zconn = self.zfile._p_jar
+        stor = zconn._storage
+        # Unpack raw storage, since MVCCAdapterInstance doesn't implement
+        # IExternalGC.
+        if zmajor >= 5 and isinstance(stor, ZODB.mvccadapter.MVCCAdapterInstance):
+            stor = stor._storage
+
+        # Ensure storage implements 'IExternalGC' [1] - otherwise
+        # storage needs to handle GC by itself.
+        #
+        # [1] https://github.com/zopefoundation/ZODB/blob/f2dc04c/src/ZODB/interfaces.py#L1290-L1307
+        if not getattr(stor, 'deleteObject'):
+            log.warning("Can't discard orphans: storage %s doesn't implement IExternalGC" % stor)
+            return
+
+        try:
+            txn = txn.data(zconn)
+        except KeyError:
+            txn = txn  # BBB: ZODB4
+
+        def gc(obj):
+            obj._p_activate()
+            stor.deleteObject(obj._p_oid, obj._p_serial, txn)
+            obj._p_deactivate()
+
+        self._invalidate_in_other_conns(*self.zfile._v_orphans)
+        while self.zfile._v_orphans:
+            zblk = self.zfile._v_orphans.pop()
+            gc(zblk)
+            if isinstance(zblk, ZBlk1):
+                for chunk in zblk.chunktab.values():
+                    gc(chunk)
+
+    # Zero mmap'ed data in other connections - otherwise they'd
+    # still point to stale data since 'zblk._p_changed != False'.
+    def _invalidate_in_other_conns(self, *obj):
+        if self.uses_mmap_overlay():
+            return  # rely on WCFS invalidations
+        pool = self.zfile._p_jar.db().pool
+        tm = self.transaction_manager
+        def _(conn):
+            conn_tm = conn.transaction_manager
+            if conn is self.zfile._p_jar or conn_tm is not tm:
+                return
+            for o in obj:
+                obj_in_conn = conn._cache.get(o._p_oid)
+                if obj_in_conn is not None:
+                    obj_in_conn._p_invalidate()
+        if zmajor == 4:  # BBB: ZODB4/ConnectionPool lacks __iter__
+            return pool.map(_)
+        for conn in pool:
+            _(conn)
 
 
     def tpc_vote(self, txn):

@@ -392,16 +392,17 @@ PyFunc(pyfileh_dirty_writeout,
 }
 
 
-PyFunc(pyfileh_dirty_discard, "dirty_discard() - discard changes made to fileh memory")
-    (PyObject *pyfileh0, PyObject *args)
+PyFunc(pyfileh_dirty_discard, "dirty_discard([discard_from_page]) - discard changes made to fileh memory")
+(PyObject *pyfileh0, PyObject *args)
 {
     PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
     BigFileH    *fileh   = &pyfileh->fileh;
+    pgoff_t discard_from_page = 0;
 
-    if (!PyArg_ParseTuple(args, ""))
+    if (!PyArg_ParseTuple(args, "|K", &discard_from_page))
         return NULL;
 
-    fileh_dirty_discard(fileh);
+    fileh_dirty_discard(fileh, discard_from_page);
     Py_RETURN_NONE;
 }
 
@@ -449,6 +450,32 @@ PyFunc(pyfileh_uses_mmap_overlay, "uses_mmap_overlay() - whether base data for a
     return PyBool_FromLong(fileh->mmap_overlay);
 }
 
+PyFunc(pyfileh_discard_pages, "discard_pages(discard_from_page) - discard pages from specified offset to count")
+    (PyObject *pyfileh0, PyObject *args)
+{
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+    pgoff_t discard_from_page;
+
+    if (!PyArg_ParseTuple(args, "K", &discard_from_page))
+        return NULL;
+
+    fileh_discard_pages(fileh, discard_from_page);
+    Py_RETURN_NONE;
+}
+
+PyFunc(pyfileh_restore_pages, "restore_pages() - restore pages from PAGE_DESTROYED state")
+    (PyObject *pyfileh0, PyObject *args)
+{
+    PyBigFileH  *pyfileh = container_of(pyfileh0, PyBigFileH, pyobj);
+    BigFileH    *fileh   = &pyfileh->fileh;
+
+    if (!PyArg_ParseTuple(args, ""))
+        return NULL;
+
+    fileh_restore_pages(fileh);
+    Py_RETURN_NONE;
+}
 
 /* pyfileh vs cyclic GC */
 static int
@@ -532,6 +559,8 @@ static /*const*/ PyMethodDef pyfileh_methods[] = {
     {"isdirty",           pyfileh_isdirty,           METH_VARARGS,  pyfileh_isdirty_doc},
     {"invalidate_page",   pyfileh_invalidate_page,   METH_VARARGS,  pyfileh_invalidate_page_doc},
     {"uses_mmap_overlay", pyfileh_uses_mmap_overlay, METH_VARARGS,  pyfileh_uses_mmap_overlay_doc},
+    {"discard_pages",     pyfileh_discard_pages,     METH_VARARGS,  pyfileh_discard_pages_doc},
+    {"restore_pages",     pyfileh_restore_pages,     METH_VARARGS,  pyfileh_restore_pages_doc},
     {NULL}
 };
 
