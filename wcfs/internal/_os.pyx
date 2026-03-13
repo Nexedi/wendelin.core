@@ -18,6 +18,7 @@
 # See https://www.nexedi.com/licensing for rationale and options.
 
 # cython: language_level=2
+# cython: legacy_implicit_noexcept=True
 
 """Package wcfs.internal._os provides C-level part of package wcfs.internal.os ."""
 
