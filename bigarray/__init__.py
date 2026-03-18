@@ -208,7 +208,11 @@ class BigArray(object):
         # - if array shrinks, we'll not let clients to map blocks past array
         #   end.
         #
-        #   TODO discard data from backing file on shrinks.
+        #   TODO discard data from backing file on shrinks for RAMArray.
+        #        ZBigArray already handles this. If RAMArray implemented
+        #        a `.discard_data()` method with the same signature as
+        #        'ZBigFile.discard_data', the logic in 'ZBigArray.resize'
+        #        could be shared and generalized.
         self._init0(new_shape, self.dtype, order=self._order)
 
 
@@ -362,7 +366,6 @@ class BigArray(object):
         # major index / stride
         M       = self._major_axis
         idxM    = idx[M]
-        strideM = self._stridev[M]
         shapeM  = self._shape[M]
 
         # utility: replace M'th element in a sequence tuple/list -> tuple
@@ -378,7 +381,6 @@ class BigArray(object):
             raise MemoryError(e)
 
         #print('idxM:\t', idxM, '-> [%s:%s:%s]' % (idxM_start, idxM_stop, idxM_stride))
-        #print('stridM:\t', strideM)  #, self._stridev
         #print('shapeM:\t', shapeM)   #, self._shape
 
 
@@ -394,19 +396,7 @@ class BigArray(object):
         # create appropriate vma and ndarray view to it
         else:
 
-            # major slice -> in bytes
-            byteM_start  = idxM_start  * strideM
-            byteM_stop   = idxM_stop   * strideM
-            byteM_stride = idxM_stride * strideM
-            #print('byteM:\t[%s:%s:%s]' % (byteM_start, byteM_stop, byteM_stride))
-
-            # major slice -> in file pages, always increasing, inclusive
-            if byteM_stride >= 0:
-                pageM_min = byteM_start     // pagesize                 # TODO -> fileh.pagesize
-                pageM_max = (byteM_stop-1)  // pagesize                 # TODO -> fileh.pagesize
-            else:
-                pageM_min = (byteM_stop  - byteM_stride)     // pagesize# TODO -> fileh.pagesize
-                pageM_max = (byteM_start - byteM_stride - 1) // pagesize# TODO -> fileh.pagesize
+            pageM_min, pageM_max, byteM_start, byteM_stop, byteM_stride = self._compute_page_range(idxM)
             #print('pageM:\t[%s, %s]' % (pageM_min, pageM_max))
 
 
@@ -439,6 +429,30 @@ class BigArray(object):
         # and finally take dimensions adjust into account and we are done
         return view[dim_adjust]
 
+    # Compute the (min, max) page index range required to access
+    # a slice along the major axis.
+    def _compute_page_range(self, idxM, shape=None):
+        M = self._major_axis
+        strideM = self._stridev[M]
+        shapeM = (shape or self._shape)[M]
+
+        try:
+            idxM_start, idxM_stop, idxM_stride = idxM.indices(shapeM)
+        except OverflowError as e:
+            raise MemoryError(e)
+
+        byteM_start  = idxM_start  * strideM
+        byteM_stop   = idxM_stop   * strideM
+        byteM_stride = idxM_stride * strideM
+
+        if byteM_stride >= 0:
+            pageM_min = byteM_start     // pagesize                 # TODO -> fileh.pagesize
+            pageM_max = (byteM_stop-1)  // pagesize                 # TODO -> fileh.pagesize
+        else:
+            pageM_min = (byteM_stop  - byteM_stride)     // pagesize# TODO -> fileh.pagesize
+            pageM_max = (byteM_start - byteM_stride - 1) // pagesize# TODO -> fileh.pagesize
+
+        return pageM_min, pageM_max, byteM_start, byteM_stop, byteM_stride
 
     def __setitem__(self, idx, v):
         # TODO idx = int, i.e. scalar assign

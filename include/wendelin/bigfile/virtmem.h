@@ -2,7 +2,7 @@
 #define _WENDELIN_BIGFILE_VIRTMEM_H_
 
 /* Wendelin.bigfile | Virtual memory
- * Copyright (C) 2014-2021  Nexedi SA and Contributors.
+ * Copyright (C) 2014-2025  Nexedi SA and Contributors.
  *                          Kirill Smelkov <kirr@nexedi.com>
  *
  * This program is free software: you can Use, Study, Modify and Redistribute
@@ -99,6 +99,9 @@ struct BigFileH {
      *   make decision whether after writeout to keep a page in RAM or to
      *   completely drop it not to waste RSS unnecessarily ) */
     unsigned    mmap_overlay : 1;
+
+    pgoff_t destroyed_from_page;  // Start of destroyed range
+    bool has_destroyed_range;     // Whether destruction was applied
 };
 typedef struct BigFileH BigFileH;
 
@@ -114,6 +117,7 @@ enum PageState {
     PAGE_LOADED_FOR_WRITE
                     = 4, /* file content has     been loaded and is going to be modified */
     PAGE_DIRTY      = 5, /* file content has     been loaded and was     modified */
+    PAGE_DESTROYED  = 6, /* file content has     been destroyed */
 };
 typedef enum PageState PageState;
 
@@ -291,8 +295,41 @@ int fileh_dirty_writeout(BigFileH *fileh, enum WriteoutFlags flags);
  * it's an error for a given fileh to call fileh_dirty_discard() while writeout
  * is in progress.
  */
-void fileh_dirty_discard(BigFileH *fileh);
+void fileh_dirty_discard(BigFileH *fileh, pgoff_t discard_from_page);
 
+
+/* discard pages from specified offset onwards
+ *
+ * For each page from discard_from_page onwards:
+ *
+ *   - its state transitions to PAGE_DESTROYED;
+ *   - pages return zeros on read access and transition to dirty on write.
+ *
+ * This function is only supported for fileh opened in MMAP_OVERLAY mode.
+ *
+ * it's an error to call fileh_discard_pages() while writeout is in progress.
+ * it's recommended to call fileh_dirty_discard() before this function.
+ */
+void fileh_discard_pages(BigFileH *fileh, pgoff_t discard_from_page);
+
+/* restore pages from PAGE_DESTROYED state
+ *
+ * Remove all pages in PAGE_DESTROYED state from fileh memory and pagemap.
+ * For each destroyed page:
+ *
+ *   - it is unmapped from all mmaps;
+ *   - its content is discarded;
+ *   - its backing memory is released to OS;
+ *   - it is removed from pagemap.
+ *
+ * This effectively undoes the effects of fileh_discard_pages() and forces
+ * future access to those page offsets to trigger page faults that will
+ * load fresh data from storage.
+ *
+ * it's an error for a given fileh to call fileh_restore_pages() while writeout
+ * is in progress.
+ */
+void fileh_restore_pages(BigFileH *fileh);
 
 
 /* invalidate fileh page
