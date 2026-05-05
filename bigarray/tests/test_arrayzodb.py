@@ -1,5 +1,5 @@
 # Wendeling.core.bigarray | Tests for ZBigArray
-# Copyright (C) 2014-2021  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -18,6 +18,7 @@
 # See COPYING file for full licensing terms.
 # See https://www.nexedi.com/licensing for rationale and options.
 from wendelin.bigarray.array_zodb import ZBigArray
+from wendelin.bigarray import pagesize
 from wendelin.bigfile.tests.test_filezodb import ram_reclaim_all
 from wendelin.bigfile.tests.test_thread import NotifyChannel
 from wendelin.lib.zodb import dbclose
@@ -26,13 +27,16 @@ from wendelin.lib.testing import getTestDB
 from persistent import UPTODATE
 import transaction
 from transaction import TransactionManager
-from ZODB.POSException import ConflictError
+from ZODB.POSException import ConflictError, POSKeyError
 from numpy import dtype, uint8, all, array_equal, arange
 from golang import defer, func, chan
 from golang import context, sync
 from six.moves import _thread
+from math import ceil
+from itertools import product
 
 from pytest import raises
+import pytest; parametrize = pytest.mark.parametrize
 
 testdb = None
 def setup_module():
@@ -654,3 +658,102 @@ def test_zbigarray_invalidate_shape():
 
 
     del conn2, root2, a2
+
+
+# Test that resizing a ZBigArray to a smaller shape:
+# - Discards full and partial pages that are no longer part of the shape
+# - Zeros out trailing data in partially used pages
+# - Removes discarded data blocks from the underlying ZODB storage
+# - Does not retain or reintroduce stale data after re-expanding the array
+@parametrize(
+    "commit_before_discard,page_count1",
+    product((True, False), [0, 0.7, 1, 1.5, 2, 2.3, 3])
+)
+@func
+def test_zbigarray_resize_discards_data(commit_before_discard, page_count1):
+    root = testdb.dbopen()
+    defer(lambda: dbclose(root))
+
+    dt = uint8
+    elements_per_page = pagesize // dtype(dt).itemsize
+    page_count0 = 3
+    length0 = page_count0 * elements_per_page
+    length1 = int(page_count1 * elements_per_page)
+
+    # page_count1 could be floating point number if we discard pages partially
+    page_count1 = int(ceil(page_count1))
+
+    # Create and initialize array
+    root['zarray5'] = arr = ZBigArray((length0,), dt)
+    transaction.commit()
+
+    view = arr[:]
+    view[:] = [1] * length0
+    if commit_before_discard:
+        transaction.commit()
+
+    # Capture blocks that will be discarded
+    blktab = arr.zfile.blktab
+    discarded_zblk_list = []
+    if commit_before_discard:
+        discarded_zblk_list = [
+            blktab[page_index]
+            for page_index in range(page_count1, page_count0)
+        ]
+
+    # Resize down
+    arr.resize((length1,))
+    # Old view should reflect stale zeros beyond new length
+    assert all(view[length1:] == 0)
+    assert all(view[:length1] != 0)
+
+    # Discarded pages should no longer exist
+    for page_index in range(page_count1, page_count0):
+        with raises(KeyError):
+            blktab[page_index]
+
+    # Pages still in use must still be present
+    if commit_before_discard:
+        for page_index in range(page_count1):
+            assert blktab[page_index]
+
+    transaction.commit()
+
+    # Data in current shape must still be valid after commit
+    assert all(arr[:] != 0)
+    assert len(arr) == length1
+
+    # Ensure discarded blocks were removed from ZODB
+    conn = root._p_jar._db.open()  # need new conn due to conn cache
+    defer(conn.close)
+    for zblk in discarded_zblk_list:
+        with raises(POSKeyError):
+            conn.get(zblk._p_oid)
+
+    # When resizing back to original size stale data must not return
+    arr.resize((length0,))
+    transaction.commit()
+    assert all(arr[length1:] == 0)
+
+
+# Test that 'ZBigArray.discard_data' correctly discards all data.
+# NOTE: This test is minimal, as the core discard logic is already
+# thoroughly tested in 'ZBigArray.resize' and 'ZBigFile.discard_data'
+# tests. Since 'ZBigArray.discard_data' is just a convenience wrapper,
+# this test only verifies that the API behaves as expected.
+@func
+def test_zbigarray_discard():
+    root = testdb.dbopen()
+    defer(lambda: dbclose(root))
+    size = 1024
+
+    root['zarray6'] = arr = ZBigArray((size,), uint8)
+    transaction.commit()
+
+    view = arr[:]
+    view[:] = [1] * size
+    transaction.commit()
+
+    arr.discard_data()
+    assert all(arr[:] == 0)
+    transaction.commit()

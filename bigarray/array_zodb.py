@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Wendelin.bigarray | ZODB-Persistent BigArray
-# Copyright (C) 2014-2019  Nexedi SA and Contributors.
+# Copyright (C) 2014-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -28,10 +28,11 @@ Please see documentation for BigArray (bigarray/__init__.py) and ZBigFile
 inherits most of the properties and specifics from its parents.
 """
 
-from wendelin.bigarray import BigArray
+from wendelin.bigarray import BigArray, pagesize
 from wendelin.bigfile.file_zodb import ZBigFile
 from wendelin.lib.zodb import LivePersistent
 import sys
+from numpy import prod
 
 if sys.version_info >= (3,):
     from inspect import getfullargspec
@@ -100,3 +101,31 @@ class ZBigArray(BigArray,
         if self._v_fileh is None:
             self._v_fileh = self.zfile.fileh_open()
         return self._v_fileh
+
+    def resize(self, new_shape, refcheck=True):
+        self._cleanup_stale_data(new_shape)
+        return super(ZBigArray, self).resize(new_shape, refcheck=refcheck)
+
+    def _cleanup_stale_data(self, new_shape):
+        if prod(new_shape) >= prod(self.shape):
+            return
+        # Compute page and byte ranges for the resized array
+        page_range = self._compute_page_range(slice(None), new_shape)
+        pageM_max, byteM_stop = page_range[1], page_range[3]
+        # Discard all full pages beyond the new shape
+        self.zfile.discard_data(pageM_max + 1)
+        # If the resized array ends mid-page, we also need to zero out
+        # the remaining (stale) bytes within that partially-used page
+        stale_data_start = byteM_stop
+        stale_data_end = (pageM_max + 1) * pagesize
+        stale_length = stale_data_end - stale_data_start
+        if stale_length == 0:
+            return  # nothing to clean
+        offset_in_page = stale_data_start % pagesize
+        vma = self._fileh.mmap(pageM_max, 1)
+        view = memoryview(vma)  # <2MB => ok to load in memory
+        view[offset_in_page : offset_in_page + stale_length] = b'\x00' * stale_length
+
+    # Discard all data from ZBigArray
+    def discard_data(self):
+        self.resize((0,) + self.shape[1:])
